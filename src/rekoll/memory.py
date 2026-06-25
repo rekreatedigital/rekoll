@@ -146,7 +146,11 @@ class Memory:
         trust: Optional[TrustTier] = None,
         metadata: Optional[dict] = None,
     ) -> MemoryRecord:
-        """Store one memory (screened by default). Returns the stored record."""
+        """Store one memory (screened by default). Returns the stored record.
+
+        ``metadata`` values must be flat scalars (str/int/float/bool/None);
+        nested or list values are rejected (ADR-0001, no unbounded JSON).
+        """
         record = self._make_record(
             content=content,
             kind=kind,

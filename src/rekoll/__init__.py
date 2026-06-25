@@ -1,9 +1,12 @@
 """Rekoll — injection-hardened, storage-agnostic, private memory for AI agents.
 
-P0 (foundation) public surface: the memory record model, the storage-adapter
-contract, the reference SQLite adapter (via the registry), the local embedder,
-and the importable conformance suite. Retrieval, the injection firewall, and the
-learning loop arrive in later phases (see docs/DESIGN.md).
+Public surface shipped today: the memory record model, the storage-adapter
+contract + reference SQLite adapter (via the registry), local embeddings +
+structure-aware chunking, hybrid (vector + lexical) retrieval with optional
+cross-encoder reranking, the injection firewall (ingest screen + read envelope),
+the importable conformance suite, and the high-level ``Memory`` facade. The
+learning/consolidation loop and additional backends arrive in later phases
+(see docs/DESIGN.md).
 """
 
 from __future__ import annotations

@@ -25,7 +25,6 @@ from enum import Enum
 from typing import Iterable, Mapping, Optional
 
 from .adapters.base import QueryHit
-from .ids import content_hash
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 
 __all__ = [
