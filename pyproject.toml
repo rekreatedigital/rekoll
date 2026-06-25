@@ -25,6 +25,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+embeddings = ["fastembed>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/rekreatedigital/rekoll"

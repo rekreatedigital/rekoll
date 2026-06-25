@@ -212,6 +212,24 @@ def assert_delete(make: AdapterFactory, embedder: Embedder) -> None:
     adapter.close()
 
 
+def assert_lexical_if_supported(make: AdapterFactory, embedder: Embedder) -> None:
+    adapter = make()
+    if not adapter.supports(CAP_LEXICAL):
+        adapter.close()
+        return
+    target = _rec(_SCOPE_A, "the quarterly revenue report for fiscal year", embedder=embedder)
+    other = _rec(_SCOPE_A, "kitchen recipe for sourdough bread loaves", embedder=embedder)
+    cross = _rec(_SCOPE_B, "the quarterly revenue report for tenant b", embedder=embedder)
+    adapter.add(records=[target, other, cross])
+    hits = adapter.lexical_query(scope=_SCOPE_A, text="quarterly revenue report", k=5)
+    ids = [h.record.id for h in hits]
+    assert target.id in ids, "lexical search missed an obvious keyword match"
+    assert all(h.record.scope == _SCOPE_A for h in hits), "lexical_query leaked across scopes"
+    assert len(adapter.lexical_query(scope=_SCOPE_A, text="!!!")) == 0, \
+        "punctuation-only query must return empty, not crash"
+    adapter.close()
+
+
 ALL_CHECKS = (
     assert_capabilities_honest,
     assert_kwargs_only,
@@ -225,6 +243,7 @@ ALL_CHECKS = (
     assert_vector_query_ranks,
     assert_where_honesty,
     assert_delete,
+    assert_lexical_if_supported,
 )
 
 

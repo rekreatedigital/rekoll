@@ -22,6 +22,7 @@ __all__ = [
     "EmbedderIdentity",
     "Embedder",
     "StubEmbedder",
+    "FastEmbedEmbedder",
     "EmbedderIdentityMismatch",
     "compare_identity",
     "guard_identity",
@@ -116,3 +117,42 @@ class StubEmbedder:
             vec[idx] += sign
         norm = math.sqrt(sum(v * v for v in vec)) or 1.0
         return [v / norm for v in vec]
+
+
+class FastEmbedEmbedder:
+    """Local ONNX embeddings via ``fastembed`` (optional extra, ADR-0009).
+
+    No PyTorch, no API key; runs on CPU. The model downloads once to a local
+    cache. Default is a small English model; pass ``model_name`` to change it.
+    Install with: ``pip install 'rekoll[embeddings]'``.
+    """
+
+    DEFAULT_MODEL = "BAAI/bge-small-en-v1.5"
+
+    def __init__(self, model_name: str = DEFAULT_MODEL, *, cache_dir: str | None = None) -> None:
+        try:
+            from fastembed import TextEmbedding
+        except ImportError as exc:  # pragma: no cover - only without the extra
+            raise ImportError(
+                "FastEmbedEmbedder needs the optional 'embeddings' extra: "
+                "pip install 'rekoll[embeddings]'"
+            ) from exc
+        self.model_name = model_name
+        self._model = TextEmbedding(model_name=model_name, cache_dir=cache_dir)
+        self._dim: int | None = None
+
+    @property
+    def dim(self) -> int:
+        if self._dim is None:
+            self._dim = len(self.embed(["dimension probe"])[0])
+        return self._dim
+
+    def identity(self) -> EmbedderIdentity:
+        return EmbedderIdentity(
+            name=f"fastembed:{self.model_name}",
+            dim=self.dim,
+            config_hash=hashlib.sha256(f"fastembed:{self.model_name}".encode()).hexdigest()[:16],
+        )
+
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        return [list(map(float, vec)) for vec in self._model.embed(list(texts))]

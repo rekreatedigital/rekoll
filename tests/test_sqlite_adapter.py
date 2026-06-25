@@ -35,9 +35,28 @@ def test_each_conformance_check(check):
 def test_capabilities_are_honest():
     adapter = _make()
     assert CAP_VECTOR in adapter.capabilities
-    assert not adapter.supports(CAP_LEXICAL)
-    with pytest.raises(UnsupportedCapabilityError):
-        adapter.lexical_query(scope=Scope(), text="x")
+    assert adapter.supports(CAP_LEXICAL)  # FTS5 lexical added in P1
+    # an advertised capability must actually work, not raise
+    result = adapter.lexical_query(scope=Scope(), text="anything")
+    assert hasattr(result, "hits")
+    adapter.close()
+
+
+def test_lexical_search_ranks_keyword_match():
+    from rekoll import Kind, MemoryRecord, Provenance, TrustTier
+
+    adapter = _make()
+    scope = Scope(tenant="t", project="p", agent="a")
+
+    def rec(text):
+        return MemoryRecord.create(
+            scope=scope, kind=Kind.RAW_FACT, content=text,
+            provenance=Provenance(source_uri="t://" + text[:8]), trust_tier=TrustTier.OWNER,
+        )
+
+    adapter.add(records=[rec("postgres connection pooling tips"), rec("how to bake bread")])
+    hits = adapter.lexical_query(scope=scope, text="postgres pooling", k=5)
+    assert hits.hits and "postgres" in hits.hits[0].record.content
     adapter.close()
 
 

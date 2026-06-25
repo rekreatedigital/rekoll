@@ -15,13 +15,14 @@ real local embedding model; the adapter contract does not change.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime
 from typing import Mapping, Optional, Sequence
 
 from ..embedding import EmbedderIdentity, cosine
 from ..model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
-from .base import CAP_VECTOR, GetResult, QueryHit, QueryResult, StorageAdapter
+from .base import CAP_LEXICAL, CAP_VECTOR, GetResult, QueryHit, QueryResult, StorageAdapter
 
 _KIND_TABLE = {
     Kind.RAW_FACT: "verbatim_records",
@@ -78,9 +79,17 @@ def _scope_from_key(key: str) -> Scope:
     return Scope(tenant=tenant, project=project, agent=agent)
 
 
+def _fts_query(text: str) -> Optional[str]:
+    """Turn free text into a safe FTS5 MATCH expression (quoted OR-ed terms)."""
+    terms = re.findall(r"\w+", text.lower())
+    if not terms:
+        return None
+    return " OR ".join(f'"{t}"' for t in terms)
+
+
 class SQLiteAdapter(StorageAdapter):
     name = "sqlite"
-    capabilities = frozenset({CAP_VECTOR})
+    capabilities = frozenset({CAP_VECTOR, CAP_LEXICAL})
     distance_metric = "cosine"
 
     def __init__(self, path: str = ":memory:") -> None:
@@ -160,6 +169,10 @@ class SQLiteAdapter(StorageAdapter):
             )
             """
         )
+        self._conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts "
+            "USING fts5(content, rid UNINDEXED, scope_key UNINDEXED, kind UNINDEXED)"
+        )
         self._conn.commit()
 
     # -- writes -------------------------------------------------------------
@@ -229,6 +242,11 @@ class SQLiteAdapter(StorageAdapter):
                 "INSERT OR IGNORE INTO record_links (record_id, target_id, link_type) VALUES (?,?,?)",
                 (r.id, target, "derived_from"),
             )
+        self._conn.execute("DELETE FROM fts WHERE rid=?", (r.id,))
+        self._conn.execute(
+            "INSERT INTO fts (content, rid, scope_key, kind) VALUES (?,?,?,?)",
+            (r.content, r.id, r.scope.key(), r.kind.value),
+        )
 
     def delete(self, *, scope: Scope, ids: Sequence[str]) -> int:
         ids = list(ids)
@@ -249,6 +267,7 @@ class SQLiteAdapter(StorageAdapter):
         self._conn.execute(
             f"DELETE FROM record_links WHERE record_id IN ({placeholders})", tuple(ids)
         )
+        self._conn.execute(f"DELETE FROM fts WHERE rid IN ({placeholders})", tuple(ids))
         self._conn.commit()
         return removed
 
@@ -319,6 +338,54 @@ class SQLiteAdapter(StorageAdapter):
             for score, row in scored[: max(0, k)]
         )
         return QueryResult(hits=hits)
+
+    def lexical_query(
+        self,
+        *,
+        scope: Scope,
+        text: str,
+        k: int = 10,
+        kind: Optional[Kind] = None,
+        where: Optional[Mapping[str, object]] = None,
+    ) -> QueryResult:
+        if where:
+            bad = set(where) - _ALLOWED_WHERE_KEYS
+            if bad:
+                raise ValueError(
+                    f"unsupported where keys {sorted(bad)}; "
+                    f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
+                )
+        match = _fts_query(text)
+        if match is None:
+            return QueryResult(hits=())
+        sql = "SELECT rid, bm25(fts) AS s FROM fts WHERE fts MATCH ? AND scope_key=?"
+        params: list[object] = [match, scope.key()]
+        if kind is not None:
+            sql += " AND kind=?"
+            params.append(kind.value)
+        sql += " ORDER BY s LIMIT ?"
+        params.append(max(0, k) * 4 + 10)  # over-fetch; the where-filter trims to k below
+        rows = self._conn.execute(sql, params).fetchall()
+        if not rows:
+            return QueryResult(hits=())
+        records = {
+            r.id: r for r in self.get(scope=scope, ids=[row["rid"] for row in rows]).records
+        }
+        status_filter = where.get("status") if where else None
+        min_trust = where.get("min_trust") if where else None
+        hits: list[QueryHit] = []
+        for row in rows:
+            record = records.get(row["rid"])
+            if record is None:
+                continue
+            if status_filter is not None and record.status.value != status_filter:
+                continue
+            if min_trust is not None and int(record.trust_tier) < int(min_trust):
+                continue
+            hits.append(QueryHit(record=record, score=-float(row["s"])))  # bm25: lower is better
+            if len(hits) >= k:
+                break
+        return QueryResult(hits=tuple(hits))
 
     # -- embedder identity --------------------------------------------------
     def get_embedder_identity(self, *, scope: Scope) -> Optional[EmbedderIdentity]:
