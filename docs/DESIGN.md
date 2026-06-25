@@ -7,6 +7,47 @@
 
 ---
 
+## 0. Implementation status (as of 2026-06-26)
+
+This document describes the **target architecture**; several sections below use the
+present tense for capabilities that are planned, not yet shipped. Current reality:
+
+**Shipped & tested (P0–P2 + the `Memory` facade):**
+- Record model with NOT-NULL provenance/trust; three physical tables; flat-scalar
+  metadata in bounded child tables (ADR-0001/0002/0004).
+- `StorageAdapter` contract + reference SQLite adapter + importable conformance
+  suite; per-scope embedder-identity record; content-addressed ids (ADR-0005/0006).
+- Local embeddings (fastembed, optional extra) with a stub fallback; structure-aware
+  chunking (markdown headings, Python AST); hybrid vector+BM25 retrieval with RRF
+  (k=60) and optional cross-encoder reranking (ADR-0009/0010/0012).
+- Injection firewall: ingest screen (secret redaction; NFKC + category-based
+  invisible-char stripping; homoglyph-folded marker detection) and the read-time
+  data-vs-instructions envelope; quarantine-by-trust (ADR-0013).
+- CI gates: storage conformance; a stub-embedder recall **smoke** fixture; and
+  zero-network / zero-LLM / zero-dependency invariant tests.
+
+**Planned — NOT yet implemented (described in present tense below):**
+- The learned consolidation loop (L3) and legible graduation gate (L4). No LLM
+  writer exists yet; reads are zero-LLM today simply because no LLM is wired in.
+- The deterministic **trust × recency × proof multiplicative re-rank** (§2/§6.4/§7).
+  Read-time ranking is currently RRF → optional rerank → quarantine exclusion, with
+  **no trust/recency/proof weighting**. The structural defense (directives only from
+  the trusted tier; quarantine never surfaces) IS shipped and does the load-bearing
+  work. Note §6.4 (weights 1.0/0.7/0.4) and §7 ("capped ~±20%") give conflicting
+  guidance — resolve before implementing (§13.3).
+- `sqlite-vec` acceleration (§5): vector search is currently an exact pure-Python
+  cosine scan. The adapter contract is unchanged; only the index backend is pending.
+- The RRF **interleave** alternative (§7); real **LongMemEval/LoCoMo** gates (only a
+  keyword smoke fixture exists); the MCP server, REST API, DB-schema/row ingestion,
+  and the TS client.
+
+**Behavioral note:** the hard-fail embedder guard `guard_identity()` exists, but the
+`Memory` facade currently **warns** on a model swap rather than hard-failing
+(ADR-0014) — diverging from §10 P1's "hard-fails" wording. The authoritative
+behavior is an open decision.
+
+---
+
 ## 1. Overview
 
 Rekoll is a pure-MIT, Python-core AI-agent memory layer for the build-your-own-agent / Agentic-as-a-Service market. Its job-to-be-done is concrete: **drop it into someone else's project — often by a vibe coder — and let their agent understand a huge codebase plus its database and never forget, without sacrificing retrieval quality and without any data leaving the user's infrastructure.**
@@ -253,4 +294,4 @@ A pre-build review (migration, non-technical UX, BYO-AI reality, pre-mortem) add
 
 ---
 
-*Grounded in code-verified reads of MemPalace (v3.4.1) and Hindsight, plus the 2RD-Automation memory layer. This document guides a long-term, quality-first build. P0 (foundation) is implemented and tested — see the repo root, `docs/adr/`, and `tests/`.*
+*Grounded in code-verified reads of MemPalace (v3.4.1) and Hindsight, plus the 2RD-Automation memory layer. This document guides a long-term, quality-first build. **P0–P2 and the `Memory` facade are implemented and tested** (see §0 for the precise shipped-vs-planned split) — see the repo root, `docs/adr/`, and `tests/`.*

@@ -51,5 +51,11 @@ that way; the library must import and the stub path must work with no extras.
 ## Status
 
 - **P0 (foundation)** — done & tested.
-- **P1 (retrieval)** — in progress: real local embeddings (fastembed), structure-aware
-  chunking, hybrid vector+BM25 retrieval (RRF). Benchmarks (LongMemEval/LoCoMo) next.
+- **P1 (retrieval)** — done: local embeddings (fastembed), structure-aware chunking
+  (markdown + Python AST), hybrid vector+BM25 retrieval (RRF), optional cross-encoder
+  reranking, a stub-embedder recall **smoke** gate. Real LongMemEval/LoCoMo gates and
+  `sqlite-vec` acceleration are still pending (vector search is a pure-Python scan).
+- **P2 (injection firewall)** — done: ingest screen + read-time data envelope.
+- **`Memory` facade** — done: the drop-in SDK (ADR-0014).
+- **Next:** the learning/consolidation loop (L3) + legible graduation gate (L4).
+- See **[docs/DESIGN.md §0](docs/DESIGN.md)** for the precise shipped-vs-planned split.
