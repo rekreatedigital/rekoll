@@ -71,7 +71,14 @@ def guard_identity(stored: EmbedderIdentity | None, current: EmbedderIdentity) -
 
 
 def cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    """Cosine similarity. Returns 0.0 for a zero vector."""
+    """Cosine similarity. Returns 0.0 for a zero vector.
+
+    Raises ``ValueError`` on a dimension mismatch rather than silently truncating
+    to the shorter vector (``zip`` would otherwise return a meaningless score) —
+    a real risk once vectors from different embedders coexist.
+    """
+    if len(a) != len(b):
+        raise ValueError(f"cosine: vector dimension mismatch ({len(a)} vs {len(b)})")
     dot = 0.0
     na = 0.0
     nb = 0.0

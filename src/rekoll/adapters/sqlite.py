@@ -341,6 +341,7 @@ class SQLiteAdapter(StorageAdapter):
                     f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
                 )
         query_vec = [float(x) for x in embedding]
+        qdim = len(query_vec)
         skey = scope.key()
         tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
         status_filter = where.get("status") if where else None
@@ -356,8 +357,13 @@ class SQLiteAdapter(StorageAdapter):
                 sql += " AND trust_tier>=?"
                 params.append(int(min_trust))
             for row in self._conn.execute(sql, params).fetchall():
-                score = cosine(query_vec, json.loads(row["embedding"]))
-                scored.append((score, row))
+                stored = json.loads(row["embedding"])
+                if len(stored) != qdim:
+                    # Vectors from a different embedder/dim (e.g. after a model
+                    # swap) are not comparable — skip them rather than crash, so
+                    # keyword recall still works while vectors are re-embedded.
+                    continue
+                scored.append((cosine(query_vec, stored), row))
         scored.sort(key=lambda item: item[0], reverse=True)
         hits = tuple(
             QueryHit(record=self._row_to_record(row), score=score)
