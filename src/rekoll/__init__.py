@@ -20,15 +20,19 @@ from .adapters.base import (
     UnsupportedCapabilityError,
 )
 from .adapters.registry import available_adapters, get_adapter, register_adapter
+from .chunking import chunk_file, chunk_markdown, chunk_text
 from .embedding import (
     Embedder,
     EmbedderIdentity,
     EmbedderIdentityMismatch,
+    FastEmbedEmbedder,
     StubEmbedder,
     compare_identity,
     cosine,
     guard_identity,
 )
+from .reranking import CrossEncoderReranker, Reranker
+from .retrieval import hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
 from .model import Kind, MemoryRecord, Provenance, Scalar, Scope, Status, TrustTier
 
@@ -67,4 +71,13 @@ __all__ = [
     "register_adapter",
     "get_adapter",
     "available_adapters",
+    # retrieval (P1)
+    "FastEmbedEmbedder",
+    "chunk_text",
+    "chunk_markdown",
+    "chunk_file",
+    "hybrid_search",
+    "rrf_fuse",
+    "Reranker",
+    "CrossEncoderReranker",
 ]

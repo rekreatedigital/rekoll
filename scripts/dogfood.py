@@ -51,6 +51,16 @@ def _embedder():
         return StubEmbedder()
 
 
+def _reranker():
+    """Optional cross-encoder reranker for precision; None if the extra is absent."""
+    try:
+        from rekoll.reranking import CrossEncoderReranker
+
+        return CrossEncoderReranker()
+    except Exception:
+        return None
+
+
 def _iter_files(root: Path):
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info")]
@@ -121,20 +131,27 @@ def recall(query: str, k: int = 5) -> None:
         print("no store yet — run: python scripts/dogfood.py ingest")
         return
     embedder = _embedder()
+    reranker = _reranker()
     db = SQLiteAdapter(str(DB))
     stored = db.get_embedder_identity(scope=SCOPE)
     if stored is not None and stored != embedder.identity():
         print(f"(note: store built with {stored.name}, current embedder is "
               f"{embedder.identity().name} — re-run `ingest` for best vector recall; "
               f"keyword recall still works)")
-    hits = hybrid_search(db, scope=SCOPE, query=query, embedder=embedder, k=k)
+    try:
+        hits = hybrid_search(db, scope=SCOPE, query=query, embedder=embedder, k=k, reranker=reranker)
+        if reranker is not None:
+            print(f"(reranked with {reranker.model_name})")
+    except Exception as exc:
+        print(f"(reranker failed: {type(exc).__name__}; using RRF order)")
+        hits = hybrid_search(db, scope=SCOPE, query=query, embedder=embedder, k=k)
     if not hits.hits:
         print("(no results)")
     for i, hit in enumerate(hits.hits, 1):
         record = hit.record
         loc = record.metadata.get("path", record.provenance.source_file)
         snippet = " ".join(record.content.split())[:160]
-        print(f"[{i}] {loc}  (chunk {record.provenance.chunk_index}, rrf {hit.score:.4f})")
+        print(f"[{i}] {loc}  (chunk {record.provenance.chunk_index}, score {hit.score:.4f})")
         print(f"     {snippet}")
     db.close()
 
