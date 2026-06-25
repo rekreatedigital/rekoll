@@ -212,6 +212,30 @@ def assert_delete(make: AdapterFactory, embedder: Embedder) -> None:
     adapter.close()
 
 
+def assert_delete_scope_isolation(make: AdapterFactory, embedder: Embedder) -> None:
+    adapter = make()
+    a = _rec(
+        _SCOPE_A, "scope a keeps its metadata and index", embedder=embedder,
+        metadata={"owner": "a-secret"},
+    )
+    adapter.add(records=[a])
+    # A caller in a DIFFERENT scope must not delete or corrupt A's rows by passing
+    # A's id: delete() returns 0 and A's metadata + lexical index survive intact.
+    assert adapter.delete(scope=_SCOPE_B, ids=[a.id]) == 0, "cross-scope delete must remove nothing"
+    back = adapter.get(scope=_SCOPE_A, ids=[a.id])
+    assert len(back) == 1, "cross-scope delete wrongly removed an in-scope record"
+    assert back.records[0].metadata.get("owner") == "a-secret", \
+        "cross-scope delete corrupted another scope's metadata"
+    if adapter.supports(CAP_LEXICAL):
+        hits = adapter.lexical_query(scope=_SCOPE_A, text="metadata index")
+        assert any(h.record.id == a.id for h in hits), \
+            "cross-scope delete corrupted another scope's lexical index"
+    # In-scope delete still works and removes exactly one.
+    assert adapter.delete(scope=_SCOPE_A, ids=[a.id]) == 1
+    assert adapter.count(scope=_SCOPE_A) == 0
+    adapter.close()
+
+
 def assert_lexical_if_supported(make: AdapterFactory, embedder: Embedder) -> None:
     adapter = make()
     if not adapter.supports(CAP_LEXICAL):
@@ -243,6 +267,7 @@ ALL_CHECKS = (
     assert_vector_query_ranks,
     assert_where_honesty,
     assert_delete,
+    assert_delete_scope_isolation,
     assert_lexical_if_supported,
 )
 

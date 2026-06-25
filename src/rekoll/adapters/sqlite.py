@@ -254,6 +254,19 @@ class SQLiteAdapter(StorageAdapter):
             return 0
         skey = scope.key()
         placeholders = ",".join("?" * len(ids))
+        # Resolve which ids actually live in THIS scope FIRST. record_metadata and
+        # record_links carry no scope_key column, so cleaning them by the
+        # caller-supplied ids (as a previous version did) let a caller in scope A
+        # wipe scope B's metadata + lexical index just by passing B's id — an
+        # ADR-0003 isolation violation. We only ever touch child/FTS rows for ids
+        # confirmed to belong to this scope.
+        in_scope: list[str] = []
+        for table in _KIND_TABLE.values():
+            rows = self._conn.execute(
+                f"SELECT id FROM {table} WHERE scope_key=? AND id IN ({placeholders})",
+                (skey, *ids),
+            ).fetchall()
+            in_scope.extend(row["id"] for row in rows)
         removed = 0
         for table in _KIND_TABLE.values():
             cur = self._conn.execute(
@@ -261,13 +274,11 @@ class SQLiteAdapter(StorageAdapter):
                 (skey, *ids),
             )
             removed += cur.rowcount
-        self._conn.execute(
-            f"DELETE FROM record_metadata WHERE record_id IN ({placeholders})", tuple(ids)
-        )
-        self._conn.execute(
-            f"DELETE FROM record_links WHERE record_id IN ({placeholders})", tuple(ids)
-        )
-        self._conn.execute(f"DELETE FROM fts WHERE rid IN ({placeholders})", tuple(ids))
+        if in_scope:
+            ph = ",".join("?" * len(in_scope))
+            self._conn.execute(f"DELETE FROM record_metadata WHERE record_id IN ({ph})", tuple(in_scope))
+            self._conn.execute(f"DELETE FROM record_links WHERE record_id IN ({ph})", tuple(in_scope))
+            self._conn.execute(f"DELETE FROM fts WHERE rid IN ({ph})", tuple(in_scope))
         self._conn.commit()
         return removed
 
