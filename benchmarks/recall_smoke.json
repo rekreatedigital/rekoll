@@ -1,0 +1,28 @@
+{
+  "name": "recall_smoke",
+  "description": "Small keyword-distinct fixture: a fast retrieval-pipeline regression gate (runs on the stub embedder, no network). Real semantic numbers come from fastembed/LongMemEval runs.",
+  "documents": [
+    {"key": "postgres", "text": "PostgreSQL connection pooling with pgbouncer for production database workloads"},
+    {"key": "rust", "text": "the Rust borrow checker enforces ownership and lifetimes at compile time"},
+    {"key": "k8s", "text": "Kubernetes pods are scheduled onto nodes by the kube-scheduler control loop"},
+    {"key": "oauth", "text": "OAuth2 authorization code flow exchanges a code for an access token and a refresh token"},
+    {"key": "regex", "text": "regular expressions match patterns using anchors, character classes, and quantifiers"},
+    {"key": "tcp", "text": "the TCP three-way handshake uses SYN, SYN-ACK, and ACK to establish a connection"},
+    {"key": "gc", "text": "garbage collection reclaims unreachable heap memory using mark-and-sweep or generational strategies"},
+    {"key": "merkle", "text": "a Merkle tree hashes data blocks into a root so tampering with any block changes the root"},
+    {"key": "raft", "text": "the Raft consensus algorithm elects a leader and replicates a log across follower nodes"},
+    {"key": "bloom", "text": "a Bloom filter is a probabilistic set with false positives but no false negatives"}
+  ],
+  "queries": [
+    {"query": "pgbouncer connection pooling for postgres databases", "relevant": ["postgres"]},
+    {"query": "rust ownership lifetimes and the borrow checker", "relevant": ["rust"]},
+    {"query": "kubernetes pod scheduling onto nodes by the scheduler", "relevant": ["k8s"]},
+    {"query": "oauth2 authorization code access token refresh", "relevant": ["oauth"]},
+    {"query": "regex anchors character classes and quantifiers", "relevant": ["regex"]},
+    {"query": "tcp syn ack three-way handshake to establish a connection", "relevant": ["tcp"]},
+    {"query": "mark and sweep generational heap garbage collection", "relevant": ["gc"]},
+    {"query": "merkle tree root hash for tamper detection of blocks", "relevant": ["merkle"]},
+    {"query": "raft consensus leader election and log replication", "relevant": ["raft"]},
+    {"query": "bloom filter probabilistic set false positives", "relevant": ["bloom"]}
+  ]
+}

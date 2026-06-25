@@ -31,6 +31,7 @@ from .embedding import (
     cosine,
     guard_identity,
 )
+from .evaluation import EvalResult, LabeledQuery, evaluate, recall_at_k, reciprocal_rank
 from .reranking import CrossEncoderReranker, Reranker
 from .retrieval import hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
@@ -80,4 +81,10 @@ __all__ = [
     "rrf_fuse",
     "Reranker",
     "CrossEncoderReranker",
+    # evaluation (P1)
+    "LabeledQuery",
+    "EvalResult",
+    "evaluate",
+    "recall_at_k",
+    "reciprocal_rank",
 ]
