@@ -193,6 +193,21 @@ class SQLiteAdapter(StorageAdapter):
 
     def _write_one(self, r: MemoryRecord, *, replace: bool) -> None:
         table = _KIND_TABLE[r.kind]
+        if replace:
+            # The PK id includes source_uri but UNIQUE() is on (scope_key,
+            # content_hash). So the SAME content from a DIFFERENT source yields a
+            # different id, and INSERT OR REPLACE silently deletes the prior PK row
+            # via the UNIQUE conflict — orphaning its fts/metadata/link rows, which
+            # are keyed by the *old* id. Purge the displaced id's child rows first.
+            prior = self._conn.execute(
+                f"SELECT id FROM {table} WHERE scope_key=? AND content_hash=?",
+                (r.scope.key(), r.content_hash),
+            ).fetchone()
+            if prior is not None and prior["id"] != r.id:
+                old = prior["id"]
+                self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
+                self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
+                self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         embedding = json.dumps(list(r.embedding)) if r.embedding is not None else None
         placeholders = ",".join("?" * 25)

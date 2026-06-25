@@ -67,6 +67,37 @@ def test_registry_resolves_builtin_sqlite():
     adapter.close()
 
 
+def test_upsert_same_content_different_source_no_orphans():
+    """Same content from a different source collapses on UNIQUE(scope,content_hash)
+    and must not orphan fts/metadata rows keyed by the displaced id."""
+    from rekoll import Kind, MemoryRecord, Provenance, TrustTier
+
+    adapter = _make()
+    scope = Scope(tenant="t", project="p", agent="a")
+
+    def rec(src):
+        return MemoryRecord.create(
+            scope=scope, kind=Kind.RAW_FACT, content="identical body text",
+            provenance=Provenance(source_uri=src), trust_tier=TrustTier.OWNER,
+            metadata={"k": "v"},
+        )
+
+    r1, r2 = rec("src://one"), rec("src://two")
+    assert r1.id != r2.id, "id is derived from source_uri, so these differ"
+    adapter.upsert(records=[r1])
+    adapter.upsert(records=[r2])
+
+    assert adapter.count(scope=scope) == 1, "UNIQUE(scope, content_hash) must collapse to one row"
+    fts_rids = [row["rid"] for row in adapter._conn.execute("SELECT rid FROM fts").fetchall()]
+    assert fts_rids == [r2.id], f"orphaned fts rows remain: {fts_rids}"
+    meta_ids = [
+        row["record_id"]
+        for row in adapter._conn.execute("SELECT DISTINCT record_id FROM record_metadata").fetchall()
+    ]
+    assert meta_ids == [r2.id], f"orphaned metadata rows remain: {meta_ids}"
+    adapter.close()
+
+
 def test_persists_to_disk(tmp_path):
     from rekoll import Kind, MemoryRecord, Provenance, TrustTier
 
