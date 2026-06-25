@@ -23,7 +23,7 @@ from .adapters.base import QueryHit, StorageAdapter
 from .adapters.registry import get_adapter
 from .chunking import chunk_file
 from .embedding import Embedder, StubEmbedder
-from .firewall import ContextEnvelope, build_envelope, screened_record
+from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
 from .model import Kind, MemoryRecord, Provenance, Scope, TrustTier
 from .retrieval import hybrid_search
 
@@ -154,18 +154,21 @@ class Memory:
         """Chunk a document and store it. Returns the number of chunks stored."""
         src = source or f"text://{name}"
         trust = self._default_trust if trust is None else trust
-        records = [
-            self._make_record(
-                content=piece,
-                kind=kind,
-                provenance=Provenance(
-                    source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
-                ),
-                trust=trust,
-                metadata={"path": name},
+        records = []
+        for i, piece in enumerate(chunk_file(name, text)):
+            if self._screen and not sanitize_unicode(piece):
+                continue  # nothing survives screening (e.g. only zero-width chars)
+            records.append(
+                self._make_record(
+                    content=piece,
+                    kind=kind,
+                    provenance=Provenance(
+                        source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
+                    ),
+                    trust=trust,
+                    metadata={"path": name},
+                )
             )
-            for i, piece in enumerate(chunk_file(name, text))
-        ]
         self._embed_and_store(records)
         return len(records)
 
@@ -198,6 +201,8 @@ class Memory:
                 continue
             files += 1
             for i, piece in enumerate(pieces):
+                if self._screen and not sanitize_unicode(piece):
+                    continue  # nothing survives screening (e.g. only zero-width chars)
                 pending.append(
                     self._make_record(
                         content=piece,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rekoll import Kind, Memory, Status, TrustTier
 from rekoll.embedding import StubEmbedder
 
@@ -50,6 +52,25 @@ def test_context_is_data_framed():
     mem.remember("the deploy runs on a Hostinger VPS")
     ctx = mem.context("where does the deploy run", k=2)
     assert "DATA" in ctx and "NOT instructions" in ctx
+    mem.close()
+
+
+def test_remember_empty_after_sanitize_raises_clearly():
+    # Content that is only zero-width chars sanitizes to "" — must raise a clear
+    # firewall error, not a generic mid-pipeline crash.
+    mem = _mem()
+    with pytest.raises(ValueError, match="empty after firewall"):
+        mem.remember("​‌‍⁠")
+    mem.close()
+
+
+def test_ingest_skips_chunks_that_do_not_survive_screening():
+    mem = _mem()
+    # A real paragraph plus a separate zero-width-only block; the real one stores,
+    # the empty one is skipped (no crash).
+    n = mem.ingest_text("Real content about deployment pipelines.\n\n​‌", name="d.txt")
+    assert n >= 1
+    assert mem.count() == n
     mem.close()
 
 

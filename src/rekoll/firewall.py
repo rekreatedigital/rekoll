@@ -196,6 +196,11 @@ def screened_record(
     the stored (cleaned) content. Quarantined records get ``status=QUARANTINED``.
     """
     decision = screen(content, source_trust=trust_tier)
+    if not decision.content:
+        raise ValueError(
+            "content is empty after firewall sanitization "
+            "(only zero-width / format / control characters?)"
+        )
     md = dict(metadata or {})
     if decision.redactions:
         md["redactions"] = ",".join(decision.redactions)
@@ -218,8 +223,17 @@ def screened_record(
 def _neutralize_delimiters(text: str) -> str:
     """Stop a memory from forging the envelope's own section markers / role tags."""
     out = sanitize_unicode(text)
-    out = re.sub(r"(?im)^\s*#+\s*(?:trusted directives|retrieved memory).*$", "[marker]", out)
+    # Neutralize the envelope's own section headers regardless of the leading
+    # markup used to forge them (#, **bold**, setext ===/---, blockquote >),
+    # not only a '#'-anchored heading.
+    out = re.sub(
+        r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$",
+        "[marker]", out,
+    )
     out = re.sub(r"(?i)</?(?:system|assistant|user)>", "[tag]", out)
+    # Defuse a forged evidence index so a stored string can't fake the renderer's
+    # own '[n]' numbering: rewrite any line-leading [12] to (12).
+    out = re.sub(r"(?m)^(\s*)\[(\d+)\]", r"\1(\2)", out)
     return out
 
 
