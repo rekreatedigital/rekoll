@@ -15,6 +15,7 @@ Defaults: local SQLite store, real local embeddings + reranker if the
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -74,6 +75,13 @@ class RecallResult:
     def texts(self) -> list[str]:
         return [h.record.content for h in self.hits]
 
+    def ids(self) -> list[str]:
+        """Record ids in rank order — e.g. ``mem.forget(*mem.recall(q).ids())``."""
+        return [h.record.id for h in self.hits]
+
+    def records(self) -> list[MemoryRecord]:
+        return [h.record for h in self.hits]
+
     def envelope(self) -> ContextEnvelope:
         return build_envelope(self.hits)
 
@@ -112,13 +120,20 @@ class Memory:
         self.reranker = _auto_reranker() if reranker == "auto" else reranker
 
         existing = self.adapter.get_embedder_identity(scope=self.scope)
+        current = self.embedder.identity()
         if existing is None:
-            self.adapter.set_embedder_identity(scope=self.scope, identity=self.embedder.identity())
-        elif existing != self.embedder.identity():
-            print(
-                f"[rekoll] warning: this store was built with embedder {existing.name!r}, "
-                f"but the current embedder is {self.embedder.identity().name!r}. Re-ingest for "
-                f"best vector recall (keyword recall still works)."
+            self.adapter.set_embedder_identity(scope=self.scope, identity=current)
+        elif existing != current:
+            # Show the FULL identity (name + dim + config) — a dim/config-only swap
+            # under the same model name would otherwise print an identical-looking
+            # message. Routed through warnings so hosts can filter/capture it.
+            warnings.warn(
+                f"[rekoll] this scope was embedded with {existing.name!r} "
+                f"(dim={existing.dim}, config={existing.config_hash}), but the current embedder "
+                f"is {current.name!r} (dim={current.dim}, config={current.config_hash}). "
+                f"Vector recall across the mismatch is degraded (incompatible-dim vectors are "
+                f"skipped); keyword recall still works. Re-ingest this scope or use a separate one.",
+                stacklevel=2,
             )
 
     # -- write --------------------------------------------------------------

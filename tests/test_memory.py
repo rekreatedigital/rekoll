@@ -55,6 +55,25 @@ def test_context_is_data_framed():
     mem.close()
 
 
+def test_recall_result_ids_and_records_helpers():
+    mem = _mem()
+    a = mem.remember("alpha fact about postgres pooling")
+    mem.remember("beta fact about redis caching")
+    res = mem.recall("postgres pooling", k=2)
+    assert a.id in res.ids()
+    assert {r.id for r in res.records()} == set(res.ids())
+    assert mem.forget(*res.ids()) >= 1  # ids() round-trips straight into forget
+    mem.close()
+
+
+def test_embedder_swap_warns_with_full_identity(tmp_path):
+    db = str(tmp_path / "m.db")
+    Memory(path=db, embedder=StubEmbedder(dim=64), reranker=None).close()
+    # A dim-only swap under the same model name must still surface a useful warning.
+    with pytest.warns(UserWarning, match="dim=64"):
+        Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None).close()
+
+
 def test_remember_empty_after_sanitize_raises_clearly():
     # Content that is only zero-width chars sanitizes to "" — must raise a clear
     # firewall error, not a generic mid-pipeline crash.
