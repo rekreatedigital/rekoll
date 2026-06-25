@@ -11,7 +11,7 @@ from typing import Iterable, Optional
 
 from .adapters.base import CAP_LEXICAL, QueryHit, QueryResult, StorageAdapter
 from .embedding import Embedder
-from .model import Kind, Scope
+from .model import Kind, Scope, Status
 from .reranking import Reranker
 
 __all__ = ["rrf_fuse", "hybrid_search", "DEFAULT_RRF_K"]
@@ -49,11 +49,13 @@ def hybrid_search(
     rrf_k: int = DEFAULT_RRF_K,
     reranker: Optional[Reranker] = None,
     candidates: Optional[int] = None,
+    include_quarantined: bool = False,
 ) -> QueryResult:
     """Vector + (optional) lexical search fused by RRF, then optionally reranked.
 
     Reads call no LLM — the cross-encoder reranker is a small local model, not a
     generative LLM (ADR-0010). Without a reranker, RRF order is returned.
+    Quarantined memory (firewall, ADR-0013) is excluded by default.
     """
     pool = candidates or max(k * 6, k)
     query_vec = embedder.embed([query])[0]
@@ -64,7 +66,11 @@ def hybrid_search(
         lists.append(
             adapter.lexical_query(scope=scope, text=query, k=pool, kind=kind, where=where).hits
         )
-    fused = rrf_fuse(lists, k=rrf_k, top=(pool if reranker is not None else k))
+    fused = rrf_fuse(lists, k=rrf_k, top=pool)
+    if not include_quarantined:
+        fused = [h for h in fused if h.record.status is not Status.QUARANTINED]
     if reranker is not None:
         fused = reranker.rerank(query, fused, top=k)
+    else:
+        fused = fused[:k]
     return QueryResult(hits=tuple(fused))

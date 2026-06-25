@@ -32,6 +32,15 @@ from .embedding import (
     guard_identity,
 )
 from .evaluation import EvalResult, LabeledQuery, evaluate, recall_at_k, reciprocal_rank
+from .firewall import (
+    ContextEnvelope,
+    DefenseAction,
+    DefenseDecision,
+    build_envelope,
+    sanitize_unicode,
+    screen,
+    screened_record,
+)
 from .reranking import CrossEncoderReranker, Reranker
 from .retrieval import hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
@@ -87,4 +96,12 @@ __all__ = [
     "evaluate",
     "recall_at_k",
     "reciprocal_rank",
+    # firewall (P2)
+    "DefenseAction",
+    "DefenseDecision",
+    "screen",
+    "screened_record",
+    "sanitize_unicode",
+    "ContextEnvelope",
+    "build_envelope",
 ]
