@@ -51,10 +51,18 @@ _SECRET_PATTERNS = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
     ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
+    ("stripe_key", re.compile(r"[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}")),
     ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+    ("slack_webhook", re.compile(r"https://hooks\.slack\.com/services/T[0-9A-Z]+/B[0-9A-Z]+/[A-Za-z0-9]+")),
+    ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35,}")),
+    ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
+    ("sendgrid_key", re.compile(r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}")),
     ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    # scheme://user:pass@host — redacts the whole DSN (host included) so an
+    # embedded '@' in the password can't leak a tail.
+    ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
     ("credential_assignment", re.compile(
         r"(?i)(?:api[_-]?key|secret|password|passwd|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}['\"]?"
     )),
