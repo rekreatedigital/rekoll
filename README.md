@@ -3,10 +3,11 @@
 **Injection-hardened, storage-agnostic, private memory for AI agents.**
 Give your agent durable memory of a whole codebase + database — that it can't be tricked into trusting, and that never leaves your infrastructure.
 
-> **Status: pre-alpha (P0 — foundation).** The storage spine, the memory-record
-> model, and the bring-your-own-database adapter contract are implemented and
-> tested. Retrieval, the injection firewall, and the learning loop are upcoming
-> phases — see [docs/DESIGN.md](docs/DESIGN.md) for the full plan. Not yet on PyPI.
+> **Status: pre-alpha, but usable.** Working today: the `Memory` facade, local
+> semantic + keyword (hybrid) search with cross-encoder reranking, the injection
+> firewall, a bring-your-own-database adapter contract, and a benchmark gate.
+> Upcoming: the learning loop, more DB backends, and an MCP server — see
+> [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
 
 ---
 
@@ -28,34 +29,49 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 **Do you need an AI key?** No — saving and searching memory uses a local model, no key, no internet, free. Only the *optional* learning loop calls an LLM, and you can bring any model (OpenAI, Claude, Gemini, local Ollama, …) or run it locally.
 
-## Try the foundation today
+## Quickstart
 
 ```bash
-git clone https://github.com/rekreatedigital/rekoll
-cd rekoll
-python -m venv .venv && . .venv/Scripts/activate   # (Windows) or: source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
+pip install rekoll                  # core: local, private, no API key
+pip install "rekoll[embeddings]"    # + real local semantic search & reranking
 ```
 
 ```python
-from rekoll import MemoryRecord, Scope, Provenance, Kind, TrustTier, StubEmbedder
-from rekoll.adapters.sqlite import SQLiteAdapter
+from rekoll import Memory
 
-emb = StubEmbedder()
-db = SQLiteAdapter("memory.db")            # or get_adapter("sqlite", path="memory.db")
-scope = Scope(tenant="me", project="app", agent="assistant")
+mem = Memory(project="myapp")               # local SQLite, firewall on, zero config
+mem.remember("we chose Postgres over BigQuery for cost")
+mem.remember("the deploy runs on a Hostinger VPS")
 
-rec = MemoryRecord.create(
-    scope=scope, kind=Kind.RAW_FACT, content="We chose Postgres over BigQuery for cost.",
-    provenance=Provenance(source_uri="decision://2026-06-23"), trust_tier=TrustTier.OWNER,
-).with_embedding(emb.embed(["We chose Postgres over BigQuery for cost."])[0], name="stub-hash", dim=emb.dim)
+print(mem.recall("why postgres?").texts()[0])          # the right memory, by meaning
+print(mem.recall("where does it deploy?").context())   # LLM-ready, safe data envelope
+```
 
-db.add(records=[rec])
-# NOTE: StubEmbedder is a non-semantic placeholder for the foundation — it matches
-# on shared words, not meaning. Real local (semantic) embeddings arrive in P1.
-hits = db.vector_query(scope=scope, embedding=emb.embed(["Postgres BigQuery cost"])[0], k=3)
-print(hits.hits[0].record.content)
+Reads need **no API key and call no LLM** — everything stays on your machine. The
+optional learning loop (a later phase) is the only thing that uses an AI, and you
+bring your own model.
+
+### Use it in your own project
+
+Until it's on PyPI, install from git or a local clone — **don't copy the source in**:
+
+```bash
+pip install "git+https://github.com/rekreatedigital/rekoll"     # once published
+pip install -e "/path/to/rekoll[embeddings]"                    # from a local clone
+```
+
+Then `from rekoll import Memory` anywhere. Add `.rekoll/` to your `.gitignore` (the
+store is a rebuildable index). Index a whole repo with `mem.ingest_path(".")`, or
+point it at your own database later via `Memory(backend=...)` (Postgres/Supabase
+adapters land in a later phase).
+
+### Develop Rekoll itself
+
+```bash
+git clone https://github.com/rekreatedigital/rekoll && cd rekoll
+python -m venv .venv && . .venv/Scripts/activate   # or: source .venv/bin/activate
+pip install -e ".[dev,embeddings]"
+pytest
 ```
 
 ## Docs & policies

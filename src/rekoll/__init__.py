@@ -41,6 +41,7 @@ from .firewall import (
     screen,
     screened_record,
 )
+from .memory import Memory, RecallResult
 from .reranking import CrossEncoderReranker, Reranker
 from .retrieval import hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
@@ -104,4 +105,7 @@ __all__ = [
     "sanitize_unicode",
     "ContextEnvelope",
     "build_envelope",
+    # facade — the drop-in SDK
+    "Memory",
+    "RecallResult",
 ]
