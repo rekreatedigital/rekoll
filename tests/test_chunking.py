@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rekoll.chunking import chunk_file, chunk_markdown, chunk_text
+from rekoll.chunking import chunk_file, chunk_markdown, chunk_python, chunk_text
 
 
 def test_short_text_is_one_chunk():
@@ -35,4 +35,22 @@ def test_markdown_without_headings_falls_back_to_text():
 
 def test_chunk_file_dispatches_by_extension():
     assert chunk_file("notes.md", "# H\nbody") == chunk_markdown("# H\nbody")
-    assert chunk_file("code.py", "x = 1") == chunk_text("x = 1")
+    assert chunk_file("code.py", "x = 1") == chunk_python("x = 1")
+
+
+def test_chunk_python_splits_by_def_and_class():
+    code = (
+        "import os\n\n"
+        "X = 1\n\n"
+        "def foo():\n    return 1\n\n"
+        "@deco\nclass Bar:\n    def m(self):\n        return 2\n"
+    )
+    chunks = chunk_python(code)
+    assert any(c.startswith("def foo") for c in chunks)
+    assert any(c.startswith("@deco") or c.startswith("class Bar") for c in chunks)
+    assert any("import os" in c for c in chunks)  # module-level preamble is its own chunk
+
+
+def test_chunk_python_syntax_error_falls_back_to_text():
+    bad = "def (:\n  oops"
+    assert chunk_python(bad) == chunk_text(bad)
