@@ -71,10 +71,45 @@ _INJECTION_MARKERS = [
     re.compile(r"(?i)</?(?:system|assistant|user)>"),
 ]
 
-_DANGEROUS_CHARS = dict.fromkeys(
-    map(ord, "​‌‍⁠﻿‪‫‬‭‮⁦⁧⁨⁩"),
-    None,
-)
+_KEEP_CONTROL = {"\t", "\n", "\r"}
+
+# Cross-script homoglyphs (Cyrillic / Greek look-alikes) folded to their Latin
+# twin. NFKC does NOT fold these, so without this map a single Cyrillic 'о' in
+# "ignоre all previous instructions" slips past every marker. Used ONLY on the
+# detection copy (``_marker_scan``) — never on stored content, so legitimate
+# non-Latin text is preserved byte-for-byte.
+_CONFUSABLES = str.maketrans({
+    # Cyrillic → Latin
+    "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o",
+    "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j",
+    "ѕ": "s", "ԁ": "d", "ո": "n",
+    # Greek → Latin
+    "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
+    "ρ": "p", "τ": "t", "υ": "u", "γ": "y", "χ": "x",
+})
+
+
+def _strip_invisible(text: str) -> str:
+    """Drop Unicode format (Cf) and control (Cc) chars except tab/newline/CR.
+
+    Covers zero-width (ZWSP/ZWNJ/ZWJ/WJ/BOM), every bidi control (LRE/RLE/PDF/
+    LRO/RLO/LRI/RLI/FSI/PDI/LRM/RLM/ALM), and SOFT HYPHEN — by *category*, so a
+    new invisible codepoint can't be smuggled past a hardcoded allow-list.
+    """
+    return "".join(
+        ch for ch in text
+        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc")
+    )
+
+
+def _marker_scan(text: str) -> str:
+    """Detection-only normalization: casefold + fold homoglyphs to Latin.
+
+    Never stored — this is the string the injection markers are tested against,
+    so a homoglyph- or case-spoofed marker is still caught while the original
+    (possibly legitimately non-Latin) content is stored unchanged.
+    """
+    return text.casefold().translate(_CONFUSABLES)
 
 
 @dataclass(frozen=True)
@@ -91,8 +126,13 @@ class DefenseDecision:
 
 
 def sanitize_unicode(text: str) -> str:
-    """NFKC-normalize and strip zero-width / bidi control characters."""
-    return unicodedata.normalize("NFKC", text).translate(_DANGEROUS_CHARS)
+    """NFKC-normalize, then strip invisible format/control characters.
+
+    Applied to STORED content. It deliberately does NOT fold cross-script
+    confusables — that would corrupt legitimate non-Latin text; homoglyph
+    folding happens only on the detection copy (see ``_marker_scan``).
+    """
+    return _strip_invisible(unicodedata.normalize("NFKC", text))
 
 
 def _fingerprint(value: str) -> str:
@@ -110,7 +150,11 @@ def screen(text: str, *, source_trust: TrustTier) -> DefenseDecision:
 
         content = pattern.sub(_sub, content)
 
-    markers = tuple(p.pattern for p in _INJECTION_MARKERS if p.search(content))
+    # Detect markers against a homoglyph-folded, casefolded copy so a Cyrillic/
+    # Greek look-alike or hidden format char can't slip a marker past the screen.
+    # The stored ``content`` stays unfolded (legitimate non-Latin text preserved).
+    scan = _marker_scan(content)
+    markers = tuple(p.pattern for p in _INJECTION_MARKERS if p.search(scan))
 
     action = DefenseAction.REDACT if redactions else DefenseAction.ALLOW
     trust = source_trust
