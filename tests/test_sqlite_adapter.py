@@ -67,6 +67,39 @@ def test_registry_resolves_builtin_sqlite():
     adapter.close()
 
 
+def test_lexical_filter_does_not_starve_valid_matches():
+    """A min_trust filter must surface valid matches even when many low-trust rows
+    rank ahead of them lexically — the old fixed over-fetch window dropped them."""
+    from rekoll import Kind, MemoryRecord, Provenance, TrustTier
+
+    adapter = _make()
+    scope = Scope(tenant="t", project="p", agent="a")
+
+    def rec(text, trust, src):
+        return MemoryRecord.create(
+            scope=scope, kind=Kind.RAW_FACT, content=text,
+            provenance=Provenance(source_uri=src), trust_tier=trust,
+        )
+
+    k = 3  # old window was k*4+10 = 22; we add more matches than that
+    records = []
+    # Term-dense, short, UNVERIFIED rows rank ABOVE the good rows in BM25.
+    for i in range(25):
+        records.append(rec(f"match match match match noise{i}", TrustTier.UNVERIFIED, f"t://n{i}"))
+    # Sparse, long, CURATED rows — one keyword in a sea of filler => low BM25 rank.
+    for i in range(k):
+        filler = " ".join(f"filler{i}word{j}" for j in range(40))
+        records.append(rec(f"{filler} match {filler}", TrustTier.CURATED, f"t://good{i}"))
+    adapter.add(records=records)
+
+    hits = adapter.lexical_query(
+        scope=scope, text="match", k=k, where={"min_trust": int(TrustTier.CURATED)}
+    )
+    assert len(hits) == k, f"min_trust filter starved valid matches: got {len(hits)} of {k}"
+    assert all(h.record.trust_tier >= TrustTier.CURATED for h in hits), "filter leaked low-trust rows"
+    adapter.close()
+
+
 def test_upsert_same_content_different_source_no_orphans():
     """Same content from a different source collapses on UNIQUE(scope,content_hash)
     and must not orphan fts/metadata rows keyed by the displaced id."""

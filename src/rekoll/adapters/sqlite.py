@@ -384,21 +384,30 @@ class SQLiteAdapter(StorageAdapter):
         match = _fts_query(text)
         if match is None:
             return QueryResult(hits=())
+        status_filter = where.get("status") if where else None
+        min_trust = where.get("min_trust") if where else None
+        has_filter = status_filter is not None or min_trust is not None
         sql = "SELECT rid, bm25(fts) AS s FROM fts WHERE fts MATCH ? AND scope_key=?"
         params: list[object] = [match, scope.key()]
         if kind is not None:
             sql += " AND kind=?"
             params.append(kind.value)
-        sql += " ORDER BY s LIMIT ?"
-        params.append(max(0, k) * 4 + 10)  # over-fetch; the where-filter trims to k below
+        sql += " ORDER BY s"
+        if not has_filter:
+            # Fast path: a bounded over-fetch is enough (we trim to k below).
+            sql += " LIMIT ?"
+            params.append(max(0, k) * 4 + 10)
+        # With a status/min_trust filter we must NOT cap the fetch before filtering:
+        # low-trust / wrong-status rows ranking ahead can crowd valid matches out of
+        # a fixed window and wrongly return < k hits. The MATCH set is already
+        # scope-bounded, so scanning it fully and trimming to k after the filter is
+        # both correct and acceptable at SQLite's local scale.
         rows = self._conn.execute(sql, params).fetchall()
         if not rows:
             return QueryResult(hits=())
         records = {
             r.id: r for r in self.get(scope=scope, ids=[row["rid"] for row in rows]).records
         }
-        status_filter = where.get("status") if where else None
-        min_trust = where.get("min_trust") if where else None
         hits: list[QueryHit] = []
         for row in rows:
             record = records.get(row["rid"])
