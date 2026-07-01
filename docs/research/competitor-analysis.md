@@ -48,8 +48,9 @@ straight into an agent's session context); the two LLM systems silently destroy 
 data — including, in hindsight's case, source code — while reporting success.
 Rekoll's combination — deterministic screen (flag from trusted sources, quarantine
 from untrusted), read envelope (retrieved text arrives as inert DATA, never a
-command), and verbatim storage with NOT-NULL provenance — is one no competitor has
-any part of. This was verified by running the *identical* 10-memory probe against
+command), and verbatim storage with NOT-NULL provenance — is a combination no
+competitor has (mempalace has verbatim storage and recorded provenance, but no
+screen and no envelope). This was verified by running the *identical* 10-memory probe against
 Rekoll itself; see §5.
 
 ---

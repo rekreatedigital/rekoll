@@ -23,7 +23,7 @@ also their biggest security hole, because it pipes raw memory (including our
 injection string) into the instruction stream. **Rekoll's version is the same
 feature emitted through the read envelope** — trusted-tier directives separated from
 DATA-wrapped evidence — which turns their vulnerability into our demo.
-**Effort:** S–M (retrieval + budgeting exist; this is selection + formatting).
+**Effort:** M (retrieval exists; budgeting + selection + formatting are the work).
 **Threat to zero-key/zero-LLM:** none — deterministic selection, no LLM.
 
 ### 2. Editor/agent auto-save hooks — from mempalace
