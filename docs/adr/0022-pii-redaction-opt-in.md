@@ -1,4 +1,4 @@
-# ADR-0021 — PII redaction (email/SSN/phone) is opt-in; secrets stay default-on
+# ADR-0022 — PII redaction (email/SSN/phone) is opt-in; secrets stay default-on
 
 **Status:** Accepted · **Date:** 2026-07-02
 

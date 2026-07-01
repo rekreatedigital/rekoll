@@ -1,4 +1,4 @@
-"""Resource-exhaustion guards (P0-3, ADR-0017): content, file, and FTS bounds.
+"""Resource-exhaustion guards (P0-3, ADR-0018): content, file, and FTS bounds.
 
 Complexity guards for the firewall regexes (the ReDoS gate) live here too once
 added — this file is the one place the "bounded inputs everywhere" story is

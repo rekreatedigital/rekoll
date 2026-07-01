@@ -1,4 +1,4 @@
-"""P1-5 / ADR-0019: the versioned attack-corpus regression gates.
+"""P1-5 / ADR-0020: the versioned attack-corpus regression gates.
 
 Two independent gates run over benchmarks/attack_corpus.json:
 

@@ -1,4 +1,4 @@
-"""Ingestion security + coverage: trust defaults (ADR-0015) and ingest_path.
+"""Ingestion security + coverage: trust defaults (ADR-0016) and ingest_path.
 
 The load-bearing property under test: bulk-ingested content is third-party by
 nature, so it must default to UNVERIFIED trust — which lets the firewall

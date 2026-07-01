@@ -1,4 +1,4 @@
-# ADR-0016 — Directive writes require an explicit trust decision
+# ADR-0017 — Directive writes require an explicit trust decision
 
 **Status:** Accepted · **Date:** 2026-07-02
 
@@ -32,7 +32,7 @@ default:
    never renders at all. So even a caller who explicitly stamps a directive
    `UNVERIFIED` (e.g. bulk-importing rules for later human review) gets safe
    behavior.
-3. **Bulk ingestion needs no error:** after ADR-0015, `ingest_text(kind=
+3. **Bulk ingestion needs no error:** after ADR-0016, `ingest_text(kind=
    Kind.DIRECTIVE)` defaults to UNVERIFIED — below the floor — so imported
    directives are inert until a human re-stamps them. Erroring there would
    break legitimate import-then-review flows without adding safety.

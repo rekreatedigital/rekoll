@@ -80,7 +80,7 @@ def _scope_from_key(key: str) -> Scope:
 
 
 # Bound the MATCH expression: a hostile/runaway query must not inflate it
-# without limit (ADR-0017). Past a few dozen distinct OR terms BM25 adds noise,
+# without limit (ADR-0018). Past a few dozen distinct OR terms BM25 adds noise,
 # not recall — 32 is far beyond any natural-language question.
 _MAX_FTS_TERMS = 32
 
@@ -215,7 +215,7 @@ class SQLiteAdapter(StorageAdapter):
                 (r.scope.key(), r.content_hash),
             ).fetchone()
             if prior is not None and prior["id"] != r.id:
-                # TRUST-AWARE UPSERT (ADR-0022). Same bytes, DIFFERENT source: an
+                # TRUST-AWARE UPSERT (ADR-0023). Same bytes, DIFFERENT source: an
                 # attacker who re-ingests content byte-identical to a trusted
                 # record must not be able to hijack it. Without this gate the
                 # UNIQUE(scope_key, content_hash) conflict let a lower-trust write

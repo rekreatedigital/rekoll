@@ -77,7 +77,7 @@ def test_benign_urls_are_not_false_positives():
 
 
 def test_pii_is_not_redacted_by_default():
-    # ADR-0021: default-off so code ingestion (author emails, phone numbers in
+    # ADR-0022: default-off so code ingestion (author emails, phone numbers in
     # docs) is not corrupted. Secrets are still redacted unconditionally.
     raw = "contact dev@example.com or call 555-123-4567 about ssn 123-45-6789"
     decision = screen(raw, source_trust=TrustTier.OWNER)

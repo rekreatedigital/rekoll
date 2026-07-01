@@ -1,4 +1,4 @@
-# ADR-0022 — Trust-aware upsert: identical content is trust-monotonic
+# ADR-0023 — Trust-aware upsert: identical content is trust-monotonic
 
 **Status:** Accepted · **Date:** 2026-07-02 · **Priority:** P0-0 (orchestrator-routed, highest in the effort)
 
@@ -59,4 +59,4 @@ third-party backend are held to it identically.
   auto-elevates from untrusted signal) and the monotonic-trust spine.
 - Not addressed here (documented, separate): a fully compromised backend with
   direct DB write access — that is the read-path `verify()` layer's job
-  (ADR-0018) and remains the user's responsibility (SECURITY.md).
+  (ADR-0019) and remains the user's responsibility (SECURITY.md).

@@ -1,4 +1,4 @@
-"""P0-0 / ADR-0022: trust-aware upsert — a lower-trust re-ingest of byte-identical
+"""P0-0 / ADR-0023: trust-aware upsert — a lower-trust re-ingest of byte-identical
 content must never downgrade or hijack a trusted record.
 
 Confirmed-by-repro finding: the UNIQUE(scope_key, content_hash) upsert let an

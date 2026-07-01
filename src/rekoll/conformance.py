@@ -107,7 +107,7 @@ def assert_content_addressed_idempotent(make: AdapterFactory, embedder: Embedder
 
 
 def assert_upsert_is_trust_monotonic(make: AdapterFactory, embedder: Embedder) -> None:
-    """Trust-aware upsert (ADR-0022): identical content re-ingested from a
+    """Trust-aware upsert (ADR-0023): identical content re-ingested from a
     DIFFERENT source must never LOWER the stored trust tier or hijack the trusted
     record's provenance. Only a STRICTLY higher trust tier may take over. Every
     adapter inherits this contract, since the naive UNIQUE(scope, content_hash)

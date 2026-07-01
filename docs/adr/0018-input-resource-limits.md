@@ -1,4 +1,4 @@
-# ADR-0017 — Bounded inputs everywhere: content, file, query, FTS expression
+# ADR-0018 — Bounded inputs everywhere: content, file, query, FTS expression
 
 **Status:** Accepted · **Date:** 2026-07-02
 

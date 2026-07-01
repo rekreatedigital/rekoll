@@ -1,4 +1,4 @@
-"""P2-7 / ADR-0018: recall detects direct-DB tampering via content hashes.
+"""P2-7 / ADR-0019: recall detects direct-DB tampering via content hashes.
 
 Threat model: an attacker with write access to the backing store (who bypasses
 ingest screening entirely). The content-address is the detection layer —

@@ -25,7 +25,7 @@ of released artifacts.
 Out of scope (documented, not bugs): an attacker who already has **write access
 to the user's own database** can bypass ingest-time screening. Recall
 content-hash-verifies every candidate and withholds mismatches with a warning
-(ADR-0018) — that catches *naive* tampering, but an attacker who rewrites
+(ADR-0019) — that catches *naive* tampering, but an attacker who rewrites
 content can also recompute the unkeyed hash; a fully compromised backend is
 the user's responsibility. See the threat model in
 [docs/DESIGN.md](docs/DESIGN.md).

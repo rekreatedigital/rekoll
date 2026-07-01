@@ -102,7 +102,7 @@ def test_lexical_filter_does_not_starve_valid_matches():
 
 def test_upsert_higher_trust_replaces_without_orphans():
     """A STRICTLY higher-trust re-ingest of identical content from a different
-    source takes over (trust-aware upsert, ADR-0022) and must not orphan the
+    source takes over (trust-aware upsert, ADR-0023) and must not orphan the
     displaced id's fts/metadata rows. (Equal/lower trust is a no-op — covered in
     test_trust_upsert.py.)"""
     from rekoll import Kind, MemoryRecord, Provenance, TrustTier

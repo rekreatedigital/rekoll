@@ -1,4 +1,4 @@
-# ADR-0015 — Bulk ingestion defaults to UNVERIFIED trust, never `default_trust`
+# ADR-0016 — Bulk ingestion defaults to UNVERIFIED trust, never `default_trust`
 
 **Status:** Accepted · **Date:** 2026-07-02
 

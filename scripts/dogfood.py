@@ -34,7 +34,7 @@ def ingest() -> None:
             stale.unlink()
     mem = _memory()
     # Our own repo: vouch for it explicitly. At the safe UNVERIFIED ingest
-    # default (ADR-0015) the firewall docs/tests — which quote injection
+    # default (ADR-0016) the firewall docs/tests — which quote injection
     # phrases — would be quarantined and unrecallable.
     stats = mem.ingest_path(str(REPO), include_ext=INCLUDE_EXT, trust=TrustTier.CURATED)
     print(f"embedder: {mem.embedder.identity().name}")

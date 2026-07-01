@@ -77,7 +77,7 @@ _SECRET_PATTERNS = [
     )),
 ]
 
-# PII patterns — OPT-IN only (ADR-0021). Default-OFF because Rekoll's core JTBD
+# PII patterns — OPT-IN only (ADR-0022). Default-OFF because Rekoll's core JTBD
 # is "understand my codebase", and code/git logs are full of legitimate emails
 # (author lines, CODEOWNERS, mailto:) and number sequences; default-on redaction
 # would corrupt legitimate content and gut recall. A user handling PII-bearing
@@ -98,7 +98,7 @@ _PII_PATTERNS = [
 # Prompt-injection markers (case-insensitive). These lower trust on UNTRUSTED input.
 # Tested against the homoglyph-folded, casefolded detection copy (``_marker_scan``),
 # and regression-gated by the versioned attack corpus (benchmarks/attack_corpus.json,
-# ADR-0019). All quantifiers are bounded / literal-anchored — the ReDoS gate
+# ADR-0020). All quantifiers are bounded / literal-anchored — the ReDoS gate
 # (tests/test_limits.py) fails CI if an edit here regresses to backtracking.
 _INJECTION_MARKERS = [
     # -- English: override / disregard prior context --------------------------
@@ -204,7 +204,7 @@ def screen(text: str, *, source_trust: TrustTier, redact_pii: bool = False) -> D
 
     Secrets are ALWAYS redacted (defense in depth). PII (email/SSN/phone) is
     redacted only when ``redact_pii=True`` — off by default so code ingestion
-    isn't corrupted by author emails and number sequences (ADR-0021).
+    isn't corrupted by author emails and number sequences (ADR-0022).
     """
     content = sanitize_unicode(text)
     redactions: list[str] = []
@@ -253,7 +253,7 @@ def screened_record(
 
     Screening happens BEFORE id/hash computation, so the content-address reflects
     the stored (cleaned) content. Quarantined records get ``status=QUARANTINED``.
-    ``redact_pii`` opts into PII redaction (ADR-0021).
+    ``redact_pii`` opts into PII redaction (ADR-0022).
     """
     decision = screen(content, source_trust=trust_tier, redact_pii=redact_pii)
     if not decision.content:

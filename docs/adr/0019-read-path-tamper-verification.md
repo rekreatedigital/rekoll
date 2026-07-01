@@ -1,4 +1,4 @@
-# ADR-0018 — Recall verifies content hashes; mismatches are withheld, not repaired
+# ADR-0019 — Recall verifies content hashes; mismatches are withheld, not repaired
 
 **Status:** Accepted · **Date:** 2026-07-02
 

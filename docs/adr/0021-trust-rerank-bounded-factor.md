@@ -1,4 +1,4 @@
-# ADR-0020 — Trust-aware re-rank is a bounded (~±20%) factor, not a hard weight
+# ADR-0021 — Trust-aware re-rank is a bounded (~±20%) factor, not a hard weight
 
 **Status:** Accepted · **Date:** 2026-07-02 · **Implementation:** future work
 
@@ -41,6 +41,6 @@ recall.
   1.0/0.7/0.4 triple is removed as a spec value.
 - Implementation stays future work (no ranking weights ship in this change);
   when built, it must keep the trust factor inside the ±20% band and keep
-  QUARANTINED exclusion categorical, with the attack corpus (ADR-0019) proving
+  QUARANTINED exclusion categorical, with the attack corpus (ADR-0020) proving
   down-ranking does not become the *only* thing standing between a trigger and
   the directive channel.

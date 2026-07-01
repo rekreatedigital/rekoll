@@ -41,10 +41,10 @@ __all__ = [
 # UNVERIFIED so the firewall can quarantine injection markers (quarantine only
 # fires at trust <= UNVERIFIED). Only first-person ``remember()`` follows the
 # constructor's ``default_trust``. Pass ``trust=`` to vouch for a source you
-# control (ADR-0015).
+# control (ADR-0016).
 DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
 
-# Resource limits (ADR-0017). A single un-chunked memory: past ~100k chars it is
+# Resource limits (ADR-0018). A single un-chunked memory: past ~100k chars it is
 # a document, not a fact — chunk it via ingest_text/ingest_path instead. A single
 # ingested file/document: 10 MiB of TEXT (~2 500 pages) — bigger inputs are
 # almost never prose and reading them unbounded is a memory-exhaustion vector.
@@ -133,10 +133,10 @@ class Memory:
         Bulk ingestion (``ingest_text`` / ``ingest_path``) always defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) regardless of this setting, so a
         high default can never silently exempt third-party files from the
-        firewall's quarantine (ADR-0015).
+        firewall's quarantine (ADR-0016).
 
         ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
-        caps one ingested file/document (ADR-0017). Both overridable, never
+        caps one ingested file/document (ADR-0018). Both overridable, never
         disable-able to zero.
         """
         if max_content_chars <= 0 or max_file_bytes <= 0:
@@ -201,7 +201,7 @@ class Memory:
         ``kind=Kind.DIRECTIVE`` requires an explicit ``trust=``: directives at
         or above ``TrustTier.TRUSTED_SOURCE`` render in the recall envelope's
         *instruction* channel, so minting one must be a conscious act of
-        vouching, never an inherited default (ADR-0016).
+        vouching, never an inherited default (ADR-0017).
         """
         if kind is Kind.DIRECTIVE and trust is None:
             raise ValueError(
@@ -209,14 +209,14 @@ class Memory:
                 "envelope and must carry an explicit trust= (e.g. "
                 "trust=TrustTier.OWNER for a rule you authored). Directives "
                 "below TrustTier.TRUSTED_SOURCE are stored but render as "
-                "evidence, never as instructions (ADR-0016)."
+                "evidence, never as instructions (ADR-0017)."
             )
         if len(content) > self._max_content_chars:
             raise ValueError(
                 f"content is {len(content):,} chars, over the "
                 f"max_content_chars={self._max_content_chars:,} limit for one "
                 "memory; a document belongs in ingest_text()/ingest_path() "
-                "(which chunk it), or raise max_content_chars (ADR-0017)."
+                "(which chunk it), or raise max_content_chars (ADR-0018)."
             )
         record = self._make_record(
             content=content,
@@ -241,14 +241,14 @@ class Memory:
 
         Ingested text is third-party by nature, so ``trust`` defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
-        chunk — NOT to the constructor's ``default_trust`` (ADR-0015). Pass
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
         ``trust=`` explicitly to vouch for a source you control.
         """
         if len(text) > self._max_file_bytes:
             raise ValueError(
                 f"document is {len(text):,} chars, over the "
                 f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
-                "split it or raise max_file_bytes (ADR-0017)."
+                "split it or raise max_file_bytes (ADR-0018)."
             )
         src = source or f"text://{name}"
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
@@ -293,7 +293,7 @@ class Memory:
 
         Files on disk are third-party by nature, so ``trust`` defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
-        chunk — NOT to the constructor's ``default_trust`` (ADR-0015). Pass
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
         ``trust=`` explicitly to vouch for a tree you control.
         """
         include = set(include_ext) if include_ext else DEFAULT_INCLUDE_EXT
@@ -311,7 +311,7 @@ class Memory:
                     skipped += 1  # a planted link can point outside the tree
                     continue
                 if fp.stat().st_size > self._max_file_bytes:
-                    skipped += 1  # never read an oversized file into memory (ADR-0017)
+                    skipped += 1  # never read an oversized file into memory (ADR-0018)
                     continue
                 text = fp.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
@@ -430,7 +430,7 @@ class Memory:
         """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
 
         The query is firewall-sanitized and truncated to
-        ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0017).
+        ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0018).
         """
         result = hybrid_search(
             self.adapter, scope=self.scope, query=query, embedder=self.embedder,

@@ -21,7 +21,7 @@ __all__ = ["rrf_fuse", "hybrid_search", "DEFAULT_RRF_K", "MAX_QUERY_CHARS"]
 DEFAULT_RRF_K = 60
 
 # Read path must degrade, never DoS: queries are truncated (not rejected) to a
-# bound far past any real question before embedding/lexical search (ADR-0017).
+# bound far past any real question before embedding/lexical search (ADR-0018).
 MAX_QUERY_CHARS = 8_192
 
 
@@ -44,7 +44,7 @@ def rrf_fuse(
 
 
 def _verify_hits(hits: list[QueryHit]) -> list[QueryHit]:
-    """Tamper check (ADR-0018): demote any hit whose content fails its hash.
+    """Tamper check (ADR-0019): demote any hit whose content fails its hash.
 
     An attacker with direct write access to the backing store bypasses ingest
     screening entirely; the content-address is the detection layer SECURITY.md
@@ -94,7 +94,7 @@ def hybrid_search(
 
     Every candidate is content-hash verified before surfacing; a mismatch
     (direct-DB tampering) is demoted to QUARANTINED in memory and warned about
-    (ADR-0018).
+    (ADR-0019).
     """
     query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
     pool = candidates or max(k * 6, k)

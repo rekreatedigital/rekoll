@@ -102,7 +102,7 @@ Bulk-ingested files are treated as **third-party** by default: they land at
 contain, and they never reach the recall envelope's instruction channel. Vouch
 for a tree you control with `mem.ingest_path(".", trust=TrustTier.CURATED)`. Your
 own first-person notes via `mem.remember(...)` stay at `OWNER` (see
-[ADR-0015](docs/adr/0015-ingest-trust-default.md)).
+[ADR-0016](docs/adr/0016-ingest-trust-default.md)).
 
 ### Develop Rekoll itself
 

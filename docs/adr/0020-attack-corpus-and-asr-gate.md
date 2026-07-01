@@ -1,4 +1,4 @@
-# ADR-0019 — Versioned attack corpus with containment + ASR regression gates
+# ADR-0020 — Versioned attack corpus with containment + ASR regression gates
 
 **Status:** Accepted · **Date:** 2026-07-02
 
