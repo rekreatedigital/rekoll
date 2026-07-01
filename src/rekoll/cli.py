@@ -676,11 +676,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "ingest", parents=[shared],
         help="index a file or a whole folder (code + docs)",
-        description="Chunk and store every readable text/code file under a path.",
+        description=(
+            "Chunk and store every readable text/code file under a path. "
+            "Ingested content is screened at 'unverified' trust by default - "
+            "bulk files are treated as content you didn't write."
+        ),
     )
     p.add_argument("target", help="file or directory to index")
-    p.add_argument("--trust", choices=_TRUST_CHOICES, default=TrustTier.OWNER.name.lower(),
-                   help="trust tier for the ingested content (default: %(default)s)")
+    # Bulk ingest must hit the firewall as UNTRUSTED by default: at 'owner'
+    # trust a poisoned file in a repo would sail past the injection screen
+    # (P0-1). 'owner' stays available as an explicit vouch for your own files.
+    p.add_argument("--trust", choices=_TRUST_CHOICES, default=TrustTier.UNVERIFIED.name.lower(),
+                   help="trust for the ingested content (default: %(default)s; "
+                        "pass 'owner' to vouch for files you wrote yourself)")
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser(
