@@ -57,7 +57,13 @@ _SECRET_PATTERNS = [
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35,}")),
     ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
     ("sendgrid_key", re.compile(r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}")),
-    ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----")),
+    # Whole PEM block (header..footer) so the base64 key BODY is redacted, not
+    # just the header line. Lazy body + required terminator = linear, no ReDoS.
+    ("private_key", re.compile(
+        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+    )),
+    # Fallback: a truncated/headers-only block still gets its header flagged.
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # scheme://user:pass@host — redacts the whole DSN (host included) so an
     # embedded '@' in the password can't leak a tail.
@@ -68,14 +74,39 @@ _SECRET_PATTERNS = [
 ]
 
 # Prompt-injection markers (case-insensitive). These lower trust on UNTRUSTED input.
+# Tested against the homoglyph-folded, casefolded detection copy (``_marker_scan``),
+# and regression-gated by the versioned attack corpus (benchmarks/attack_corpus.json,
+# ADR-0019). All quantifiers are bounded / literal-anchored — the ReDoS gate
+# (tests/test_limits.py) fails CI if an edit here regresses to backtracking.
 _INJECTION_MARKERS = [
-    re.compile(r"(?i)ignore\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|messages?)"),
-    re.compile(r"(?i)disregard\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier)"),
-    re.compile(r"(?i)you\s+are\s+now\s+(?:a|an|in|the|no longer)\b"),
+    # -- English: override / disregard prior context --------------------------
+    re.compile(r"(?i)ignore\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier|preceding|the\s+system)\s+(?:instructions?|prompts?|messages?|directions?|context|rules?)"),
+    re.compile(r"(?i)disregard\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier|preceding)"),
+    re.compile(r"(?i)forget\s+(?:everything|all|(?:your|the|all|any)\s+(?:previous\s+)?(?:instructions?|prompts?|rules?|directions?)|previous|what\s+you\s+were\s+told)"),
+    re.compile(r"(?i)\boverride\s+(?:all\s+|your\s+|the\s+|any\s+|previous\s+|prior\s+)*(?:instructions?|guidelines?|rules?|settings?|safety|restrictions?|filters?|polic(?:y|ies))"),
+    # -- English: role hijack / jailbreak framing -----------------------------
+    re.compile(r"(?i)you\s+are\s+(?:now|hereby)\s+(?:a|an|in|the|no\s+longer|going\s+to|dan\b|free|unrestricted|jailbroken|uncensored)"),
+    re.compile(r"(?i)\bfrom\s+now\s+on,?\s+(?:you\s+(?:are|will|must)|ignore|respond|act)"),
+    re.compile(r"(?i)\bpretend\s+(?:to\s+be|you\s+are|that\s+you)"),
+    re.compile(r"(?i)\bact\s+as\s+(?:an?\s+)?(?:unrestricted|jailbroken|uncensored|evil|dan\b|developer)"),
+    re.compile(r"(?i)\b(?:do\s+anything\s+now|developer\s+mode|jailbreak(?:en|ing)?|unrestricted\s+mode|god\s+mode)\b"),
+    # -- English: prompt / instruction exfiltration ---------------------------
     re.compile(r"(?i)\bsystem\s+prompt\b"),
-    re.compile(r"(?i)new\s+instructions?\s*:"),
-    re.compile(r"(?i)forget\s+(?:everything|all|your\s+instructions|previous)"),
-    re.compile(r"(?i)</?(?:system|assistant|user)>"),
+    re.compile(r"(?i)\b(?:reveal|show|print|repeat|display|expose|leak|disclose|dump|output|give\s+me|tell\s+me)\b[^.\n]{0,40}?\b(?:system\s+prompt|system\s+message|initial\s+(?:prompt|instructions?)|your\s+(?:instructions?|prompt|guidelines?|rules?|configuration)|the\s+prompt)"),
+    re.compile(r"(?i)new\s+(?:instructions?|task|directive|system\s+prompt)\s*:"),
+    # -- Structural: forged role / channel tags -------------------------------
+    re.compile(r"(?i)</?(?:system|assistant|user|im_start|im_end|tool)>"),
+    re.compile(r"(?i)\[/?(?:system|inst|assistant)\]"),
+    # -- Multilingual "ignore/forget previous instructions" -------------------
+    # Curated for the highest-traffic languages; each requires the adversarial
+    # verb AND an instruction/rule object within a bounded gap, so benign prose
+    # ("please read the instructions") does not trip. Corpus-gated + FP-tested.
+    re.compile(r"(?i)\b(?:ignoriere?|vergiss|missachte)\b[^.\n]{0,30}?\b(?:anweisungen|befehle|vorgaben|anweisung)\b"),   # de
+    re.compile(r"(?i)\b(?:ignora|olvida|olvidad|descarta|desatiende)\b[^.\n]{0,30}?\b(?:instrucciones|indicaciones|órdenes|reglas)\b"),  # es
+    re.compile(r"(?i)\b(?:ignore[zr]?|oublie[zr]?|négligez?)\b[^.\n]{0,30}?\b(?:instructions|consignes|règles|directives)\b"),  # fr
+    re.compile(r"(?i)\b(?:ignora|dimentica|trascura)\b[^.\n]{0,30}?\b(?:istruzioni|indicazioni|regole)\b"),  # it
+    re.compile(r"(?i)\b(?:ignore|ignora|esqueça|esquece|desconsidere)\b[^.\n]{0,30}?\b(?:instruções|orientações|regras)\b"),  # pt
+    re.compile(r"(?:忽略|无视|忽视|忘记|忘掉)[^。\n]{0,12}?(?:指令|指示|命令|规则|提示|要求)"),  # zh (no \b: CJK has no word chars)
 ]
 
 _KEEP_CONTROL = {"\t", "\n", "\r"}

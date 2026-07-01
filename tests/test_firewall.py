@@ -43,6 +43,29 @@ def test_expanded_secret_patterns_are_redacted():
     assert "S3cr3tP" not in pg.content
 
 
+def test_private_key_whole_block_is_redacted_not_just_header():
+    # The header-only pattern left the base64 key BODY in stored content; the
+    # whole-block pattern must redact header..footer so no key material survives.
+    pem = (
+        "here is the key\n"
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n"
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz\n"
+        "c2gtZWQyNTUxOQAAACDdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefZZ\n"
+        "-----END OPENSSH PRIVATE KEY-----\n"
+        "keep this line"
+    )
+    decision = screen(pem, source_trust=TrustTier.OWNER)
+    assert "[REDACTED:private_key]" in decision.content
+    assert "b3BlbnNzaC1rZXk" not in decision.content, "key body survived redaction"
+    assert "deadbeef" not in decision.content
+    assert "here is the key" in decision.content and "keep this line" in decision.content
+
+
+def test_truncated_private_key_header_still_flagged():
+    decision = screen("-----BEGIN RSA PRIVATE KEY-----\nAAAA (rest lost)", source_trust=TrustTier.OWNER)
+    assert "[REDACTED:private_key]" in decision.content
+
+
 def test_benign_urls_are_not_false_positives():
     for url in (
         "see https://github.com/rekreatedigital/rekoll for docs",
