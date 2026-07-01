@@ -79,12 +79,23 @@ def _scope_from_key(key: str) -> Scope:
     return Scope(tenant=tenant, project=project, agent=agent)
 
 
+# Bound the MATCH expression: a hostile/runaway query must not inflate it
+# without limit (ADR-0017). Past a few dozen distinct OR terms BM25 adds noise,
+# not recall — 32 is far beyond any natural-language question.
+_MAX_FTS_TERMS = 32
+
+
 def _fts_query(text: str) -> Optional[str]:
-    """Turn free text into a safe FTS5 MATCH expression (quoted OR-ed terms)."""
+    """Turn free text into a safe, bounded FTS5 MATCH expression.
+
+    Terms are lowercased, quoted, de-duplicated (order-preserving — repeated
+    words carry no extra intent), and capped at ``_MAX_FTS_TERMS``.
+    """
     terms = re.findall(r"\w+", text.lower())
     if not terms:
         return None
-    return " OR ".join(f'"{t}"' for t in terms)
+    unique = list(dict.fromkeys(terms))[:_MAX_FTS_TERMS]
+    return " OR ".join(f'"{t}"' for t in unique)
 
 
 class SQLiteAdapter(StorageAdapter):

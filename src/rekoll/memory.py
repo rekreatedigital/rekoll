@@ -29,7 +29,13 @@ from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screene
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
-__all__ = ["Memory", "RecallResult", "DEFAULT_INGEST_TRUST"]
+__all__ = [
+    "Memory",
+    "RecallResult",
+    "DEFAULT_INGEST_TRUST",
+    "DEFAULT_MAX_CONTENT_CHARS",
+    "DEFAULT_MAX_FILE_BYTES",
+]
 
 # Files and bulk documents are third-party by nature: ingestion defaults to
 # UNVERIFIED so the firewall can quarantine injection markers (quarantine only
@@ -37,6 +43,13 @@ __all__ = ["Memory", "RecallResult", "DEFAULT_INGEST_TRUST"]
 # constructor's ``default_trust``. Pass ``trust=`` to vouch for a source you
 # control (ADR-0015).
 DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
+
+# Resource limits (ADR-0017). A single un-chunked memory: past ~100k chars it is
+# a document, not a fact — chunk it via ingest_text/ingest_path instead. A single
+# ingested file/document: 10 MiB of TEXT (~2 500 pages) — bigger inputs are
+# almost never prose and reading them unbounded is a memory-exhaustion vector.
+DEFAULT_MAX_CONTENT_CHARS = 100_000
+DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -111,6 +124,8 @@ class Memory:
         reranker: object = "auto",
         screen: bool = True,
         default_trust: TrustTier = TrustTier.OWNER,
+        max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     ) -> None:
         """``default_trust`` applies to first-person ``remember()`` calls ONLY.
 
@@ -118,10 +133,18 @@ class Memory:
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) regardless of this setting, so a
         high default can never silently exempt third-party files from the
         firewall's quarantine (ADR-0015).
+
+        ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
+        caps one ingested file/document (ADR-0017). Both overridable, never
+        disable-able to zero.
         """
+        if max_content_chars <= 0 or max_file_bytes <= 0:
+            raise ValueError("max_content_chars and max_file_bytes must be positive")
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
+        self._max_content_chars = max_content_chars
+        self._max_file_bytes = max_file_bytes
 
         if backend == "sqlite" and path and path != ":memory:":
             Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -186,6 +209,13 @@ class Memory:
                 "below TrustTier.TRUSTED_SOURCE are stored but render as "
                 "evidence, never as instructions (ADR-0016)."
             )
+        if len(content) > self._max_content_chars:
+            raise ValueError(
+                f"content is {len(content):,} chars, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a document belongs in ingest_text()/ingest_path() "
+                "(which chunk it), or raise max_content_chars (ADR-0017)."
+            )
         record = self._make_record(
             content=content,
             kind=kind,
@@ -212,6 +242,12 @@ class Memory:
         chunk — NOT to the constructor's ``default_trust`` (ADR-0015). Pass
         ``trust=`` explicitly to vouch for a source you control.
         """
+        if len(text) > self._max_file_bytes:
+            raise ValueError(
+                f"document is {len(text):,} chars, over the "
+                f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
+                "split it or raise max_file_bytes (ADR-0017)."
+            )
         src = source or f"text://{name}"
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
         records = []
@@ -241,7 +277,10 @@ class Memory:
         trust: Optional[TrustTier] = None,
         batch: int = 256,
     ) -> dict:
-        """Index a file or directory (code + docs). Returns {files, chunks, total}.
+        """Index a file or directory (code + docs).
+
+        Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
+        passed over (over ``max_file_bytes``, undecodable, or unreadable).
 
         Files on disk are third-party by nature, so ``trust`` defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
@@ -255,11 +294,16 @@ class Memory:
         targets = [root] if root.is_file() else list(self._walk(root, include, skip))
         files = 0
         chunks = 0
+        skipped = 0
         pending: list[MemoryRecord] = []
         for fp in targets:
             try:
+                if fp.stat().st_size > self._max_file_bytes:
+                    skipped += 1  # never read an oversized file into memory (ADR-0017)
+                    continue
                 text = fp.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
+                skipped += 1
                 continue
             rel = fp.name if root.is_file() else fp.relative_to(root).as_posix()
             pieces = chunk_file(rel, text)
@@ -287,7 +331,7 @@ class Memory:
                     pending = []
         if pending:
             self._embed_and_store(pending)
-        return {"files": files, "chunks": chunks, "total": self.count()}
+        return {"files": files, "chunks": chunks, "skipped": skipped, "total": self.count()}
 
     def forget(self, *ids: str) -> int:
         """Delete memories by id; returns how many were removed."""
