@@ -47,9 +47,27 @@ print(mem.recall("why postgres?").texts()[0])          # the right memory, by me
 print(mem.recall("where does it deploy?").context())   # LLM-ready, safe data envelope
 ```
 
-Reads need **no API key and call no LLM** — everything stays on your machine. The
-optional learning loop (a later phase) is the only thing that uses an AI, and you
-bring your own model.
+Reads need **no API key and call no LLM** — everything stays on your machine.
+
+### Bring your own AI (optional)
+
+If you *want* cloud AI, plug in any provider's key — explicitly, with zero new
+dependencies. The no-key local default never changes, and cloud is opt-in only:
+the default path never reads a key or opens a socket (CI-gated).
+
+```python
+mem = Memory(embedder="openai:text-embedding-3-small")     # key from OPENAI_API_KEY
+
+from rekoll.providers import OpenAICompatibleConsolidator  # merge memories with YOUR LLM
+mem.consolidate(query="database decisions",
+                consolidator=OpenAICompatibleConsolidator("gpt-4o-mini"))
+```
+
+OpenAI, DeepSeek, Qwen, Mistral, Gemini, Voyage (the embeddings answer for
+Claude users), Ollama / LM Studio, any OpenAI-compatible `base_url`, … — see
+[docs/PROVIDERS.md](docs/PROVIDERS.md). Consolidation output stays auditable:
+firewall-screened, provenance-linked to its sources, trust capped at the
+minimum of what went in — an LLM can never promote its own words.
 
 ### Use it in your own project
 

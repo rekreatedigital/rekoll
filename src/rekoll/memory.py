@@ -18,14 +18,15 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence, Union
 
 from .adapters.base import QueryHit, StorageAdapter
 from .adapters.registry import get_adapter
 from .chunking import chunk_file
+from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder
 from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
-from .model import Kind, MemoryRecord, Provenance, Scope, TrustTier
+from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
 __all__ = ["Memory", "RecallResult"]
@@ -99,7 +100,7 @@ class Memory:
         tenant: str = "default",
         agent: str = "default",
         backend: str = "sqlite",
-        embedder: Optional[Embedder] = None,
+        embedder: Optional[Union[Embedder, str]] = None,
         reranker: object = "auto",
         screen: bool = True,
         default_trust: TrustTier = TrustTier.OWNER,
@@ -116,7 +117,14 @@ class Memory:
         else:
             self.adapter = get_adapter(backend)
 
-        self.embedder = embedder or _auto_embedder()
+        if isinstance(embedder, str):
+            # Spec string, e.g. "openai:text-embedding-3-small" — the explicit
+            # opt-in that may reach rekoll.providers. The default (None) never does.
+            from .embedders import get_embedder
+
+            self.embedder = get_embedder(embedder)
+        else:
+            self.embedder = embedder or _auto_embedder()
         self.reranker = _auto_reranker() if reranker == "auto" else reranker
 
         existing = self.adapter.get_embedder_identity(scope=self.scope)
@@ -246,6 +254,80 @@ class Memory:
         """Delete memories by id; returns how many were removed."""
         return self.adapter.delete(scope=self.scope, ids=list(ids))
 
+    # -- write-side learning (explicit opt-in; never on the read path) -------
+    def consolidate(
+        self,
+        ids: Optional[Sequence[str]] = None,
+        *,
+        query: Optional[str] = None,
+        k: int = 20,
+        consolidator: Consolidator,
+        min_source_trust: TrustTier = TrustTier.TRUSTED_SOURCE,
+        metadata: Optional[dict] = None,
+    ) -> MemoryRecord:
+        """Merge existing memories into ONE derived observation via YOUR LLM.
+
+        Explicit opt-in, write-side only: ``recall()`` never calls a
+        consolidator (reads stay LLM-free, ADR-0007), and ``Memory`` holds no
+        ambient consolidator — you pass one per call. Select sources with
+        ``ids=[...]`` or ``query="..."`` (top-``k``). The consolidator's text
+        flows through the ingest firewall and is stored with:
+
+         - ``kind=OBSERVATION``,
+         - ``provenance.derived_from`` = the source record ids,
+         - ``declared_transformations=("llm_summary",)``,
+         - trust capped at the MINIMUM trust of the sources — the LLM never
+           chooses trust, so low-trust input can't launder itself (ADR-0002).
+
+        Quarantined records are never fed to the model. Sources below
+        ``min_source_trust`` are skipped (DESIGN §L3: trusted-tier facts only);
+        loosen deliberately with ``min_source_trust=TrustTier.UNVERIFIED``.
+        """
+        if not callable(getattr(consolidator, "summarize", None)):
+            raise TypeError(
+                "consolidator must provide .summarize(texts) — e.g. "
+                "rekoll.providers.OpenAICompatibleConsolidator('gpt-4o-mini')"
+            )
+        if (ids is None) == (query is None):
+            raise ValueError("pass exactly one of ids=[...] or query='...'")
+        if ids is not None:
+            wanted = list(dict.fromkeys(ids))
+            found = {r.id: r for r in self.adapter.get(scope=self.scope, ids=wanted).records}
+            missing = [i for i in wanted if i not in found]
+            if missing:
+                raise KeyError(f"no such memory in this scope: {missing}")
+            records = [found[i] for i in wanted]
+        else:
+            records = [hit.record for hit in self.recall(query, k=k)]
+        floor = max(min_source_trust, TrustTier.UNVERIFIED)  # quarantined NEVER reaches the LLM
+        sources = [
+            r for r in records
+            if r.status is not Status.QUARANTINED and r.trust_tier >= floor
+        ]
+        if not sources:
+            raise ValueError(
+                "no consolidation-eligible sources (need status != quarantined and "
+                f"trust >= {floor.name.lower()})"
+            )
+        summary = consolidator.summarize([r.content for r in sources])
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("consolidator returned no text")
+        name = str(getattr(consolidator, "name", type(consolidator).__name__))
+        record = self._make_record(
+            content=summary.strip(),
+            kind=Kind.OBSERVATION,
+            provenance=Provenance(
+                source_uri=f"consolidator://{name}",
+                adapter_name="memory",
+                derived_from=tuple(r.id for r in sources),
+            ),
+            trust=min(r.trust_tier for r in sources),
+            metadata={**(metadata or {}), "consolidator": name, "source_count": len(sources)},
+            declared_transformations=("llm_summary",),
+        )
+        self._embed_and_store([record])
+        return record
+
     # -- read ---------------------------------------------------------------
     def recall(
         self, query: str, *, k: int = 5, kind: Optional[Kind] = None, rerank: bool = True
@@ -268,15 +350,15 @@ class Memory:
         self.adapter.close()
 
     # -- internals ----------------------------------------------------------
-    def _make_record(self, *, content, kind, provenance, trust, metadata):
+    def _make_record(self, *, content, kind, provenance, trust, metadata, **kwargs):
         if self._screen:
             return screened_record(
                 scope=self.scope, kind=kind, content=content,
-                provenance=provenance, trust_tier=trust, metadata=metadata,
+                provenance=provenance, trust_tier=trust, metadata=metadata, **kwargs,
             )
         return MemoryRecord.create(
             scope=self.scope, kind=kind, content=content,
-            provenance=provenance, trust_tier=trust, metadata=metadata or {},
+            provenance=provenance, trust_tier=trust, metadata=metadata or {}, **kwargs,
         )
 
     def _embed_and_store(self, records: list[MemoryRecord]) -> None:
