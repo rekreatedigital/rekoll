@@ -354,6 +354,26 @@ class SQLiteAdapter(StorageAdapter):
             total += row["c"]
         return total
 
+    def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
+        if n <= 0:
+            return GetResult(records=())
+        skey = scope.key()
+        tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
+        rows: list[sqlite3.Row] = []
+        for table in tables:
+            rows.extend(
+                self._conn.execute(
+                    # created_at is ISO-8601 UTC, so lexicographic order IS
+                    # chronological; id breaks same-instant ties deterministically
+                    # (DESC to match the Python merge sort below).
+                    f"SELECT * FROM {table} WHERE scope_key=? "
+                    f"ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (skey, n),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        return GetResult(records=tuple(self._row_to_record(row) for row in rows[:n]))
+
     def vector_query(
         self,
         *,

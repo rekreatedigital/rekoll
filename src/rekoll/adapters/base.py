@@ -127,6 +127,20 @@ class StorageAdapter(ABC):
             f"(capability '{CAP_LEXICAL}' not advertised)"
         )
 
+    # --- optional: newest-record enumeration (freshness checks) -----------
+    def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
+        """The ``n`` most recently created records in ``scope``, newest first
+        (ties broken by id for determinism).
+
+        Consumed by ``Memory.health()``'s source-vs-index freshness check.
+        Optional the same way ``lexical_query`` is: a backend that cannot
+        enumerate by recency raises rather than silently returning a wrong
+        sample, and health() reports freshness as unknown.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support newest-record enumeration"
+        )
+
     # --- embedder-identity guard (per scope) ------------------------------
     @abstractmethod
     def get_embedder_identity(self, *, scope: Scope) -> Optional[EmbedderIdentity]:
