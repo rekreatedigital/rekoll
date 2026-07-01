@@ -1,0 +1,51 @@
+name: DCO
+
+# Enforces the Developer Certificate of Origin: every non-merge commit in a PR
+# must carry a `Signed-off-by:` line matching its author (the line `git commit -s`
+# adds). This is a self-contained check — no third-party app, no external action,
+# nothing to trust — in keeping with Rekoll's supply-chain posture (DESIGN.md §9).
+#
+# Prefer a zero-maintenance option instead? Install the DCO GitHub App
+# (https://github.com/apps/dco) and delete this file. Either is fine.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for c in $(git rev-list "$BASE".."$HEAD"); do
+            # Skip merge commits (more than one parent).
+            parents=$(git rev-list --parents -n 1 "$c" | wc -w)
+            if [ "$parents" -gt 2 ]; then
+              continue
+            fi
+            author=$(git show -s --format='%an <%ae>' "$c")
+            if ! git show -s --format='%B' "$c" | grep -qiF "Signed-off-by: $author"; then
+              echo "::error::Commit ${c:0:8} by '$author' is missing a matching 'Signed-off-by: $author' line."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "DCO check failed. Fix it with:"
+            echo "  git commit -s            # for new commits"
+            echo "  git rebase --signoff <base>   # to sign off existing commits, then force-push"
+            exit 1
+          fi
+          echo "All commits are signed off. ✅"

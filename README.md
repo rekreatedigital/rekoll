@@ -56,7 +56,7 @@ bring your own model.
 Until it's on PyPI, install from git or a local clone — **don't copy the source in**:
 
 ```bash
-pip install "git+https://github.com/rekreatedigital/rekoll"     # once published
+pip install "git+https://github.com/ryankyleocampo-github/rekoll"   # once published
 pip install -e "/path/to/rekoll[embeddings]"                    # from a local clone
 ```
 
@@ -68,7 +68,7 @@ adapters land in a later phase).
 ### Develop Rekoll itself
 
 ```bash
-git clone https://github.com/rekreatedigital/rekoll && cd rekoll
+git clone https://github.com/ryankyleocampo-github/rekoll && cd rekoll
 python -m venv .venv && . .venv/Scripts/activate   # or: source .venv/bin/activate
 pip install -e ".[dev,embeddings]"
 pytest

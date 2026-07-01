@@ -1,0 +1,14 @@
+# Controls the "New issue" chooser. blank_issues_enabled: false forces people
+# through a template (less triage noise). The contact_links route the two things
+# that must NOT become public issues — security reports and open-ended questions.
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability (private)
+    url: https://github.com/ryankyleocampo-github/rekoll/security/advisories/new
+    about: Never file security issues publicly. Use private reporting — see SECURITY.md.
+  - name: 💬 Questions & ideas (Discussions)
+    url: https://github.com/ryankyleocampo-github/rekoll/discussions
+    about: Ask questions, share ideas, or float a feature before opening an issue.
+  - name: 🚫 Read the non-goals first
+    url: https://github.com/ryankyleocampo-github/rekoll/blob/main/NON_GOALS.md
+    about: Some things are deliberately out of scope. A 2-minute read may save you time.

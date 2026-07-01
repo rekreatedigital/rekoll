@@ -1,0 +1,35 @@
+name: 💡 Feature request / change
+description: Propose a capability or change. Please read NON_GOALS.md first.
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you file:** does this conflict with
+        [NON_GOALS.md](https://github.com/ryankyleocampo-github/rekoll/blob/main/NON_GOALS.md)?
+        Requests that conflict with the non-goals will be declined — kindly, but
+        firmly. Open-ended ideas are often better as a **Discussion** first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What problem does this solve, and who has it?
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Rekoll do? Rough is fine.
+    validations: { required: true }
+  - type: checkboxes
+    id: nongoals
+    attributes:
+      label: Non-goals check
+      options:
+        - label: I've read NON_GOALS.md and this doesn't conflict with it
+          required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations: { required: false }

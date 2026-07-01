@@ -1,0 +1,19 @@
+# Code owners for Rekoll.
+#
+# When someone opens a PR, GitHub automatically requests a review from the
+# owner(s) listed here for the files touched. This documents accountability
+# (see DESIGN.md §9 — named, real-identity maintainers) and routes reviews.
+#
+# NOTE: branch protection is intentionally NOT set to "require review from code
+# owners" while this is a solo project — that would block you from merging your
+# own PRs (you can't approve yourself). This file still routes review requests.
+
+# Default owner for everything in the repo.
+*                       @ryankyleocampo-github
+
+# Load-bearing areas — same owner today, but called out so future co-maintainers
+# inherit clear ownership boundaries.
+/docs/adr/              @ryankyleocampo-github
+/SECURITY.md            @ryankyleocampo-github
+/NON_GOALS.md           @ryankyleocampo-github
+/src/rekoll/conformance.py  @ryankyleocampo-github
