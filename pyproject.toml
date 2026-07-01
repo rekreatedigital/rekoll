@@ -1,25 +1,29 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]  # >=77 for PEP 639 (SPDX license expression)
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rekoll"
-version = "0.0.0"
+dynamic = ["version"]  # single-sourced from src/rekoll/_version.py
 description = "Injection-hardened, storage-agnostic, private memory layer for AI agents."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Rekreate Digital" }]
 keywords = ["ai", "agent", "memory", "llm", "rag", "vector-search", "privacy"]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
-    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
-    "Intended Audience :: Developers",
+    "Typing :: Typed",
 ]
 dependencies = []
 
@@ -41,6 +45,12 @@ sqlite = "rekoll.adapters.sqlite:SQLiteAdapter"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+rekoll = ["py.typed"]
+
+[tool.setuptools.dynamic]
+version = { attr = "rekoll._version.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
