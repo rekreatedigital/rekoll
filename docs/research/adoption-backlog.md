@@ -143,8 +143,8 @@ the Rekoll rule that guards against it:
   harness with per-question outputs; disclose k/splits; never compare against
   others' self-reported numbers (also: never buy stars — adoption theater is now a
   documented, auditable failure mode).
-- **Heavy infra for a "library".** hindsight: 217 packages, embedded Postgres,
-  20–37 s boot, HF Hub on every start; mempalace: chromadb's 83-package train. →
+- **Heavy infra for a "library".** hindsight: 215 packages, embedded Postgres,
+  20–37 s boot, HF Hub on every start; mempalace: chromadb's 81-package train. →
   Rekoll rule: zero required dependencies is CI-gated; extras are opt-in and the
   core never imports them.
 - **Silent failure modes in the default path.** mem0's shipped quickstart 400s on
