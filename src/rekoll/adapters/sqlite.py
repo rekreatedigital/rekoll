@@ -214,23 +214,30 @@ class SQLiteAdapter(StorageAdapter):
                 f"SELECT id, trust_tier FROM {table} WHERE scope_key=? AND content_hash=?",
                 (r.scope.key(), r.content_hash),
             ).fetchone()
-            if prior is not None and prior["id"] != r.id:
-                # TRUST-AWARE UPSERT (ADR-0023). Same bytes, DIFFERENT source: an
-                # attacker who re-ingests content byte-identical to a trusted
-                # record must not be able to hijack it. Without this gate the
-                # UNIQUE(scope_key, content_hash) conflict let a lower-trust write
-                # silently REPLACE the trusted row — the survivor kept the content
-                # but took the attacker's provenance and LOWER trust, and stayed
-                # recallable (confirmed by repro). Rule: only a STRICTLY higher
-                # trust tier may take over; equal-or-lower trust is a no-op, so the
-                # trusted record is preserved untouched. Trust for identical content
-                # is therefore monotonic — it can rise, never silently fall.
-                if int(r.trust_tier) <= prior["trust_tier"]:
-                    return
-                old = prior["id"]
-                self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
-                self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
-                self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
+            if prior is not None:
+                # TRUST-AWARE UPSERT (ADR-0023): trust for identical content is
+                # MONOTONIC — it may rise, never silently fall. This holds
+                # regardless of source, because the UNIQUE(scope_key,
+                # content_hash) upsert otherwise let a lower-trust write REPLACE a
+                # trusted row (survivor keeps the content but takes the lower
+                # trust — and, if it now trips the firewall, gets QUARANTINED and
+                # vanishes from recall). Both the cross-source hijack and the
+                # same-source re-ingest-at-a-lower-default downgrade are covered
+                # (confirmed by repro).
+                same_id = prior["id"] == r.id
+                if int(r.trust_tier) < prior["trust_tier"]:
+                    return  # never lower trust for identical content (any source)
+                if int(r.trust_tier) == prior["trust_tier"] and not same_id:
+                    return  # equal-trust, different source: dedup, keep incumbent
+                if not same_id:
+                    # A STRICTLY higher-trust source takes over a different id:
+                    # purge the displaced id's orphaned fts/metadata/link rows.
+                    old = prior["id"]
+                    self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
+                    self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
+                    self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
+                # else same_id: fall through to update in place (idempotent
+                # re-ingest / re-embed) — trust is equal or higher, never lower.
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         embedding = json.dumps(list(r.embedding)) if r.embedding is not None else None
         placeholders = ",".join("?" * 25)

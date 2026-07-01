@@ -30,16 +30,30 @@ importable conformance suite every future backend runs.
 On an `upsert` that collides on `(scope_key, content_hash)` with a row of a
 *different* `id` (i.e. same bytes, different source):
 
-- **incoming trust ≤ stored trust → no-op.** The trusted (or equal-trust
-  incumbent) record is preserved untouched; the lower/equal-trust write is
-  dropped. This blocks both the downgrade and an equal-trust provenance hijack.
-- **incoming trust > stored trust → take over.** A strictly more-trusted source
-  may legitimately replace the record (a real upgrade); the displaced id's
-  orphaned fts/metadata/link rows are purged first, as before.
+The rule is applied to **any** `(scope, content_hash)` collision, regardless of
+whether the incoming record shares the prior row's `id` (same source) or not:
 
-Same-`id` upserts (the *same* source re-ingesting — e.g. re-embedding after a
-model swap) are unchanged: they update in place. `add()` (non-replace) still
-raises on a duplicate content-address, so it was never a downgrade vector.
+- **incoming trust < stored trust → no-op.** The trusted incumbent is preserved
+  untouched. This blocks the cross-source downgrade AND the same-source
+  re-ingest-at-a-lower-default downgrade (see re-ingest note below).
+- **incoming trust == stored trust, different source → no-op** (dedup; keep the
+  incumbent, no equal-trust provenance hijack).
+- **incoming trust == stored trust, same source → update in place** (the
+  idempotent re-ingest / re-embed path).
+- **incoming trust > stored trust → take over** (a real upgrade); if the id
+  differs, the displaced id's orphaned fts/metadata/link rows are purged first.
+
+`add()` (non-replace) still raises on a duplicate content-address, so it was
+never a downgrade vector.
+
+**Re-ingest note (important):** trust is monotonic, so re-running `ingest_path`
+/ `ingest_text` over content already stored at a HIGHER trust is a no-op for
+those records — it will not lower their trust even if the re-ingest uses a lower
+default. This is deliberate: it stops a re-ingest at the safe UNVERIFIED default
+(ADR-0016) from silently downgrading — and, for content that quotes injection
+phrases, from getting quarantined and vanishing from recall. To genuinely
+*lower* a record's trust, delete it and re-add at the new tier; trust never
+falls implicitly.
 
 New conformance check `assert_upsert_is_trust_monotonic` encodes the contract for
 all adapters; `ALL_CHECKS` includes it, so the SQLite reference and any

@@ -59,6 +59,42 @@ def test_equal_trust_different_source_keeps_first_no_hijack():
     a.close()
 
 
+def test_same_source_reingest_at_lower_trust_does_not_downgrade():
+    # P0-0 residual: a SAME-source (same-id) re-ingest at a lower trust must not
+    # downgrade the record in place — trust is monotonic regardless of source.
+    a, scope = _adapter(), Scope()
+    owner = _rec(scope, "file://doc.md", TrustTier.OWNER)
+    a.upsert(records=[owner])
+    lower = _rec(scope, "file://doc.md", TrustTier.UNVERIFIED)  # same id, lower trust
+    assert owner.id == lower.id
+    a.upsert(records=[lower])
+    back = a.get(scope=scope, ids=[owner.id]).records
+    assert back and back[0].trust_tier is TrustTier.OWNER, "same-source re-ingest downgraded trust"
+    a.close()
+
+
+def test_facade_reingest_at_default_preserves_trusted_and_recallable():
+    # The realistic repro: ingest at OWNER, then re-ingest at the UNVERIFIED
+    # default. Content that quotes injection phrases must NOT get downgraded and
+    # quarantine-vanish from recall.
+    import tempfile
+    from pathlib import Path
+
+    d = Path(tempfile.mkdtemp())
+    (d / "fw.md").write_text(
+        "# Firewall\n\nwe flag ignore all previous instructions style payloads",
+        encoding="utf-8",
+    )
+    mem = Memory(path=":memory:", embedder=StubEmbedder(), reranker=None)
+    mem.ingest_path(str(d), trust=TrustTier.OWNER)
+    assert mem.recall("firewall flag payloads", k=5).texts(), "precondition: recallable at OWNER"
+    mem.ingest_path(str(d))  # re-ingest at the UNVERIFIED default
+    hits = mem.recall("firewall flag payloads", k=5)
+    assert hits.texts(), "trusted content vanished from recall after a lower-trust re-ingest"
+    assert hits.records()[0].trust_tier is TrustTier.OWNER
+    mem.close()
+
+
 def test_strictly_higher_trust_takes_over():
     a, scope = _adapter(), Scope()
     low = _rec(scope, "web://x", TrustTier.UNVERIFIED)
