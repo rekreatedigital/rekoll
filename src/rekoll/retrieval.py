@@ -11,12 +11,17 @@ from typing import Iterable, Optional
 
 from .adapters.base import CAP_LEXICAL, QueryHit, QueryResult, StorageAdapter
 from .embedding import Embedder
+from .firewall import sanitize_unicode
 from .model import Kind, Scope, Status
 from .reranking import Reranker
 
-__all__ = ["rrf_fuse", "hybrid_search", "DEFAULT_RRF_K"]
+__all__ = ["rrf_fuse", "hybrid_search", "DEFAULT_RRF_K", "MAX_QUERY_CHARS"]
 
 DEFAULT_RRF_K = 60
+
+# Read path must degrade, never DoS: queries are truncated (not rejected) to a
+# bound far past any real question before embedding/lexical search (ADR-0017).
+MAX_QUERY_CHARS = 8_192
 
 
 def rrf_fuse(
@@ -56,7 +61,13 @@ def hybrid_search(
     Reads call no LLM — the cross-encoder reranker is a small local model, not a
     generative LLM (ADR-0010). Without a reranker, RRF order is returned.
     Quarantined memory (firewall, ADR-0013) is excluded by default.
+
+    The query is sanitized by the firewall (NFKC + invisible-char strip — the
+    same normalization stored content got, so hidden characters can't split
+    terms or skew matching) and truncated to ``MAX_QUERY_CHARS`` before any
+    embedding or lexical work (DESIGN §7 "query sanitized before embedding").
     """
+    query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
     pool = candidates or max(k * 6, k)
     query_vec = embedder.embed([query])[0]
     lists: list[Iterable[QueryHit]] = [

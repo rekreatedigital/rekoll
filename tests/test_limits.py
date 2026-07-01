@@ -94,3 +94,78 @@ def test_recall_with_pathological_query_still_returns():
     hits = mem.recall("database " + "filler " * 30_000 + "maintenance", k=3)
     assert any("maintenance" in t for t in hits.texts())
     mem.close()
+
+
+# ---- read path: query sanitization (P2-8, DESIGN §7) -----------------------
+
+def test_recall_query_is_sanitized_like_stored_content():
+    # Stored content had zero-width chars stripped at ingest; the SAME query
+    # with an embedded ZWSP must still match ("ig<ZWSP>nore" would otherwise
+    # tokenize as "ig", "nore" and miss).
+    mem = _mem()
+    mem.remember("rotation policy for backup archives is monthly")
+    hits = mem.recall("rota​tion policy backup", k=3)
+    assert any("rotation policy" in t for t in hits.texts())
+    mem.close()
+
+
+def test_hybrid_search_truncates_oversized_query():
+    from rekoll.retrieval import MAX_QUERY_CHARS
+
+    mem = _mem()
+    mem.remember("alpha beta gamma delta epsilon zeta")
+    # The needle sits past the cap: if truncation works, it never reaches the
+    # engine; the head terms still do. This also pins that a >cap query cannot
+    # push unbounded text into embedding/lexical work.
+    query = "alpha beta " + ("pad " * (MAX_QUERY_CHARS // 4)) + " epsilon"
+    assert len(query) > MAX_QUERY_CHARS
+    hits = mem.recall(query, k=3)
+    assert any("alpha beta" in t for t in hits.texts())
+    mem.close()
+
+
+# ---- ReDoS gate: the firewall regexes must stay near-linear (P2-8) ----------
+#
+# Audit note (2026-07-02): none of the current patterns backtracks
+# catastrophically — the marker alternation-stars are anchored by literal
+# prefixes ("ignore", "disregard", ...) and every secret pattern uses disjoint
+# character classes. This gate exists so a future pattern edit that introduces
+# real blowup (nested quantifiers, overlapping alternations) fails CI instead
+# of shipping. Budgets are generous for slow CI: catastrophic backtracking on
+# these sizes would take minutes, not seconds.
+
+REDOS_BUDGET_SECONDS = 2.0
+
+
+def _pathological_inputs() -> list[tuple[str, str]]:
+    n = 20_000
+    return [
+        ("marker-filler-star", "ignore " + "all " * n + "no terminal keyword"),
+        ("marker-restart", "ignore all " * (n // 2) + "x"),
+        ("marker-homoglyph-flood", "Ignоre аll " * (n // 4) + "x"),
+        ("credential-long-tail", "api_key = '" + "A" * n),
+        ("jwt-two-segments", "eyJ" + "a" * n + "." + "b" * n),
+        ("connection-string-bait", "scheme://" + "u" * n + ":" + "p" * n + "@"),
+        ("pem-header-flood", "-----BEGIN " * (n // 8)),
+        ("key-prefix-flood", "sk-" * (n // 2)),
+        ("plain-prose-control", "the deploy runs nightly and rotates logs " * (n // 8)),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name,payload", _pathological_inputs(), ids=[c[0] for c in _pathological_inputs()]
+)
+def test_screen_is_time_bounded_on_pathological_input(name, payload):
+    import time
+
+    from rekoll import TrustTier
+    from rekoll.firewall import screen
+
+    start = time.perf_counter()
+    screen(payload, source_trust=TrustTier.UNVERIFIED)
+    elapsed = time.perf_counter() - start
+    assert elapsed < REDOS_BUDGET_SECONDS, (
+        f"firewall screen took {elapsed:.2f}s on {name!r} "
+        f"({len(payload):,} chars) — a pattern likely regressed to "
+        "catastrophic backtracking"
+    )

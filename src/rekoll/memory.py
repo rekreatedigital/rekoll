@@ -415,7 +415,11 @@ class Memory:
     def recall(
         self, query: str, *, k: int = 5, kind: Optional[Kind] = None, rerank: bool = True
     ) -> RecallResult:
-        """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM."""
+        """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
+
+        The query is firewall-sanitized and truncated to
+        ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0017).
+        """
         result = hybrid_search(
             self.adapter, scope=self.scope, query=query, embedder=self.embedder,
             k=k, kind=kind, reranker=self.reranker if rerank else None,
