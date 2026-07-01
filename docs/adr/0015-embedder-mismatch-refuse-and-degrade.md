@@ -1,0 +1,59 @@
+# ADR-0015 — On embedder-identity mismatch: refuse the vector leg, degrade honestly
+
+**Status:** Accepted · **Date:** 2026-07-02 · **Amends:** ADR-0014 (warn-only), ADR-0009 (identity guard)
+
+## Context
+Rekoll records a per-scope embedder identity (name, dim, config_hash) and checks
+it on every `Memory` open (ADR-0009). What to DO on a mismatch was left open:
+DESIGN §10 (P1) wanted a hard-fail; the `Memory` facade shipped warn-only
+(ADR-0014, "a model swap warns, not corrupts"); the DESIGN behavioral note
+called the authoritative behavior "an open decision."
+
+Warn-only is not enough. A silent model/config swap is the classic silent
+recall killer: vectors from two embedders live in one space that ranks them as
+if comparable, and recall quality collapses with no error anywhere — the
+symptom is "the agent just got dumber." Production experience in the author's
+prior memory system bore this out; its recall path asserts the stored embedder
+identity against the pinned model and *refuses* the semantic leg on mismatch
+rather than trusting whatever cosine says. A `warnings.warn` at construction
+is routinely invisible in exactly the environments that matter (daemons,
+notebooks re-running cells, agent hosts capturing stdout).
+
+Hard-fail is too much. The store still holds every byte of content, and the
+lexical arm is fully sound — killing all reads over a fixable indexing problem
+turns a degradation into an outage (and pushes users to delete their data to
+get unblocked).
+
+## Decision
+On identity mismatch, **refuse the vector leg and degrade honestly**:
+
+1. **Reads:** `recall()` never embeds the query and never calls
+   `vector_query`; it serves lexical-only results and says so in
+   `RecallResult.mode` (`"lexical-only: embedder mismatch"`). On a backend
+   with no lexical arm the result is honestly empty (`"none: embedder
+   mismatch"`) — an empty answer over a garbage answer.
+2. **Writes:** new records are stored WITHOUT vectors (lexical still indexes
+   them). Writing a second vector family into the scope would deepen the very
+   corruption the guard exists to stop.
+3. **Loud, twice:** the construction-time warning stays (full identity on both
+   sides, since a dim/config-only swap under the same name must be visible),
+   and `health()` reports `ok=False` with `identity="mismatch"` until the
+   scope is re-ingested with one embedder.
+4. The low-level `guard_identity()` (hard-fail) remains available for callers
+   who want construction to raise.
+
+The recovery path is unchanged and documented in the warning: re-ingest the
+scope with one embedder, or use a separate scope.
+
+## Consequences
+- Recall can no longer silently return confidently-wrong rankings after a
+  model swap — the failure mode becomes visible (mode string, health check)
+  and bounded (lexical still works).
+- A vector-only backend under mismatch returns empty results until re-ingest;
+  that is deliberate (see 1).
+- `RecallResult.mode` (honest degradation) is the contract agents/hosts read
+  to avoid bluffing on a broken index; docs and the MCP/REST doors should
+  surface it rather than hide it.
+- Supersedes ADR-0014's warn-only wording and closes the DESIGN §10 open
+  decision: neither warn-only (invisible) nor hard-fail (outage) — refuse the
+  broken leg, keep the honest ones.

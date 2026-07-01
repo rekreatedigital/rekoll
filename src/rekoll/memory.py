@@ -10,6 +10,11 @@ embedders, the firewall, retrieval, and the reranker by hand::
 
 Defaults: local SQLite store, real local embeddings + reranker if the
 ``embeddings`` extra is installed (else the stub), firewall ON, reads call no LLM.
+
+Beyond the two verbs, the facade carries the memory-quality loop:
+``mark_used``/``informed_by`` (the was-it-used usage signal), ``health()``
+(source-vs-index freshness), ``self_test()`` (golden probe), and honest
+degradation via ``RecallResult.mode`` (ADR-0015).
 """
 
 from __future__ import annotations
@@ -20,18 +25,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
 
-from .adapters.base import QueryHit, StorageAdapter
+from .adapters.base import CAP_LEXICAL, QueryHit, StorageAdapter, UnsupportedCapabilityError
 from .adapters.registry import get_adapter
 from .chunking import chunk_file
 from .consolidation import Consolidator
-from .embedding import Embedder, StubEmbedder
+from .embedding import Embedder, StubEmbedder, compare_identity
 from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
+from .ledger import RecallLedger
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
 __all__ = [
     "Memory",
     "RecallResult",
+    "HealthReport",
     "DEFAULT_INGEST_TRUST",
     "DEFAULT_MAX_CONTENT_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
@@ -83,9 +90,20 @@ def _auto_reranker():
 
 @dataclass(frozen=True)
 class RecallResult:
-    """What ``Memory.recall`` returns: ranked hits + helpers to use them safely."""
+    """What ``Memory.recall`` returns: ranked hits + helpers to use them safely.
+
+    ``mode`` names exactly what ran to produce these hits — the honest-
+    degradation contract ("don't bluff a broken index"): a caller or agent can
+    always tell a full hybrid ranking (``"vector+lexical+rerank"``) from a
+    degraded one (``"lexical-only: embedder mismatch"``) or a semantics-free
+    one (``"vector+lexical (stub-embedder)"``), instead of treating every
+    result list as equally trustworthy. ``mode`` is deliberately NOT rendered
+    into :meth:`context` — the envelope stays a pure function of the hits so
+    agent prompt caches aren't busted (see ``ContextEnvelope.render``).
+    """
 
     hits: tuple[QueryHit, ...]
+    mode: str = "unspecified"
 
     def __iter__(self):
         return iter(self.hits)
@@ -109,6 +127,41 @@ class RecallResult:
     def context(self) -> str:
         """LLM-ready string: memories framed as DATA, never as instructions."""
         return self.envelope().render()
+
+
+@dataclass(frozen=True)
+class HealthReport:
+    """What ``Memory.health`` returns: source-of-truth-vs-index freshness.
+
+    ``ok`` is True when the newest checked records are both embedded and
+    retrievable AND the embedder identity matches; False when anything is
+    stale/degraded; None when there was nothing checkable (empty scope, or the
+    adapter can't enumerate newest records).
+    """
+
+    ok: Optional[bool]
+    identity: str  # "match" | "mismatch" | "unknown"
+    mode: str  # what recall() runs right now (honest-degradation string)
+    total: int  # records in scope
+    checked: int  # newest ACTIVE records actually checked
+    embedded: int  # of checked, how many carry a vector
+    retrievable: int  # of checked, how many an actual search surfaces
+    stale_ids: tuple[str, ...] = ()  # checked records that failed either leg
+    notes: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict:
+        """JSON-safe view — the seam ``rekoll doctor`` (CLI) renders from."""
+        return {
+            "ok": self.ok,
+            "identity": self.identity,
+            "mode": self.mode,
+            "total": self.total,
+            "checked": self.checked,
+            "embedded": self.embedded,
+            "retrievable": self.retrievable,
+            "stale_ids": list(self.stale_ids),
+            "notes": list(self.notes),
+        }
 
 
 class Memory:
@@ -165,21 +218,34 @@ class Memory:
         else:
             self.embedder = embedder or _auto_embedder()
         self.reranker = _auto_reranker() if reranker == "auto" else reranker
+        #: Process-local was-it-used ledger: which ids each recall surfaced.
+        self.ledger = RecallLedger()
 
         existing = self.adapter.get_embedder_identity(scope=self.scope)
         current = self.embedder.identity()
         if existing is None:
+            # Fresh scope: the current embedder claims it — a match from here on.
             self.adapter.set_embedder_identity(scope=self.scope, identity=current)
-        elif existing != current:
-            # Show the FULL identity (name + dim + config) — a dim/config-only swap
-            # under the same model name would otherwise print an identical-looking
-            # message. Routed through warnings so hosts can filter/capture it.
+            self._identity_state = "match"
+        else:
+            self._identity_state = compare_identity(existing, current)
+        if self._identity_state == "mismatch":
+            # Refuse-and-degrade (ADR-0015): a silent model/config swap is the
+            # classic silent recall killer — vectors from two embedders are not
+            # comparable, so ranking across them returns confidently-wrong
+            # results. We refuse the vector leg (reads go lexical-only, writes
+            # store no vector) instead of bluffing, and instead of hard-failing
+            # the whole store. Show the FULL identity (name + dim + config) — a
+            # dim/config-only swap under the same model name would otherwise
+            # print an identical-looking message. Routed through warnings so
+            # hosts can filter/capture it.
             warnings.warn(
                 f"[rekoll] this scope was embedded with {existing.name!r} "
                 f"(dim={existing.dim}, config={existing.config_hash}), but the current embedder "
                 f"is {current.name!r} (dim={current.dim}, config={current.config_hash}). "
-                f"Vector recall across the mismatch is degraded (incompatible-dim vectors are "
-                f"skipped); keyword recall still works. Re-ingest this scope or use a separate one.",
+                f"The vector leg is REFUSED for this scope (ADR-0015): recall degrades to "
+                f"lexical-only (see RecallResult.mode) and new writes are stored without "
+                f"vectors. Re-ingest this scope with one embedder, or use a separate scope.",
                 stacklevel=2,
             )
 
@@ -455,7 +521,13 @@ class Memory:
 
     # -- read ---------------------------------------------------------------
     def recall(
-        self, query: str, *, k: int = 5, kind: Optional[Kind] = None, rerank: bool = True
+        self,
+        query: str,
+        *,
+        k: int = 5,
+        kind: Optional[Kind] = None,
+        rerank: bool = True,
+        call_id: Optional[str] = None,
     ) -> RecallResult:
         """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
 
@@ -465,12 +537,20 @@ class Memory:
         May return FEWER than ``k`` hits: quarantined memory is excluded, and any
         candidate that fails content-hash verification (direct-DB tampering) is
         withheld with a warning (ADR-0019). ``k`` is an upper bound, not a promise.
+
+        ``RecallResult.mode`` names exactly what ran (honest degradation).
+        The surfaced ids are recorded in the was-it-used ledger; pass
+        ``call_id`` to attribute this recall to one host action so
+        :meth:`informed_by` can join them later.
         """
-        result = hybrid_search(
-            self.adapter, scope=self.scope, query=query, embedder=self.embedder,
-            k=k, kind=kind, reranker=self.reranker if rerank else None,
-        )
-        return RecallResult(hits=tuple(result.hits))
+        result = self._search(query, k=k, kind=kind, rerank=rerank)
+        try:
+            self.ledger.record(
+                [h.record.id for h in result.hits], query=query, call_id=call_id
+            )
+        except Exception:
+            pass  # even a host-swapped, raising ledger must never break a read
+        return result
 
     def context(self, query: str, *, k: int = 5) -> str:
         """Shortcut: the LLM-ready, firewall-framed context string for a query."""
@@ -482,7 +562,182 @@ class Memory:
     def close(self) -> None:
         self.adapter.close()
 
+    # -- was-it-used loop -----------------------------------------------------
+    def mark_used(self, *ids: str) -> int:
+        """Report that these memories actually informed an action; returns how
+        many were credited.
+
+        This is the loop-closing usage signal: recall metrics say "we surfaced
+        it", ``mark_used`` lets the host say "we acted on it". Each credited
+        record's ``proof_count`` is incremented — a PROMOTION-ONLY signal:
+        usage may extend a memory's standing, it never shortens another's, and
+        it never touches trust_tier or status (trust is set at the ingestion
+        boundary and immutable to output, ADR-0002). Unknown / out-of-scope /
+        quarantined ids are ignored.
+        """
+        records = [
+            r
+            for r in self.adapter.get(scope=self.scope, ids=list(ids)).records
+            if r.status is not Status.QUARANTINED
+        ]
+        if not records:
+            return 0
+        for record in records:
+            record.proof_count += 1
+        self.adapter.upsert(records=records)
+        return len(records)
+
+    def informed_by(self, call_id: Optional[str] = None, *, limit: int = 5) -> list:
+        """The recent recalls (ids + query + ts) that plausibly informed an
+        action being finished right now — for hosts that attach usage evidence
+        to their own receipts/logs instead of calling :meth:`mark_used`
+        directly. With ``call_id``, only recalls recorded under that call_id
+        are returned (no cross-conversation credit). Best-effort: [] on any
+        ledger failure.
+        """
+        return self.ledger.entries(call_id, limit=limit)
+
+    # -- health -----------------------------------------------------------------
+    # SEAM: the CLI's `rekoll doctor` calls Memory.health() (and Memory.self_test())
+    # and renders HealthReport.to_dict() — keep these signatures stable.
+    def health(self, *, n: int = 3, k: int = 5) -> HealthReport:
+        """Source-of-truth-vs-index freshness check (read-only).
+
+        Asserts the newest ``n`` ACTIVE records are (a) EMBEDDED (carry a
+        vector) and (b) RETRIEVABLE (an actual search over their own content
+        surfaces them in the top ``k``). The check runs store-vs-index, not
+        index-only — an index-only "is the corpus healthy?" query reads green
+        forever over dead ingestion, because it can only see what already made
+        it in. Also reports the embedder-identity state and the exact recall
+        mode, so a degraded scope can't look healthy.
+
+        Never raises for an empty/unsupported store — it reports ``ok=None``
+        with a note instead (fail-soft: health must never take the host down).
+        """
+        notes: list[str] = []
+        mode = self._mode()
+        total = self.count()
+        if total == 0:
+            return HealthReport(
+                ok=None, identity=self._identity_state, mode=mode, total=0,
+                checked=0, embedded=0, retrievable=0,
+                notes=("empty scope — nothing to check",),
+            )
+        try:
+            # Over-fetch so quarantined/superseded rows don't eat the sample.
+            newest = self.adapter.newest(scope=self.scope, n=max(n * 3, n)).records
+        except UnsupportedCapabilityError:
+            return HealthReport(
+                ok=None, identity=self._identity_state, mode=mode, total=total,
+                checked=0, embedded=0, retrievable=0,
+                notes=(
+                    f"adapter '{self.adapter.name}' cannot enumerate newest records — "
+                    "freshness unknown",
+                ),
+            )
+        active_all = [r for r in newest if r.status is Status.ACTIVE]
+        active = active_all[:n]
+        skipped = len(newest) - len(active_all)
+        if skipped:
+            notes.append(f"skipped {skipped} non-active record(s) in the newest sample")
+        if not active:
+            return HealthReport(
+                ok=None, identity=self._identity_state, mode=mode, total=total,
+                checked=0, embedded=0, retrievable=0,
+                notes=(*notes, "no active records in the newest sample — nothing checkable"),
+            )
+        embedded = 0
+        retrievable = 0
+        stale: list[str] = []
+        for record in active:
+            has_vector = record.embedding is not None
+            embedded += int(has_vector)
+            # Retrievability probe: search the record's own content through the
+            # real read path (no reranker — membership in top-k is the check,
+            # not order; no ledger — probes must not claim usage credit).
+            probe = self._search(record.content[:256], k=max(k, n), rerank=False)
+            found = record.id in {h.record.id for h in probe.hits}
+            retrievable += int(found)
+            if not (has_vector and found):
+                stale.append(record.id)
+        if self._identity_state == "mismatch":
+            notes.append(
+                "embedder identity mismatch — vector leg refused (ADR-0015); "
+                "re-ingest this scope with one embedder"
+            )
+        ok = not stale and self._identity_state != "mismatch"
+        if stale:
+            notes.append(
+                "newest record(s) not fully indexed — ingestion/embedding may be dead"
+            )
+        return HealthReport(
+            ok=ok, identity=self._identity_state, mode=mode, total=total,
+            checked=len(active), embedded=embedded, retrievable=retrievable,
+            stale_ids=tuple(stale), notes=tuple(notes),
+        )
+
+    def self_test(self, *, k: int = 3) -> dict:
+        """Golden-probe end-to-end self-test: store a known record, assert a
+        known query returns it at rank 1, then remove it.
+
+        Exercises the REAL write→embed→index→search path in whatever mode the
+        scope is currently in (a lexical-only degraded scope still passes if
+        lexical recall works — the probe tests the system you actually have,
+        and ``mode`` in the result names it). Unlike :meth:`health` this
+        WRITES (one sentinel record, removed afterwards; the id is
+        content-addressed so a crashed probe re-run is idempotent).
+
+        Returns ``{"ok", "rank", "mode"}`` — ``rank`` is 1-based or None when
+        the sentinel didn't surface at all.
+        """
+        sentinel = (
+            "Rekoll golden-probe sentinel: the amethyst lighthouse indexes "
+            "maple syllables."
+        )
+        query = "amethyst lighthouse maple syllables"
+        record = self.remember(sentinel, source="rekoll://self-test")
+        try:
+            result = self._search(query, k=k)  # no ledger: probes claim no usage
+            ids = [h.record.id for h in result.hits]
+            rank = ids.index(record.id) + 1 if record.id in ids else None
+            return {"ok": rank == 1, "rank": rank, "mode": result.mode}
+        finally:
+            self.forget(record.id)
+
     # -- internals ----------------------------------------------------------
+    def _search(
+        self, query: str, *, k: int, kind: Optional[Kind] = None, rerank: bool = True
+    ) -> RecallResult:
+        """The one read path recall/health/self_test share (no ledger write)."""
+        use_vector = self._identity_state != "mismatch"
+        reranker = self.reranker if rerank else None
+        result = hybrid_search(
+            self.adapter, scope=self.scope, query=query, embedder=self.embedder,
+            k=k, kind=kind, reranker=reranker, use_vector=use_vector,
+        )
+        return RecallResult(
+            hits=tuple(result.hits), mode=self._mode(reranked=reranker is not None)
+        )
+
+    def _mode(self, *, reranked: Optional[bool] = None) -> str:
+        """Compose the honest-degradation string: exactly what a read runs.
+
+        ``reranked=None`` (health/introspection) describes the default recall
+        configuration; a bool describes one concrete search.
+        """
+        lexical = self.adapter.supports(CAP_LEXICAL)
+        rerank = (self.reranker is not None) if reranked is None else reranked
+        if self._identity_state == "mismatch":
+            base = "lexical-only" if lexical else "none"
+            if rerank and lexical:
+                base += "+rerank"
+            return f"{base}: embedder mismatch"
+        legs = ["vector"] + (["lexical"] if lexical else []) + (["rerank"] if rerank else [])
+        mode = "+".join(legs)
+        if isinstance(self.embedder, StubEmbedder):
+            mode += " (stub-embedder)"  # deterministic hash vectors, no semantics
+        return mode
+
     def _make_record(self, *, content, kind, provenance, trust, metadata, **kwargs):
         if self._screen:
             return screened_record(
@@ -498,7 +753,16 @@ class Memory:
     def _embed_and_store(self, records: list[MemoryRecord]) -> None:
         if not records:
             return
-        to_embed = [r for r in records if r.embedding is None]
+        # Under an identity mismatch we store WITHOUT vectors rather than write a
+        # second vector family into the scope (ADR-0015): those vectors would be
+        # unqueryable (the leg is refused) and would deepen the very corruption
+        # the guard exists to stop. Lexical indexing still covers the content;
+        # health() flags the scope until it is re-ingested with one embedder.
+        to_embed = (
+            [r for r in records if r.embedding is None]
+            if self._identity_state != "mismatch"
+            else []
+        )
         if to_embed:
             vectors = self.embedder.embed([r.content for r in to_embed])
             name, dim = self.embedder.identity().name, self.embedder.dim

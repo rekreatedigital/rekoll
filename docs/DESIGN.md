@@ -43,10 +43,13 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   keyword smoke fixture exists); the MCP server, REST API, DB-schema/row ingestion,
   and the TS client.
 
-**Behavioral note:** the hard-fail embedder guard `guard_identity()` exists, but the
-`Memory` facade currently **warns** on a model swap rather than hard-failing
-(ADR-0014) — diverging from §10 P1's "hard-fails" wording. The authoritative
-behavior is an open decision.
+**Behavioral note:** on an embedder-identity mismatch the `Memory` facade
+**refuses the vector leg and degrades honestly** — reads go lexical-only (named
+in `RecallResult.mode`), writes store no vector, the construction warning stays,
+and `health()` reports the scope degraded until re-ingest (ADR-0015). This
+resolves the previously open decision between ADR-0014's warn-only wording and
+§10 P1's "hard-fails" wording: neither invisible nor an outage. The hard-fail
+`guard_identity()` remains available for callers who want construction to raise.
 
 ---
 
