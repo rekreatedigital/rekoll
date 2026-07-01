@@ -244,9 +244,10 @@ class Memory:
         chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
         ``trust=`` explicitly to vouch for a source you control.
         """
-        if len(text) > self._max_file_bytes:
+        n_bytes = len(text.encode("utf-8"))  # a BYTES limit — measure bytes, not chars
+        if n_bytes > self._max_file_bytes:
             raise ValueError(
-                f"document is {len(text):,} chars, over the "
+                f"document is {n_bytes:,} bytes, over the "
                 f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
                 "split it or raise max_file_bytes (ADR-0018)."
             )
@@ -301,6 +302,15 @@ class Memory:
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
         targets = [root] if root.is_file() else list(self._walk(root, include, skip))
+        if root.is_file() and root.is_symlink() and not follow_symlinks:
+            # A directly-pointed symlink is skipped, not read — say so, since the
+            # caller almost certainly expected it to be ingested.
+            warnings.warn(
+                f"[rekoll] ingest_path was pointed at a symlink ({path!r}); it "
+                "was skipped because a link can point outside the intended tree. "
+                "Pass follow_symlinks=True to read it.",
+                stacklevel=2,
+            )
         files = 0
         chunks = 0
         skipped = 0
@@ -311,9 +321,17 @@ class Memory:
                     skipped += 1  # a planted link can point outside the tree
                     continue
                 if fp.stat().st_size > self._max_file_bytes:
-                    skipped += 1  # never read an oversized file into memory (ADR-0018)
+                    skipped += 1  # fast-path skip for a known-oversized file
                     continue
-                text = fp.read_text(encoding="utf-8")
+                # Bounded read: the file may have GROWN since stat() (TOCTOU), so
+                # never pull more than the limit (+1 to detect overflow) into
+                # memory regardless of what stat reported.
+                with fp.open("rb") as fh:
+                    raw = fh.read(self._max_file_bytes + 1)
+                if len(raw) > self._max_file_bytes:
+                    skipped += 1
+                    continue
+                text = raw.decode("utf-8")
             except (UnicodeDecodeError, OSError):
                 skipped += 1
                 continue
@@ -443,6 +461,10 @@ class Memory:
 
         The query is firewall-sanitized and truncated to
         ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0018).
+
+        May return FEWER than ``k`` hits: quarantined memory is excluded, and any
+        candidate that fails content-hash verification (direct-DB tampering) is
+        withheld with a warning (ADR-0019). ``k`` is an upper bound, not a promise.
         """
         result = hybrid_search(
             self.adapter, scope=self.scope, query=query, embedder=self.embedder,

@@ -197,6 +197,22 @@ def test_symlink_skip_logic_without_os_support(tmp_path, monkeypatch):
     mem.close()
 
 
+def test_directly_passed_symlink_file_warns(tmp_path, monkeypatch):
+    # Pointing ingest_path straight at a symlink skips it (a link can escape the
+    # tree) — but that should be a visible warning, not a silent skipped:1.
+    from pathlib import Path
+
+    target = tmp_path / "link.md"
+    target.write_text("# Doc\n\nlink-marker prose.\n", encoding="utf-8")
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda self: self.name == "link.md" or original(self))
+    mem = _mem()
+    with pytest.warns(UserWarning, match="symlink"):
+        stats = mem.ingest_path(str(target))
+    assert stats["files"] == 0 and stats["skipped"] == 1
+    mem.close()
+
+
 def test_directory_symlink_is_never_descended(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()

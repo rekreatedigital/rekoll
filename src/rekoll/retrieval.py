@@ -55,6 +55,9 @@ def _verify_hits(hits: list[QueryHit]) -> list[QueryHit]:
     bad: list[str] = []
     for hit in hits:
         if not hit.record.verify():
+            # Safe to mutate: adapters reconstruct a FRESH MemoryRecord per query
+            # (no shared/cached instance), so this demotion is local to this
+            # result set and never persisted (reads stay side-effect-free).
             hit.record.status = Status.QUARANTINED
             bad.append(hit.record.id)
     if bad:
