@@ -78,9 +78,11 @@ dependencies. The no-key local default never changes, and cloud is opt-in only:
 the default path never reads a key or opens a socket (CI-gated).
 
 ```python
-mem = Memory(embedder="openai:text-embedding-3-small")     # key from OPENAI_API_KEY
-
+# docs: no-run — this one needs a provider API key
+from rekoll import Memory
 from rekoll.providers import OpenAICompatibleConsolidator  # merge memories with YOUR LLM
+
+mem = Memory(embedder="openai:text-embedding-3-small")     # key from OPENAI_API_KEY
 mem.consolidate(query="database decisions",
                 consolidator=OpenAICompatibleConsolidator("gpt-4o-mini"))
 ```

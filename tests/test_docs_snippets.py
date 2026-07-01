@@ -39,11 +39,19 @@ def _snippet_world(monkeypatch, tmp_path):
     )
 
 
+# Snippets that cannot run offline (BYO-AI examples needing a provider key)
+# opt out with a first line starting `# docs: no-run` — the marker doubles as
+# reader-facing documentation that the example needs a key.
+_NO_RUN = "# docs: no-run"
+
+
 @pytest.mark.parametrize("doc", DOCS_WITH_SNIPPETS)
 def test_every_python_snippet_runs_as_written(doc, capsys):
     blocks = _python_blocks(ROOT / doc)
     assert blocks, f"no ```python fences found in {doc} - did the fence style change?"
     for i, block in enumerate(blocks):
+        if block.lstrip().startswith(_NO_RUN):
+            continue
         namespace: dict = {"__name__": "docs_snippet"}
         exec(compile(block, f"<{doc} python snippet {i + 1}>", "exec"), namespace)
         for value in namespace.values():  # don't leave SQLite handles open on Windows
