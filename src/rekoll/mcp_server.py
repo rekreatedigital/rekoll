@@ -374,6 +374,22 @@ def build_server(config: ServerConfig):
     return server
 
 
+def _force_utf8_stdio() -> None:
+    """Pin stdin/stdout to UTF-8 — MCP stdio is a UTF-8 protocol channel.
+
+    On Windows, pipes default to the ANSI codepage (cp1252), and older mcp
+    SDKs (e.g. 1.2.0) wrap ``sys.stdin``/``sys.stdout`` as-is — one em dash in
+    a tool description or recall envelope then corrupts the wire (found by
+    running the e2e suite against the 1.2.0 floor). Newer SDKs wrap the byte
+    streams in UTF-8 themselves, which makes this a no-op there.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:  # exotic host stream without reconfigure — let the
+            pass  # SDK's own handling (or the protocol error) surface it
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     """Console entry point (``rekoll-mcp``): parse config, serve over stdio."""
     config = load_config(argv)
@@ -382,6 +398,17 @@ def main(argv: Optional[list[str]] = None) -> None:
     except ImportError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
+    except Exception as exc:
+        # Startup is a first-run surface: plain English, no traceback
+        # (ADR-0008). Nothing is swallowed — the server never came up.
+        print(
+            f"rekoll-mcp could not start: {exc}\n"
+            f"(store: {config.path} | scope: "
+            f"{config.tenant}/{config.project}/{config.agent})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+    _force_utf8_stdio()
     server.run(transport="stdio")
 
 
