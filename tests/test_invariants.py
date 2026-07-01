@@ -3,6 +3,7 @@
 These lock in claims the docs make but nothing previously enforced:
  - reads/writes on the default path make NO outbound network call;
  - the default path pulls in NO network/LLM/heavy-ML library (zero required deps);
+ - both hold for the ``rekoll`` CLI entry path too, not just the SDK;
  - provenance + trust are required (NOT-NULL) at construction.
 """
 
@@ -27,9 +28,9 @@ def _exercise(mem: Memory) -> None:
     mem.context("deploy schedule", k=3)
 
 
-def test_default_path_makes_no_outbound_network_call(monkeypatch):
-    """ADR-0007: the privacy guarantee. A full write+read cycle on the default
-    (stub, local SQLite) path must not open any non-loopback socket."""
+@pytest.fixture()
+def network_guard(monkeypatch) -> list[str]:
+    """Patch socket so any non-loopback connect/DNS both fails AND is recorded."""
     offenders: list[str] = []
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
@@ -61,11 +62,35 @@ def test_default_path_makes_no_outbound_network_call(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", guard_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", guard_connect_ex)
     monkeypatch.setattr(socket, "getaddrinfo", guard_getaddrinfo)
+    return offenders
 
+
+def test_default_path_makes_no_outbound_network_call(network_guard):
+    """ADR-0007: the privacy guarantee. A full write+read cycle on the default
+    (stub, local SQLite) path must not open any non-loopback socket."""
     mem = Memory(path=":memory:", embedder=StubEmbedder(), reranker=None)
     _exercise(mem)
     mem.close()
-    assert not offenders, f"network activity on the default path: {offenders}"
+    assert not network_guard, f"network activity on the default path: {network_guard}"
+
+
+def test_cli_default_path_makes_no_outbound_network_call(
+    network_guard, monkeypatch, tmp_path, capsys
+):
+    """The CLI is the onboarding front door; it must hold the same privacy bar.
+    ``fastembed`` is blocked so the auto-embedder takes its stub fallback even on
+    machines that have the extra installed (matching the no-extra default path)."""
+    from rekoll.cli import main
+
+    monkeypatch.setitem(sys.modules, "fastembed", None)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    assert main(["init"]) == 0
+    assert main(["remember", "we chose Postgres over BigQuery for cost"]) == 0
+    assert main(["recall", "why postgres", "-k", "3"]) == 0
+    assert main(["recall", "why postgres", "--context"]) == 0
+    assert main(["status"]) == 0
+    assert not network_guard, f"network activity on the CLI default path: {network_guard}"
 
 
 def test_default_path_imports_no_network_or_llm_library():
@@ -82,6 +107,29 @@ def test_default_path_imports_no_network_or_llm_library():
         "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
         "leaked = sorted(banned & set(sys.modules))\n"
         "assert not leaked, 'default path imported: ' + repr(leaked)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, (result.stdout + result.stderr)
+
+
+def test_cli_default_path_imports_no_network_or_llm_library(tmp_path):
+    """Same gate for the CLI: a remember/recall/status cycle through
+    ``rekoll.cli.main`` must not pull in any network/LLM/heavy-ML module.
+    ``fastembed`` is import-blocked to pin the no-extra default path."""
+    db = tmp_path / "cli.db"
+    code = (
+        "import sys\n"
+        "sys.modules['fastembed'] = None\n"
+        "from rekoll.cli import main\n"
+        f"db = {str(db)!r}\n"
+        "assert main(['remember', 'hello world fact', '--path', db]) == 0\n"
+        "assert main(['recall', 'hello', '-k', '2', '--path', db]) == 0\n"
+        "assert main(['status', '--path', db]) == 0\n"
+        "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
+        "leaked = sorted(m for m in banned if sys.modules.get(m) is not None)\n"
+        "assert not leaked, 'CLI default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True
