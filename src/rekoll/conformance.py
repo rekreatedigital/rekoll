@@ -106,6 +106,45 @@ def assert_content_addressed_idempotent(make: AdapterFactory, embedder: Embedder
     adapter.close()
 
 
+def assert_upsert_is_trust_monotonic(make: AdapterFactory, embedder: Embedder) -> None:
+    """Trust-aware upsert (ADR-0022): identical content re-ingested from a
+    DIFFERENT source must never LOWER the stored trust tier or hijack the trusted
+    record's provenance. Only a STRICTLY higher trust tier may take over. Every
+    adapter inherits this contract, since the naive UNIQUE(scope, content_hash)
+    upsert would otherwise let an attacker downgrade a trusted memory by
+    re-submitting its exact bytes."""
+    text = "the production database credentials rotate monthly"
+
+    # 1) Lower-trust re-ingest from a different source must be a NO-OP.
+    adapter = make()
+    trusted = _rec(_SCOPE_A, text, trust=TrustTier.OWNER, source="user://owner", embedder=embedder)
+    attacker = _rec(_SCOPE_A, text, trust=TrustTier.UNVERIFIED, source="web://evil", embedder=embedder)
+    assert trusted.id != attacker.id, "different sources must yield different ids"
+    adapter.upsert(records=[trusted])
+    adapter.upsert(records=[attacker])
+    assert adapter.count(scope=_SCOPE_A) == 1, "identical content must collapse to one row"
+    survivors = adapter.get(scope=_SCOPE_A, ids=[trusted.id, attacker.id]).records
+    assert len(survivors) == 1, "exactly one of the colliding ids should survive"
+    survivor = survivors[0]
+    assert survivor.id == trusted.id, "lower-trust re-ingest replaced the trusted record"
+    assert survivor.trust_tier == TrustTier.OWNER, "lower-trust re-ingest DOWNGRADED a trusted record"
+    assert survivor.provenance.source_uri == "user://owner", "attacker HIJACKED the record's provenance"
+    adapter.close()
+
+    # 2) A strictly HIGHER-trust source may legitimately take over (upgrade).
+    adapter = make()
+    low = _rec(_SCOPE_A, text, trust=TrustTier.UNVERIFIED, source="web://x", embedder=embedder)
+    high = _rec(_SCOPE_A, text, trust=TrustTier.OWNER, source="user://y", embedder=embedder)
+    adapter.upsert(records=[low])
+    adapter.upsert(records=[high])
+    assert adapter.count(scope=_SCOPE_A) == 1
+    upgraded = adapter.get(scope=_SCOPE_A, ids=[high.id]).records
+    assert upgraded and upgraded[0].trust_tier == TrustTier.OWNER, \
+        "a strictly higher-trust source must be able to take over identical content"
+    assert not adapter.get(scope=_SCOPE_A, ids=[low.id]).records, "the displaced low-trust id must be gone"
+    adapter.close()
+
+
 def assert_add_strict_on_duplicate(make: AdapterFactory, embedder: Embedder) -> None:
     adapter = make()
     record = _rec(_SCOPE_A, "unique once", embedder=embedder)
@@ -259,6 +298,7 @@ ALL_CHECKS = (
     assert_kwargs_only,
     assert_add_and_get_roundtrip,
     assert_content_addressed_idempotent,
+    assert_upsert_is_trust_monotonic,
     assert_add_strict_on_duplicate,
     assert_scope_isolation,
     assert_trust_roundtrip,

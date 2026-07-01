@@ -211,10 +211,22 @@ class SQLiteAdapter(StorageAdapter):
             # via the UNIQUE conflict — orphaning its fts/metadata/link rows, which
             # are keyed by the *old* id. Purge the displaced id's child rows first.
             prior = self._conn.execute(
-                f"SELECT id FROM {table} WHERE scope_key=? AND content_hash=?",
+                f"SELECT id, trust_tier FROM {table} WHERE scope_key=? AND content_hash=?",
                 (r.scope.key(), r.content_hash),
             ).fetchone()
             if prior is not None and prior["id"] != r.id:
+                # TRUST-AWARE UPSERT (ADR-0022). Same bytes, DIFFERENT source: an
+                # attacker who re-ingests content byte-identical to a trusted
+                # record must not be able to hijack it. Without this gate the
+                # UNIQUE(scope_key, content_hash) conflict let a lower-trust write
+                # silently REPLACE the trusted row — the survivor kept the content
+                # but took the attacker's provenance and LOWER trust, and stayed
+                # recallable (confirmed by repro). Rule: only a STRICTLY higher
+                # trust tier may take over; equal-or-lower trust is a no-op, so the
+                # trusted record is preserved untouched. Trust for identical content
+                # is therefore monotonic — it can rise, never silently fall.
+                if int(r.trust_tier) <= prior["trust_tier"]:
+                    return
                 old = prior["id"]
                 self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
                 self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
