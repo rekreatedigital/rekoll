@@ -7,6 +7,7 @@ combines the ranked lists without needing comparable raw scores.
 
 from __future__ import annotations
 
+import warnings
 from typing import Iterable, Optional
 
 from .adapters.base import CAP_LEXICAL, QueryHit, QueryResult, StorageAdapter
@@ -42,6 +43,30 @@ def rrf_fuse(
     return [QueryHit(record=records[rid], score=score) for rid, score in ranked[:top]]
 
 
+def _verify_hits(hits: list[QueryHit]) -> list[QueryHit]:
+    """Tamper check (ADR-0018): demote any hit whose content fails its hash.
+
+    An attacker with direct write access to the backing store bypasses ingest
+    screening entirely; the content-address is the detection layer SECURITY.md
+    promises. Mismatched records are demoted to QUARANTINED **in memory** (the
+    store is never written on the read path) so the normal quarantine filtering
+    below decides surfacing, and one warning names the withheld ids.
+    """
+    bad: list[str] = []
+    for hit in hits:
+        if not hit.record.verify():
+            hit.record.status = Status.QUARANTINED
+            bad.append(hit.record.id)
+    if bad:
+        warnings.warn(
+            f"[rekoll] {len(bad)} recalled record(s) failed content-hash "
+            f"verification and were withheld (possible direct-DB tampering; "
+            f"re-ingest or delete them): {', '.join(sorted(bad))}",
+            stacklevel=3,
+        )
+    return hits
+
+
 def hybrid_search(
     adapter: StorageAdapter,
     *,
@@ -66,6 +91,10 @@ def hybrid_search(
     same normalization stored content got, so hidden characters can't split
     terms or skew matching) and truncated to ``MAX_QUERY_CHARS`` before any
     embedding or lexical work (DESIGN §7 "query sanitized before embedding").
+
+    Every candidate is content-hash verified before surfacing; a mismatch
+    (direct-DB tampering) is demoted to QUARANTINED in memory and warned about
+    (ADR-0018).
     """
     query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
     pool = candidates or max(k * 6, k)
@@ -77,7 +106,7 @@ def hybrid_search(
         lists.append(
             adapter.lexical_query(scope=scope, text=query, k=pool, kind=kind, where=where).hits
         )
-    fused = rrf_fuse(lists, k=rrf_k, top=pool)
+    fused = _verify_hits(rrf_fuse(lists, k=rrf_k, top=pool))
     if not include_quarantined:
         fused = [h for h in fused if h.record.status is not Status.QUARANTINED]
     if reranker is not None:
