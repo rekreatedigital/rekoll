@@ -35,6 +35,7 @@ from rekoll.mcp_server import (
     _remember,
     _status,
     load_config,
+    main,
 )
 
 _HAS_MCP = importlib.util.find_spec("mcp") is not None
@@ -224,12 +225,29 @@ def test_status_reports_pinned_scope_and_write_policy(tmp_path):
     assert "directive" not in out["writable_kinds"]
 
 
+@requires_mcp  # without the extra, main() exits earlier with the install hint
+def test_main_reports_startup_failure_in_plain_english(tmp_path, capsys):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("i am a file, not a directory", encoding="utf-8")
+    bad_store = blocker / "sub" / "mem.db"  # parent chain runs through a file
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--path", str(bad_store), "--project", "x", "--root", str(tmp_path)])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "rekoll-mcp could not start" in err
+    assert "Traceback" not in err  # first-run surface stays plain (ADR-0008)
+
+
 # -- end-to-end over stdio (the real server, the real client) ------------------
 
 def _payload(result) -> dict:
-    """Tool result -> dict, via structured content or the JSON text block."""
+    """Tool result -> dict, via structured content or the JSON text block.
+
+    ``structuredContent`` only exists on mcp>=1.10 result models — getattr keeps
+    this harness usable at the version floor pinned in CI.
+    """
     assert not result.isError, f"tool errored: {result.content}"
-    sc = result.structuredContent
+    sc = getattr(result, "structuredContent", None)
     if isinstance(sc, dict):
         return sc.get("result", sc) if set(sc) == {"result"} else sc
     text = next(c.text for c in result.content if getattr(c, "type", "") == "text")
@@ -242,9 +260,17 @@ def _error_text(result) -> str:
 
 
 def _run_server_session(tmp: Path, fn, *, extra_args: tuple[str, ...] = ()):
-    """Spawn ``python -m rekoll.mcp_server`` rooted at ``tmp`` and drive it."""
+    """Spawn ``python -m rekoll.mcp_server`` rooted at ``tmp`` and drive it.
+
+    ``errlog`` is passed explicitly as a real file: the SDK's default is
+    ``sys.stderr`` frozen at import time, and if the mcp package is first
+    imported while pytest's capsys has stderr swapped to an in-memory stream,
+    every later spawn inherits a stderr without a usable OS handle.
+    """
 
     async def _inner():
+        import inspect
+
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -259,10 +285,18 @@ def _run_server_session(tmp: Path, fn, *, extra_args: tuple[str, ...] = ()):
             ],
             cwd=str(tmp),
         )
-        async with stdio_client(params) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                return await fn(session)
+        with (tmp / "server-stderr.log").open("w", encoding="utf-8") as errlog:
+            # The floor SDK (1.2.0) has no errlog parameter and reads
+            # sys.stderr at call time, which is safe under pytest.
+            kwargs = (
+                {"errlog": errlog}
+                if "errlog" in inspect.signature(stdio_client).parameters
+                else {}
+            )
+            async with stdio_client(params, **kwargs) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await fn(session)
 
     return asyncio.run(_inner())
 
