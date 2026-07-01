@@ -90,3 +90,36 @@ def test_constructor_validates():
         RecallLedger(max_entries=0)
     with pytest.raises(ValueError):
         RecallLedger(ttl_seconds=0)
+
+
+def test_ledger_is_thread_safe_under_contention():
+    # The claim is "thread-safe": concurrent record/entries/clear from many
+    # threads must never raise, never exceed the cap, and never corrupt an
+    # entry (ids always intact, never partially written).
+    import threading
+
+    ledger = RecallLedger(max_entries=32)
+    errors: list[BaseException] = []
+
+    def _hammer(worker: int) -> None:
+        try:
+            for i in range(300):
+                ledger.record([f"w{worker}-a{i}", f"w{worker}-b{i}"],
+                              query=f"q-{worker}-{i}", call_id=f"call-{worker}")
+                if i % 7 == 0:
+                    for entry in ledger.entries(f"call-{worker}", limit=5):
+                        assert len(entry["ids"]) == 2  # never a torn write
+                if i % 97 == 0:
+                    ledger.clear()
+        except BaseException as exc:  # noqa: BLE001 — collect, assert below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_hammer, args=(w,)) for w in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors
+    assert len(ledger) <= 32
+    for entry in ledger.entries(limit=50):
+        assert len(entry["ids"]) == 2

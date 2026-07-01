@@ -177,6 +177,34 @@ def test_mark_used_is_promotion_only_and_ignores_junk():
     mem.close()
 
 
+def test_mark_used_leaves_the_record_fully_intact_and_retrievable():
+    # mark_used persists via upsert, which rewrites the row + child tables +
+    # FTS entry. Crediting a memory must not corrupt anything about it: same
+    # content/metadata/embedding/trust, still retrievable by BOTH legs, and
+    # context() renders byte-identically (cache stability survives usage).
+    mem = _mem()
+    record = mem.remember("the export job compresses archives before upload",
+                          metadata={"team": "infra", "priority": 2})
+    before_ctx = mem.recall("export job compresses archives", k=2).context()
+    before = mem.adapter.get(scope=mem.scope, ids=[record.id]).records[0]
+    assert mem.mark_used(record.id) == 1
+    after = mem.adapter.get(scope=mem.scope, ids=[record.id]).records[0]
+    assert after.proof_count == before.proof_count + 1
+    assert after.content == before.content
+    assert after.content_hash == before.content_hash
+    assert after.embedding == before.embedding
+    assert after.trust_tier is before.trust_tier
+    assert dict(after.metadata) == dict(before.metadata)
+    assert after.created_at == before.created_at
+    # Both index legs still serve it, and rendering is unchanged byte-for-byte.
+    res = mem.recall("export job compresses archives", k=2)
+    assert record.id in res.ids()
+    assert res.context().encode() == before_ctx.encode()
+    lex = mem.adapter.lexical_query(scope=mem.scope, text="compresses archives", k=3)
+    assert record.id in [h.record.id for h in lex.hits]
+    mem.close()
+
+
 def test_recall_feeds_ledger_and_informed_by_joins_it():
     mem = _mem()
     a = mem.remember("alpha routing rule for the payments service")
@@ -276,6 +304,28 @@ def test_health_skips_quarantined_rows_without_false_alarm():
     report = mem.health(n=2)
     assert report.ok is True
     assert any("non-active" in n for n in report.notes)
+    mem.close()
+
+
+def test_health_stays_green_on_near_duplicate_corpora():
+    # Regression: a repo ingest where many chunks share a long boilerplate
+    # prefix (license header) and differ only in the tail. A head-slice probe
+    # with a narrow membership window falsely read 3/3 newest records as stale
+    # here; the full-content probe + widened window must NOT cry wolf — a
+    # freshness gate that false-alarms gets ignored, which defeats it.
+    header = (
+        "Copyright notice: this file is part of the example project and is "
+        "licensed under the permissive license. Redistribution and use in "
+        "source and binary forms, with or without modification, are permitted "
+        "provided that the following conditions are met and kept intact. "
+    )
+    mem = _mem()
+    for i in range(40):
+        mem.remember(header + f"Module {i} implements feature variant number {i}.")
+    report = mem.health(n=3)
+    assert report.ok is True
+    assert report.retrievable == report.checked == 3
+    assert report.stale_ids == ()
     mem.close()
 
 

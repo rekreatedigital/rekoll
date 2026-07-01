@@ -67,6 +67,16 @@ DEFAULT_SKIP_DIRS = {
     "dist", "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 }
 
+# health() retrievability probe. FULL content (capped) — a short head slice made
+# the probe blind on near-duplicate corpora (e.g. a repo ingest where chunks
+# share a license-header prefix): the discriminating tail tokens never entered
+# the query and healthy stores read stale. 2048 covers every chunker output
+# (MD_MAX=1500 / CODE_MAX=2000) whole. The membership window is widened to
+# ≥20 so near-ties — and, later, approximate ANN backends whose self-match
+# isn't guaranteed top-5 — don't read as dead ingestion.
+_PROBE_MAX_CHARS = 2048
+_PROBE_MIN_POOL = 20
+
 
 def _auto_embedder() -> Embedder:
     try:
@@ -605,11 +615,13 @@ class Memory:
 
         Asserts the newest ``n`` ACTIVE records are (a) EMBEDDED (carry a
         vector) and (b) RETRIEVABLE (an actual search over their own content
-        surfaces them in the top ``k``). The check runs store-vs-index, not
-        index-only — an index-only "is the corpus healthy?" query reads green
-        forever over dead ingestion, because it can only see what already made
-        it in. Also reports the embedder-identity state and the exact recall
-        mode, so a degraded scope can't look healthy.
+        surfaces them within a membership window of ``max(k, 20)`` — widened so
+        near-duplicate corpora and approximate vector indexes don't read as
+        dead ingestion). The check runs store-vs-index, not index-only — an
+        index-only "is the corpus healthy?" query reads green forever over dead
+        ingestion, because it can only see what already made it in. Also
+        reports the embedder-identity state and the exact recall mode, so a
+        degraded scope can't look healthy.
 
         Never raises for an empty/unsupported store — it reports ``ok=None``
         with a note instead (fail-soft: health must never take the host down).
@@ -653,9 +665,13 @@ class Memory:
             has_vector = record.embedding is not None
             embedded += int(has_vector)
             # Retrievability probe: search the record's own content through the
-            # real read path (no reranker — membership in top-k is the check,
-            # not order; no ledger — probes must not claim usage credit).
-            probe = self._search(record.content[:256], k=max(k, n), rerank=False)
+            # real read path (no reranker — membership in the window is the
+            # check, not order; no ledger — probes must not claim usage credit).
+            probe = self._search(
+                record.content[:_PROBE_MAX_CHARS],
+                k=max(k, _PROBE_MIN_POOL),
+                rerank=False,
+            )
             found = record.id in {h.record.id for h in probe.hits}
             retrievable += int(found)
             if not (has_vector and found):
