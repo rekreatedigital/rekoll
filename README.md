@@ -3,11 +3,11 @@
 **Injection-hardened, storage-agnostic, private memory for AI agents.**
 Give your agent durable memory of a whole codebase + database — that it can't be tricked into trusting, and that never leaves your infrastructure.
 
-> **Status: pre-alpha, but usable.** Working today: the `Memory` facade, local
-> semantic + keyword (hybrid) search with cross-encoder reranking, the injection
-> firewall, a bring-your-own-database adapter contract, and a benchmark gate.
-> Upcoming: the learning loop, more DB backends, and an MCP server — see
-> [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
+> **Status: pre-alpha, but usable.** Working today: the `rekoll` CLI, the
+> `Memory` facade, local semantic + keyword (hybrid) search with cross-encoder
+> reranking, the injection firewall, a bring-your-own-database adapter contract,
+> and a benchmark gate. Upcoming: the learning loop, more DB backends, and an
+> MCP server — see [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
 
 ---
 
@@ -24,22 +24,44 @@ It aims to be the first agent-memory layer that is *all five at once*:
 ## How you'll use it (three doors, one engine)
 
 1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python and no API key required**. *(Coming — the front door is Node/`npx` so non-technical users never touch Python.)*
-2. **Python SDK** — `pip install rekoll` → `from rekoll import Memory`. *(High-level facade lands in a later phase; the foundation pieces are importable today.)*
+2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. Installable from git today; `pip install rekoll` lands with the PyPI release.
 3. **Self-host service** — one container pointed at your own database.
 
 **Do you need an AI key?** No — saving and searching memory uses a local model, no key, no internet, free. Only the *optional* learning loop calls an LLM, and you can bring any model (OpenAI, Claude, Gemini, local Ollama, …) or run it locally.
 
 ## Quickstart
 
+**Install (today):** Rekoll isn't on PyPI yet, so install straight from git — or
+from a local clone. Don't copy the source in.
+
 ```bash
-pip install rekoll                  # core: local, private, no API key
-pip install "rekoll[embeddings]"    # + real local semantic search & reranking
+pip install "git+https://github.com/ryankyleocampo-github/rekoll"                       # keyword search, zero deps
+pip install "rekoll[embeddings] @ git+https://github.com/ryankyleocampo-github/rekoll"  # + real semantic search (recommended)
+pip install -e "/path/to/rekoll[embeddings]"        # from a local clone
 ```
+
+(`pip install rekoll` will work once it's published to PyPI.)
+
+**60 seconds, any project** — website, mobile app, agent repo; no Python code needed:
+
+```bash
+cd your-project
+rekoll init          # one-time setup: creates ./.rekoll/, git-ignores it, tells you your search mode
+rekoll remember "we chose Postgres over BigQuery for cost"
+rekoll recall "why postgres?"
+rekoll ingest .      # optional: index this whole repo (code + docs)
+rekoll status        # what's stored here
+```
+
+`rekoll recall --context` prints a safe, LLM-ready block you can paste (or pipe)
+into any AI tool, and `rekoll doctor` checks your setup if anything misbehaves.
+
+**Same store, from Python:**
 
 ```python
 from rekoll import Memory
 
-mem = Memory(project="myapp")               # local SQLite, firewall on, zero config
+mem = Memory()               # local SQLite, firewall on, zero config — the CLI's defaults
 mem.remember("we chose Postgres over BigQuery for cost")
 mem.remember("the deploy runs on a Hostinger VPS")
 
@@ -69,18 +91,8 @@ Claude users), Ollama / LM Studio, any OpenAI-compatible `base_url`, … — see
 firewall-screened, provenance-linked to its sources, trust capped at the
 minimum of what went in — an LLM can never promote its own words.
 
-### Use it in your own project
-
-Until it's on PyPI, install from git or a local clone — **don't copy the source in**:
-
-```bash
-pip install "git+https://github.com/ryankyleocampo-github/rekoll"   # once published
-pip install -e "/path/to/rekoll[embeddings]"                    # from a local clone
-```
-
-Then `from rekoll import Memory` anywhere. Add `.rekoll/` to your `.gitignore` (the
-store is a rebuildable index). Index a whole repo with `mem.ingest_path(".")`, or
-point it at your own database later via `Memory(backend=...)` (Postgres/Supabase
+More recipes (per audience, copy-paste): **[docs/QUICKSTART.md](docs/QUICKSTART.md)**.
+Point Rekoll at your own database later via `Memory(backend=...)` (Postgres/Supabase
 adapters land in a later phase).
 
 ### Develop Rekoll itself
@@ -94,7 +106,7 @@ pytest
 
 ## Docs & policies
 
-- [Design document](docs/DESIGN.md) · [Architecture Decision Records](docs/adr/)
+- [Quickstart recipes](docs/QUICKSTART.md) · [Design document](docs/DESIGN.md) · [Architecture Decision Records](docs/adr/)
 - [Security policy](SECURITY.md) · [Non-goals](NON_GOALS.md) · [Contributing](CONTRIBUTING.md)
 
 ## License

@@ -3,14 +3,17 @@
 These lock in claims the docs make but nothing previously enforced:
  - reads/writes on the default path make NO outbound network call;
  - the default path pulls in NO network/LLM/heavy-ML library (zero required deps);
+ - both hold for the ``rekoll`` CLI entry path too, not just the SDK;
  - provenance + trust are required (NOT-NULL) at construction.
 """
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +21,26 @@ from rekoll import Kind, MemoryRecord, Memory, Provenance, Scope, TrustTier
 from rekoll.embedding import StubEmbedder
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost", None, ""}
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
+
+
+def _env_pinned_to_this_checkout() -> dict:
+    """Subprocess gates must exercise THIS checkout's rekoll, not whatever is
+    pip-installed (an editable install can point at a different worktree)."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+def _block_fastembed(monkeypatch) -> None:
+    """Force the no-extra default path even on machines WITH the extra.
+
+    A bare ``sys.modules['fastembed'] = None`` is not enough: submodules such as
+    ``fastembed.rerank.cross_encoder`` already cached by an earlier test would
+    still import fine. Blank out every cached fastembed name."""
+    for name in [m for m in list(sys.modules) if m == "fastembed" or m.startswith("fastembed.")]:
+        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "fastembed", None)
 
 
 def _exercise(mem: Memory) -> None:
@@ -27,9 +50,9 @@ def _exercise(mem: Memory) -> None:
     mem.context("deploy schedule", k=3)
 
 
-def test_default_path_makes_no_outbound_network_call(monkeypatch):
-    """ADR-0007: the privacy guarantee. A full write+read cycle on the default
-    (stub, local SQLite) path must not open any non-loopback socket."""
+@pytest.fixture()
+def network_guard(monkeypatch) -> list[str]:
+    """Patch socket so any non-loopback connect/DNS both fails AND is recorded."""
     offenders: list[str] = []
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
@@ -61,11 +84,59 @@ def test_default_path_makes_no_outbound_network_call(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", guard_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", guard_connect_ex)
     monkeypatch.setattr(socket, "getaddrinfo", guard_getaddrinfo)
+    return offenders
 
+
+def test_block_fastembed_blocks_cached_submodules_too(monkeypatch):
+    """The CLI gates lean on this helper. A bare ``sys.modules['fastembed'] =
+    None`` sentinel leaks: a submodule cached by an earlier test (e.g.
+    ``fastembed.rerank.cross_encoder`` via the auto reranker) would still
+    import. Plant fakes and prove the block kills every route in."""
+    import types
+
+    for name in ("fastembed", "fastembed.rerank", "fastembed.rerank.cross_encoder"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+
+    _block_fastembed(monkeypatch)
+
+    with pytest.raises(ImportError):
+        import fastembed  # noqa: F401
+    with pytest.raises(ImportError):
+        from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: F401
+
+    # And the facade's auto pickers take their no-extra fallbacks under the block.
+    from rekoll.memory import _auto_embedder, _auto_reranker
+
+    assert isinstance(_auto_embedder(), StubEmbedder)
+    assert _auto_reranker() is None
+
+
+def test_default_path_makes_no_outbound_network_call(network_guard):
+    """ADR-0007: the privacy guarantee. A full write+read cycle on the default
+    (stub, local SQLite) path must not open any non-loopback socket."""
     mem = Memory(path=":memory:", embedder=StubEmbedder(), reranker=None)
     _exercise(mem)
     mem.close()
-    assert not offenders, f"network activity on the default path: {offenders}"
+    assert not network_guard, f"network activity on the default path: {network_guard}"
+
+
+def test_cli_default_path_makes_no_outbound_network_call(
+    network_guard, monkeypatch, tmp_path, capsys
+):
+    """The CLI is the onboarding front door; it must hold the same privacy bar.
+    ``fastembed`` is blocked so the auto embedder AND reranker take their no-extra
+    fallbacks even on machines that have the extra installed."""
+    from rekoll.cli import main
+
+    _block_fastembed(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    assert main(["init"]) == 0
+    assert main(["remember", "we chose Postgres over BigQuery for cost"]) == 0
+    assert main(["recall", "why postgres", "-k", "3"]) == 0
+    assert main(["recall", "why postgres", "--context"]) == 0
+    assert main(["status"]) == 0
+    assert not network_guard, f"network activity on the CLI default path: {network_guard}"
 
 
 def test_default_path_imports_no_network_or_llm_library():
@@ -85,7 +156,32 @@ def test_default_path_imports_no_network_or_llm_library():
         "assert not leaked, 'default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=_env_pinned_to_this_checkout(),
+    )
+    assert result.returncode == 0, (result.stdout + result.stderr)
+
+
+def test_cli_default_path_imports_no_network_or_llm_library(tmp_path):
+    """Same gate for the CLI: a remember/recall/status cycle through
+    ``rekoll.cli.main`` must not pull in any network/LLM/heavy-ML module.
+    ``fastembed`` is import-blocked to pin the no-extra default path."""
+    db = tmp_path / "cli.db"
+    code = (
+        "import sys\n"
+        "sys.modules['fastembed'] = None\n"
+        "from rekoll.cli import main\n"
+        f"db = {str(db)!r}\n"
+        "assert main(['remember', 'hello world fact', '--path', db]) == 0\n"
+        "assert main(['recall', 'hello', '-k', '2', '--path', db]) == 0\n"
+        "assert main(['status', '--path', db]) == 0\n"
+        "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
+        "leaked = sorted(m for m in banned if sys.modules.get(m) is not None)\n"
+        "assert not leaked, 'CLI default path imported: ' + repr(leaked)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=_env_pinned_to_this_checkout(),
     )
     assert result.returncode == 0, (result.stdout + result.stderr)
 
