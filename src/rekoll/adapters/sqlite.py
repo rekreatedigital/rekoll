@@ -79,12 +79,23 @@ def _scope_from_key(key: str) -> Scope:
     return Scope(tenant=tenant, project=project, agent=agent)
 
 
+# Bound the MATCH expression: a hostile/runaway query must not inflate it
+# without limit (ADR-0018). Past a few dozen distinct OR terms BM25 adds noise,
+# not recall — 32 is far beyond any natural-language question.
+_MAX_FTS_TERMS = 32
+
+
 def _fts_query(text: str) -> Optional[str]:
-    """Turn free text into a safe FTS5 MATCH expression (quoted OR-ed terms)."""
+    """Turn free text into a safe, bounded FTS5 MATCH expression.
+
+    Terms are lowercased, quoted, de-duplicated (order-preserving — repeated
+    words carry no extra intent), and capped at ``_MAX_FTS_TERMS``.
+    """
     terms = re.findall(r"\w+", text.lower())
     if not terms:
         return None
-    return " OR ".join(f'"{t}"' for t in terms)
+    unique = list(dict.fromkeys(terms))[:_MAX_FTS_TERMS]
+    return " OR ".join(f'"{t}"' for t in unique)
 
 
 class SQLiteAdapter(StorageAdapter):
@@ -200,14 +211,33 @@ class SQLiteAdapter(StorageAdapter):
             # via the UNIQUE conflict — orphaning its fts/metadata/link rows, which
             # are keyed by the *old* id. Purge the displaced id's child rows first.
             prior = self._conn.execute(
-                f"SELECT id FROM {table} WHERE scope_key=? AND content_hash=?",
+                f"SELECT id, trust_tier FROM {table} WHERE scope_key=? AND content_hash=?",
                 (r.scope.key(), r.content_hash),
             ).fetchone()
-            if prior is not None and prior["id"] != r.id:
-                old = prior["id"]
-                self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
-                self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
-                self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
+            if prior is not None:
+                # TRUST-AWARE UPSERT (ADR-0023): trust for identical content is
+                # MONOTONIC — it may rise, never silently fall. This holds
+                # regardless of source, because the UNIQUE(scope_key,
+                # content_hash) upsert otherwise let a lower-trust write REPLACE a
+                # trusted row (survivor keeps the content but takes the lower
+                # trust — and, if it now trips the firewall, gets QUARANTINED and
+                # vanishes from recall). Both the cross-source hijack and the
+                # same-source re-ingest-at-a-lower-default downgrade are covered
+                # (confirmed by repro).
+                same_id = prior["id"] == r.id
+                if int(r.trust_tier) < prior["trust_tier"]:
+                    return  # never lower trust for identical content (any source)
+                if int(r.trust_tier) == prior["trust_tier"] and not same_id:
+                    return  # equal-trust, different source: dedup, keep incumbent
+                if not same_id:
+                    # A STRICTLY higher-trust source takes over a different id:
+                    # purge the displaced id's orphaned fts/metadata/link rows.
+                    old = prior["id"]
+                    self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
+                    self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
+                    self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
+                # else same_id: fall through to update in place (idempotent
+                # re-ingest / re-embed) — trust is equal or higher, never lower.
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         embedding = json.dumps(list(r.embedding)) if r.embedding is not None else None
         placeholders = ",".join("?" * 25)

@@ -29,7 +29,27 @@ from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screene
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
-__all__ = ["Memory", "RecallResult"]
+__all__ = [
+    "Memory",
+    "RecallResult",
+    "DEFAULT_INGEST_TRUST",
+    "DEFAULT_MAX_CONTENT_CHARS",
+    "DEFAULT_MAX_FILE_BYTES",
+]
+
+# Files and bulk documents are third-party by nature: ingestion defaults to
+# UNVERIFIED so the firewall can quarantine injection markers (quarantine only
+# fires at trust <= UNVERIFIED). Only first-person ``remember()`` follows the
+# constructor's ``default_trust``. Pass ``trust=`` to vouch for a source you
+# control (ADR-0016).
+DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
+
+# Resource limits (ADR-0018). A single un-chunked memory: past ~100k chars it is
+# a document, not a fact — chunk it via ingest_text/ingest_path instead. A single
+# ingested file/document: 10 MiB of TEXT (~2 500 pages) — bigger inputs are
+# almost never prose and reading them unbounded is a memory-exhaustion vector.
+DEFAULT_MAX_CONTENT_CHARS = 100_000
+DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -104,10 +124,29 @@ class Memory:
         reranker: object = "auto",
         screen: bool = True,
         default_trust: TrustTier = TrustTier.OWNER,
+        redact_pii: bool = False,
+        max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
+        max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     ) -> None:
+        """``default_trust`` applies to first-person ``remember()`` calls ONLY.
+
+        Bulk ingestion (``ingest_text`` / ``ingest_path``) always defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) regardless of this setting, so a
+        high default can never silently exempt third-party files from the
+        firewall's quarantine (ADR-0016).
+
+        ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
+        caps one ingested file/document (ADR-0018). Both overridable, never
+        disable-able to zero.
+        """
+        if max_content_chars <= 0 or max_file_bytes <= 0:
+            raise ValueError("max_content_chars and max_file_bytes must be positive")
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
+        self._redact_pii = redact_pii
+        self._max_content_chars = max_content_chars
+        self._max_file_bytes = max_file_bytes
 
         if backend == "sqlite" and path and path != ":memory:":
             Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +197,27 @@ class Memory:
 
         ``metadata`` values must be flat scalars (str/int/float/bool/None);
         nested or list values are rejected (ADR-0001, no unbounded JSON).
+
+        ``kind=Kind.DIRECTIVE`` requires an explicit ``trust=``: directives at
+        or above ``TrustTier.TRUSTED_SOURCE`` render in the recall envelope's
+        *instruction* channel, so minting one must be a conscious act of
+        vouching, never an inherited default (ADR-0017).
         """
+        if kind is Kind.DIRECTIVE and trust is None:
+            raise ValueError(
+                "kind=DIRECTIVE writes to the instruction channel of the recall "
+                "envelope and must carry an explicit trust= (e.g. "
+                "trust=TrustTier.OWNER for a rule you authored). Directives "
+                "below TrustTier.TRUSTED_SOURCE are stored but render as "
+                "evidence, never as instructions (ADR-0017)."
+            )
+        if len(content) > self._max_content_chars:
+            raise ValueError(
+                f"content is {len(content):,} chars, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a document belongs in ingest_text()/ingest_path() "
+                "(which chunk it), or raise max_content_chars (ADR-0018)."
+            )
         record = self._make_record(
             content=content,
             kind=kind,
@@ -178,9 +237,22 @@ class Memory:
         kind: Kind = Kind.RAW_FACT,
         trust: Optional[TrustTier] = None,
     ) -> int:
-        """Chunk a document and store it. Returns the number of chunks stored."""
+        """Chunk a document and store it. Returns the number of chunks stored.
+
+        Ingested text is third-party by nature, so ``trust`` defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
+        ``trust=`` explicitly to vouch for a source you control.
+        """
+        n_bytes = len(text.encode("utf-8"))  # a BYTES limit — measure bytes, not chars
+        if n_bytes > self._max_file_bytes:
+            raise ValueError(
+                f"document is {n_bytes:,} bytes, over the "
+                f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
+                "split it or raise max_file_bytes (ADR-0018)."
+            )
         src = source or f"text://{name}"
-        trust = self._default_trust if trust is None else trust
+        trust = DEFAULT_INGEST_TRUST if trust is None else trust
         records = []
         for i, piece in enumerate(chunk_file(name, text)):
             if self._screen and not sanitize_unicode(piece):
@@ -207,20 +279,61 @@ class Memory:
         skip_dirs: Optional[Iterable[str]] = None,
         trust: Optional[TrustTier] = None,
         batch: int = 256,
+        follow_symlinks: bool = False,
     ) -> dict:
-        """Index a file or directory (code + docs). Returns {files, chunks, total}."""
+        """Index a file or directory (code + docs).
+
+        Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
+        passed over (symlink, over ``max_file_bytes``, undecodable, or
+        unreadable).
+
+        Symlinked files are skipped unless ``follow_symlinks=True``: a planted
+        link in a third-party tree can point anywhere on disk (e.g.
+        ``~/.ssh/id_rsa``), and a bulk walk must not read outside the tree it
+        was pointed at. Directory symlinks are never descended.
+
+        Files on disk are third-party by nature, so ``trust`` defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
+        ``trust=`` explicitly to vouch for a tree you control.
+        """
         include = set(include_ext) if include_ext else DEFAULT_INCLUDE_EXT
         skip = set(skip_dirs) if skip_dirs else DEFAULT_SKIP_DIRS
-        trust = self._default_trust if trust is None else trust
+        trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
         targets = [root] if root.is_file() else list(self._walk(root, include, skip))
+        if root.is_file() and root.is_symlink() and not follow_symlinks:
+            # A directly-pointed symlink is skipped, not read — say so, since the
+            # caller almost certainly expected it to be ingested.
+            warnings.warn(
+                f"[rekoll] ingest_path was pointed at a symlink ({path!r}); it "
+                "was skipped because a link can point outside the intended tree. "
+                "Pass follow_symlinks=True to read it.",
+                stacklevel=2,
+            )
         files = 0
         chunks = 0
+        skipped = 0
         pending: list[MemoryRecord] = []
         for fp in targets:
             try:
-                text = fp.read_text(encoding="utf-8")
+                if not follow_symlinks and fp.is_symlink():
+                    skipped += 1  # a planted link can point outside the tree
+                    continue
+                if fp.stat().st_size > self._max_file_bytes:
+                    skipped += 1  # fast-path skip for a known-oversized file
+                    continue
+                # Bounded read: the file may have GROWN since stat() (TOCTOU), so
+                # never pull more than the limit (+1 to detect overflow) into
+                # memory regardless of what stat reported.
+                with fp.open("rb") as fh:
+                    raw = fh.read(self._max_file_bytes + 1)
+                if len(raw) > self._max_file_bytes:
+                    skipped += 1
+                    continue
+                text = raw.decode("utf-8")
             except (UnicodeDecodeError, OSError):
+                skipped += 1
                 continue
             rel = fp.name if root.is_file() else fp.relative_to(root).as_posix()
             pieces = chunk_file(rel, text)
@@ -248,7 +361,7 @@ class Memory:
                     pending = []
         if pending:
             self._embed_and_store(pending)
-        return {"files": files, "chunks": chunks, "total": self.count()}
+        return {"files": files, "chunks": chunks, "skipped": skipped, "total": self.count()}
 
     def forget(self, *ids: str) -> int:
         """Delete memories by id; returns how many were removed."""
@@ -312,9 +425,21 @@ class Memory:
         summary = consolidator.summarize([r.content for r in sources])
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("consolidator returned no text")
+        summary = summary.strip()
+        # The third write door respects the same per-record bound as remember()
+        # (ADR-0018): a summary should be SHORTER than its sources, so exceeding
+        # the cap means the consolidator failed to condense — fail loud rather
+        # than store an unbounded LLM output.
+        if len(summary) > self._max_content_chars:
+            raise ValueError(
+                f"consolidator returned {len(summary):,} chars, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a consolidation summary should be shorter than its "
+                "sources — raise max_content_chars if this is intended (ADR-0018)."
+            )
         name = str(getattr(consolidator, "name", type(consolidator).__name__))
         record = self._make_record(
-            content=summary.strip(),
+            content=summary,
             kind=Kind.OBSERVATION,
             provenance=Provenance(
                 source_uri=f"consolidator://{name}",
@@ -332,7 +457,15 @@ class Memory:
     def recall(
         self, query: str, *, k: int = 5, kind: Optional[Kind] = None, rerank: bool = True
     ) -> RecallResult:
-        """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM."""
+        """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
+
+        The query is firewall-sanitized and truncated to
+        ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0018).
+
+        May return FEWER than ``k`` hits: quarantined memory is excluded, and any
+        candidate that fails content-hash verification (direct-DB tampering) is
+        withheld with a warning (ADR-0019). ``k`` is an upper bound, not a promise.
+        """
         result = hybrid_search(
             self.adapter, scope=self.scope, query=query, embedder=self.embedder,
             k=k, kind=kind, reranker=self.reranker if rerank else None,
@@ -354,7 +487,8 @@ class Memory:
         if self._screen:
             return screened_record(
                 scope=self.scope, kind=kind, content=content,
-                provenance=provenance, trust_tier=trust, metadata=metadata, **kwargs,
+                provenance=provenance, trust_tier=trust, metadata=metadata,
+                redact_pii=self._redact_pii, **kwargs,
             )
         return MemoryRecord.create(
             scope=self.scope, kind=kind, content=content,

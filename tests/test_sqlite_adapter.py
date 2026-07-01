@@ -100,22 +100,25 @@ def test_lexical_filter_does_not_starve_valid_matches():
     adapter.close()
 
 
-def test_upsert_same_content_different_source_no_orphans():
-    """Same content from a different source collapses on UNIQUE(scope,content_hash)
-    and must not orphan fts/metadata rows keyed by the displaced id."""
+def test_upsert_higher_trust_replaces_without_orphans():
+    """A STRICTLY higher-trust re-ingest of identical content from a different
+    source takes over (trust-aware upsert, ADR-0023) and must not orphan the
+    displaced id's fts/metadata rows. (Equal/lower trust is a no-op — covered in
+    test_trust_upsert.py.)"""
     from rekoll import Kind, MemoryRecord, Provenance, TrustTier
 
     adapter = _make()
     scope = Scope(tenant="t", project="p", agent="a")
 
-    def rec(src):
+    def rec(src, trust):
         return MemoryRecord.create(
             scope=scope, kind=Kind.RAW_FACT, content="identical body text",
-            provenance=Provenance(source_uri=src), trust_tier=TrustTier.OWNER,
+            provenance=Provenance(source_uri=src), trust_tier=trust,
             metadata={"k": "v"},
         )
 
-    r1, r2 = rec("src://one"), rec("src://two")
+    r1 = rec("src://one", TrustTier.UNVERIFIED)
+    r2 = rec("src://two", TrustTier.OWNER)  # strict upgrade takes over
     assert r1.id != r2.id, "id is derived from source_uri, so these differ"
     adapter.upsert(records=[r1])
     adapter.upsert(records=[r2])

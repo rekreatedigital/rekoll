@@ -57,25 +57,78 @@ _SECRET_PATTERNS = [
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35,}")),
     ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
     ("sendgrid_key", re.compile(r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}")),
-    ("private_key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----")),
+    # Whole PEM block (header..footer) so the base64 key BODY is redacted, not
+    # just the header line. Lazy body + required terminator = linear, no ReDoS.
+    ("private_key", re.compile(
+        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+    )),
+    # Fallback: a truncated/headers-only block still gets its header flagged.
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # scheme://user:pass@host — redacts the whole DSN (host included) so an
-    # embedded '@' in the password can't leak a tail.
-    ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
+    # embedded '@' in the password can't leak a tail. The scheme is bounded to
+    # {0,30} (real URI schemes are short, RFC 3986) so a "sk-sk-..." / "ab.+-..."
+    # flood can't make the greedy prefix rescan the whole string at every
+    # word-boundary start — that was O(n^2). Bounded quantifier keeps it linear
+    # and stays Python 3.10-safe (no atomic groups / possessive quantifiers).
+    ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,30}://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
     ("credential_assignment", re.compile(
         r"(?i)(?:api[_-]?key|secret|password|passwd|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}['\"]?"
     )),
 ]
 
+# PII patterns — OPT-IN only (ADR-0022). Default-OFF because Rekoll's core JTBD
+# is "understand my codebase", and code/git logs are full of legitimate emails
+# (author lines, CODEOWNERS, mailto:) and number sequences; default-on redaction
+# would corrupt legitimate content and gut recall. A user handling PII-bearing
+# corpora opts in via ``Memory(redact_pii=True)``. Conservative, separator-
+# anchored patterns keep false positives low even when enabled.
+_PII_PATTERNS = [
+    # Local part bounded to 64 and domain to 255 (RFC 5321 limits) so a
+    # "1-1-1-..." flood can't make the greedy local part rescan to the end at
+    # every word-boundary start — that was O(n^2), same class of bug as the
+    # connection_string scheme. Bounded quantifiers keep it linear (3.10-safe).
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,}\b")),
+    ("us_ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),  # dashed form only — bare 9 digits is too ambiguous
+    # Two separators required (ddd-ddd-dddd, optional +cc / parens) so version
+    # strings, ports, and IPs don't trip. Bare digit runs are intentionally missed.
+    ("phone", re.compile(r"(?<!\w)(?:\+\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\w)")),
+]
+
 # Prompt-injection markers (case-insensitive). These lower trust on UNTRUSTED input.
+# Tested against the homoglyph-folded, casefolded detection copy (``_marker_scan``),
+# and regression-gated by the versioned attack corpus (benchmarks/attack_corpus.json,
+# ADR-0020). All quantifiers are bounded / literal-anchored — the ReDoS gate
+# (tests/test_limits.py) fails CI if an edit here regresses to backtracking.
 _INJECTION_MARKERS = [
-    re.compile(r"(?i)ignore\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|messages?)"),
-    re.compile(r"(?i)disregard\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier)"),
-    re.compile(r"(?i)you\s+are\s+now\s+(?:a|an|in|the|no longer)\b"),
+    # -- English: override / disregard prior context --------------------------
+    re.compile(r"(?i)ignore\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier|preceding|the\s+system)\s+(?:instructions?|prompts?|messages?|directions?|context|rules?)"),
+    re.compile(r"(?i)disregard\s+(?:all\s+|the\s+|your\s+|any\s+)*(?:previous|prior|above|earlier|preceding)"),
+    re.compile(r"(?i)forget\s+(?:everything|all|(?:your|the|all|any)\s+(?:previous\s+)?(?:instructions?|prompts?|rules?|directions?)|previous|what\s+you\s+were\s+told)"),
+    re.compile(r"(?i)\boverride\s+(?:all\s+|your\s+|the\s+|any\s+|previous\s+|prior\s+)*(?:instructions?|guidelines?|rules?|settings?|safety|restrictions?|filters?|polic(?:y|ies))"),
+    # -- English: role hijack / jailbreak framing -----------------------------
+    re.compile(r"(?i)you\s+are\s+(?:now|hereby)\s+(?:a|an|in|the|no\s+longer|going\s+to|dan\b|free|unrestricted|jailbroken|uncensored)"),
+    re.compile(r"(?i)\bfrom\s+now\s+on,?\s+(?:you\s+(?:are|will|must)|ignore|respond|act)"),
+    re.compile(r"(?i)\bpretend\s+(?:to\s+be|you\s+are|that\s+you)"),
+    re.compile(r"(?i)\bact\s+as\s+(?:an?\s+)?(?:unrestricted|jailbroken|uncensored|evil|dan\b|developer)"),
+    re.compile(r"(?i)\b(?:do\s+anything\s+now|developer\s+mode|jailbreak(?:en|ing)?|unrestricted\s+mode|god\s+mode)\b"),
+    # -- English: prompt / instruction exfiltration ---------------------------
     re.compile(r"(?i)\bsystem\s+prompt\b"),
-    re.compile(r"(?i)new\s+instructions?\s*:"),
-    re.compile(r"(?i)forget\s+(?:everything|all|your\s+instructions|previous)"),
-    re.compile(r"(?i)</?(?:system|assistant|user)>"),
+    re.compile(r"(?i)\b(?:reveal|show|print|repeat|display|expose|leak|disclose|dump|output|give\s+me|tell\s+me)\b[^.\n]{0,40}?\b(?:system\s+prompt|system\s+message|initial\s+(?:prompt|instructions?)|your\s+(?:instructions?|prompt|guidelines?|rules?|configuration)|the\s+prompt)"),
+    re.compile(r"(?i)new\s+(?:instructions?|task|directive|system\s+prompt)\s*:"),
+    # -- Structural: forged role / channel tags -------------------------------
+    re.compile(r"(?i)</?(?:system|assistant|user|im_start|im_end|tool)>"),
+    re.compile(r"(?i)\[/?(?:system|inst|assistant)\]"),
+    # -- Multilingual "ignore/forget previous instructions" -------------------
+    # Curated for the highest-traffic languages; each requires the adversarial
+    # verb AND an instruction/rule object within a bounded gap, so benign prose
+    # ("please read the instructions") does not trip. Corpus-gated + FP-tested.
+    re.compile(r"(?i)\b(?:ignoriere?|vergiss|missachte)\b[^.\n]{0,30}?\b(?:anweisungen|befehle|vorgaben|anweisung)\b"),   # de
+    re.compile(r"(?i)\b(?:ignora|olvida|olvidad|descarta|desatiende)\b[^.\n]{0,30}?\b(?:instrucciones|indicaciones|órdenes|reglas)\b"),  # es
+    re.compile(r"(?i)\b(?:ignore[zr]?|oublie[zr]?|négligez?)\b[^.\n]{0,30}?\b(?:instructions|consignes|règles|directives)\b"),  # fr
+    re.compile(r"(?i)\b(?:ignora|dimentica|trascura)\b[^.\n]{0,30}?\b(?:istruzioni|indicazioni|regole)\b"),  # it
+    re.compile(r"(?i)\b(?:ignore|ignora|esqueça|esquece|desconsidere)\b[^.\n]{0,30}?\b(?:instruções|orientações|regras)\b"),  # pt
+    re.compile(r"(?:忽略|无视|忽视|忘记|忘掉)[^。\n]{0,12}?(?:指令|指示|命令|规则|提示|要求)"),  # zh (no \b: CJK has no word chars)
 ]
 
 _KEEP_CONTROL = {"\t", "\n", "\r"}
@@ -146,11 +199,17 @@ def _fingerprint(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def screen(text: str, *, source_trust: TrustTier) -> DefenseDecision:
-    """Screen raw text at the ingestion boundary; returns a deterministic decision."""
+def screen(text: str, *, source_trust: TrustTier, redact_pii: bool = False) -> DefenseDecision:
+    """Screen raw text at the ingestion boundary; returns a deterministic decision.
+
+    Secrets are ALWAYS redacted (defense in depth). PII (email/SSN/phone) is
+    redacted only when ``redact_pii=True`` — off by default so code ingestion
+    isn't corrupted by author emails and number sequences (ADR-0022).
+    """
     content = sanitize_unicode(text)
     redactions: list[str] = []
-    for name, pattern in _SECRET_PATTERNS:
+    patterns = _SECRET_PATTERNS + _PII_PATTERNS if redact_pii else _SECRET_PATTERNS
+    for name, pattern in patterns:
         def _sub(match: "re.Match[str]", _name: str = name) -> str:
             redactions.append(f"{_name}:{_fingerprint(match.group(0))}")
             return f"[REDACTED:{_name}]"
@@ -187,14 +246,16 @@ def screened_record(
     provenance: Provenance,
     trust_tier: TrustTier,
     metadata: Optional[Mapping[str, object]] = None,
+    redact_pii: bool = False,
     **kwargs: object,
 ) -> MemoryRecord:
     """Screen raw text, then build a record from the cleaned content + adjusted trust.
 
     Screening happens BEFORE id/hash computation, so the content-address reflects
     the stored (cleaned) content. Quarantined records get ``status=QUARANTINED``.
+    ``redact_pii`` opts into PII redaction (ADR-0022).
     """
-    decision = screen(content, source_trust=trust_tier)
+    decision = screen(content, source_trust=trust_tier, redact_pii=redact_pii)
     if not decision.content:
         raise ValueError(
             "content is empty after firewall sanitization "
@@ -219,19 +280,48 @@ def screened_record(
     return record
 
 
+_ENVELOPE_HEADER_RE = re.compile(
+    r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
+)
+_ROLE_TAG_RE = re.compile(r"(?i)</?(?:system|assistant|user)>")
+
+
+def _sub_folded(pattern: "re.Pattern[str]", repl: str, text: str) -> str:
+    """Like ``pattern.sub(repl, text)`` but MATCH against a confusable-folded copy.
+
+    A homoglyph-spoofed delimiter (e.g. Cyrillic 'і' in 'dіrectives') is caught
+    while the ORIGINAL text is what gets edited. ``_CONFUSABLES`` maps single
+    char → single char, so match spans align 1:1 between the folded and original
+    copies. Folding is detection-only here — legitimate non-Latin content that
+    isn't a forged delimiter is preserved byte-for-byte.
+    """
+    folded = text.translate(_CONFUSABLES)
+    out: list[str] = []
+    last = 0
+    for m in pattern.finditer(folded):
+        out.append(text[last:m.start()])
+        out.append(repl)
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
+
+
 def _neutralize_delimiters(text: str) -> str:
-    """Stop a memory from forging the envelope's own section markers / role tags."""
+    """Stop a memory from forging the envelope's own section markers / role tags.
+
+    Header and role-tag matching folds cross-script confusables first, so a
+    homoglyph-spoofed 'Trusted dіrectives' can't slip a forged header past the
+    data frame — the same defense the ingest markers use.
+    """
     out = sanitize_unicode(text)
     # Neutralize the envelope's own section headers regardless of the leading
     # markup used to forge them (#, **bold**, setext ===/---, blockquote >),
     # not only a '#'-anchored heading.
-    out = re.sub(
-        r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$",
-        "[marker]", out,
-    )
-    out = re.sub(r"(?i)</?(?:system|assistant|user)>", "[tag]", out)
+    out = _sub_folded(_ENVELOPE_HEADER_RE, "[marker]", out)
+    out = _sub_folded(_ROLE_TAG_RE, "[tag]", out)
     # Defuse a forged evidence index so a stored string can't fake the renderer's
-    # own '[n]' numbering: rewrite any line-leading [12] to (12).
+    # own '[n]' numbering: rewrite any line-leading [12] to (12). (Digits aren't
+    # confusable-folded; NFKC in sanitize_unicode already folds fullwidth digits.)
     out = re.sub(r"(?m)^(\s*)\[(\d+)\]", r"\1(\2)", out)
     return out
 

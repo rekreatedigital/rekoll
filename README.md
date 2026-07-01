@@ -97,6 +97,13 @@ More recipes (per audience, copy-paste): **[docs/QUICKSTART.md](docs/QUICKSTART.
 Point Rekoll at your own database later via `Memory(backend=...)` (Postgres/Supabase
 adapters land in a later phase).
 
+Bulk-ingested files are treated as **third-party** by default: they land at
+`UNVERIFIED` trust so the firewall can quarantine any injection markers they
+contain, and they never reach the recall envelope's instruction channel. Vouch
+for a tree you control with `mem.ingest_path(".", trust=TrustTier.CURATED)`. Your
+own first-person notes via `mem.remember(...)` stay at `OWNER` (see
+[ADR-0016](docs/adr/0016-ingest-trust-default.md)).
+
 ### Develop Rekoll itself
 
 ```bash
