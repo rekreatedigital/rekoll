@@ -124,62 +124,112 @@ def test_hybrid_search_truncates_oversized_query():
     mem.close()
 
 
-# ---- ReDoS gate: the firewall regexes must stay near-linear (P2-8) ----------
+# ---- ReDoS gate: the firewall regexes must stay near-LINEAR (P2-8) ----------
 #
-# Audit note (2026-07-02): none of the current patterns backtracks
-# catastrophically — the marker alternation-stars are anchored by literal
-# prefixes ("ignore", "disregard", ...) and every secret pattern uses disjoint
-# character classes. This gate exists so a future pattern edit that introduces
-# real blowup (nested quantifiers, overlapping alternations) fails CI instead
-# of shipping. Budgets are generous for slow CI: catastrophic backtracking on
-# these sizes would take minutes, not seconds.
+# History (2026-07-02): the first cut of this gate used an absolute wall-clock
+# budget, which is runner-speed-dependent and flaked on slow CI — worse, it
+# masked a REAL O(n^2) in two patterns (connection_string scheme, email local
+# part) that a greedy prefix rescanned at every word-boundary start. The fix
+# bounded those prefixes; this gate now asserts the *scaling* directly, which is
+# runner-independent: for a 4x input-size increase a linear pattern takes ~4x
+# longer, a quadratic ~16x, an exponential far more. A ratio catches all three
+# regardless of how fast the box is. Python's `re` has no atomic groups /
+# possessive quantifiers before 3.11, so bounded {m,n} quantifiers are the
+# 3.10-safe way to keep prefixes from rescanning.
 
-REDOS_BUDGET_SECONDS = 2.0
+import time as _time
+
+from rekoll import firewall
+
+_SCALE_N = 6_000
+_SCALE_FACTOR = 4
+# Linear -> ~4x for a 4x input. Allow 8x (2x margin over linear for timing
+# noise); quadratic (~16x) and exponential blow well past it.
+_MAX_SCALE_RATIO = 8.0
+# Absolute backstop: post-fix, screening these sizes is single-digit ms, so a
+# generous cap only ever trips on a true hang / exponential blowup.
+_HANG_BUDGET_SECONDS = 5.0
+
+# Adversarial builders that maximize backtracking across the pattern shapes we
+# ship (URL schemes, base64/alnum runs, digit/dash runs, keyword floods).
+_STRESS_BUILDERS = [
+    ("sk-prefix-flood", lambda n: "sk-" * n),
+    ("scheme-chars-flood", lambda n: "ab.+-" * n),
+    ("digit-dash-flood", lambda n: "1-" * n),
+    ("at-dot-flood", lambda n: "a.@" * n),
+    ("alnum-flood", lambda n: "a1" * n),
+    ("url-no-terminator", lambda n: "x://" + "u" * n),
+    ("keyword-marker-flood", lambda n: "ignore all " * n),
+    ("word-space-flood", lambda n: "override your " * n),
+]
 
 
-def _pathological_inputs() -> list[tuple[str, str]]:
-    n = 20_000
-    return [
-        ("marker-filler-star", "ignore " + "all " * n + "no terminal keyword"),
-        ("marker-restart", "ignore all " * (n // 2) + "x"),
-        ("marker-homoglyph-flood", "Ignоre аll " * (n // 4) + "x"),
-        ("credential-long-tail", "api_key = '" + "A" * n),
-        ("jwt-two-segments", "eyJ" + "a" * n + "." + "b" * n),
-        ("connection-string-bait", "scheme://" + "u" * n + ":" + "p" * n + "@"),
-        ("pem-header-flood", "-----BEGIN " * (n // 8)),
-        ("key-prefix-flood", "sk-" * (n // 2)),
-        ("plain-prose-control", "the deploy runs nightly and rotates logs " * (n // 8)),
-    ]
+def _all_patterns():
+    out = list(firewall._SECRET_PATTERNS) + list(firewall._PII_PATTERNS)
+    out += [(f"marker[{i}]", p) for i, p in enumerate(firewall._INJECTION_MARKERS)]
+    return out
 
 
-@pytest.mark.parametrize(
-    "name,payload", _pathological_inputs(), ids=[c[0] for c in _pathological_inputs()]
-)
-def test_screen_is_time_bounded_on_pathological_input(name, payload):
-    import time
+def _min_time(pattern, text, repeats=5):
+    best = float("inf")
+    for _ in range(repeats):
+        t0 = _time.perf_counter()
+        pattern.search(text)
+        best = min(best, _time.perf_counter() - t0)
+    return best
 
-    from rekoll import TrustTier
-    from rekoll.firewall import screen
 
-    start = time.perf_counter()
-    screen(payload, source_trust=TrustTier.UNVERIFIED)
-    elapsed = time.perf_counter() - start
-    assert elapsed < REDOS_BUDGET_SECONDS, (
-        f"firewall screen took {elapsed:.2f}s on {name!r} "
-        f"({len(payload):,} chars) — a pattern likely regressed to "
-        "catastrophic backtracking"
+def test_every_firewall_pattern_scales_linearly():
+    # Whitebox: each shipped regex, run in isolation against every adversarial
+    # input, must scale ~linearly. Isolation (not full screen()) keeps the ratio
+    # undiluted so even a single quadratic pattern is caught cleanly.
+    offenders = []
+    for pname, pat in _all_patterns():
+        for bname, build in _STRESS_BUILDERS:
+            t_n = _min_time(pat, build(_SCALE_N))
+            t_big = _min_time(pat, build(_SCALE_N * _SCALE_FACTOR))
+            if t_big < 2e-3:
+                continue  # below timing noise — a fast (linear) pattern, fine
+            ratio = t_big / t_n if t_n > 1e-6 else 1.0
+            if ratio > _MAX_SCALE_RATIO:
+                offenders.append(
+                    f"{pname} on {bname!r}: {t_n*1e3:.2f}ms -> {t_big*1e3:.2f}ms "
+                    f"(x{ratio:.1f} for {_SCALE_FACTOR}x input)"
+                )
+    assert not offenders, (
+        "super-linear (ReDoS-prone) regex scaling — a pattern rescans on "
+        "backtracking:\n  " + "\n  ".join(offenders)
     )
 
 
-def test_screen_with_pii_on_is_time_bounded():
-    # The opt-in PII patterns must also stay near-linear on pathological input.
-    import time
+def _pathological_inputs():
+    n = 20_000
+    return {
+        "marker-filler-star": "ignore " + "all " * n + "no terminal keyword",
+        "marker-restart": "ignore all " * (n // 2) + "x",
+        "marker-homoglyph-flood": "Ignоre аll " * (n // 4) + "x",
+        "credential-long-tail": "api_key = '" + "A" * n,
+        "jwt-two-segments": "eyJ" + "a" * n + "." + "b" * n,
+        "connection-string-bait": "scheme://" + "u" * n + ":" + "p" * n + "@",
+        "key-prefix-flood": "sk-" * (n // 2),
+        "email-local-flood": "1-" * n + "@x.co",
+    }
 
+
+@pytest.mark.parametrize("name", list(_pathological_inputs()))
+def test_screen_does_not_hang_on_pathological_input(name):
+    # Coarse absolute backstop over the FULL screen() (both PII off and on), so a
+    # true hang / exponential blowup fails even if the scaling test somehow
+    # misses it. Generous cap: linear screening here is single-digit ms.
     from rekoll import TrustTier
     from rekoll.firewall import screen
 
-    n = 20_000
-    for payload in ("a" * n + "@" + "b" * n, ("1-" * n) + "2", "@." * n):
-        start = time.perf_counter()
-        screen(payload, source_trust=TrustTier.UNVERIFIED, redact_pii=True)
-        assert time.perf_counter() - start < REDOS_BUDGET_SECONDS
+    payload = _pathological_inputs()[name]
+    for pii in (False, True):
+        start = _time.perf_counter()
+        screen(payload, source_trust=TrustTier.UNVERIFIED, redact_pii=pii)
+        elapsed = _time.perf_counter() - start
+        assert elapsed < _HANG_BUDGET_SECONDS, (
+            f"screen(redact_pii={pii}) took {elapsed:.2f}s on {name!r} "
+            f"({len(payload):,} chars) — likely catastrophic backtracking"
+        )

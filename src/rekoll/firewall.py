@@ -66,8 +66,12 @@ _SECRET_PATTERNS = [
     ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # scheme://user:pass@host — redacts the whole DSN (host included) so an
-    # embedded '@' in the password can't leak a tail.
-    ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
+    # embedded '@' in the password can't leak a tail. The scheme is bounded to
+    # {0,30} (real URI schemes are short, RFC 3986) so a "sk-sk-..." / "ab.+-..."
+    # flood can't make the greedy prefix rescan the whole string at every
+    # word-boundary start — that was O(n^2). Bounded quantifier keeps it linear
+    # and stays Python 3.10-safe (no atomic groups / possessive quantifiers).
+    ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,30}://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
     ("credential_assignment", re.compile(
         r"(?i)(?:api[_-]?key|secret|password|passwd|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}['\"]?"
     )),
@@ -80,7 +84,11 @@ _SECRET_PATTERNS = [
 # corpora opts in via ``Memory(redact_pii=True)``. Conservative, separator-
 # anchored patterns keep false positives low even when enabled.
 _PII_PATTERNS = [
-    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
+    # Local part bounded to 64 and domain to 255 (RFC 5321 limits) so a
+    # "1-1-1-..." flood can't make the greedy local part rescan to the end at
+    # every word-boundary start — that was O(n^2), same class of bug as the
+    # connection_string scheme. Bounded quantifiers keep it linear (3.10-safe).
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,255}\.[A-Za-z]{2,}\b")),
     ("us_ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),  # dashed form only — bare 9 digits is too ambiguous
     # Two separators required (ddd-ddd-dddd, optional +cc / parens) so version
     # strings, ports, and IPs don't trip. Bare digit runs are intentionally missed.
