@@ -87,6 +87,30 @@ def network_guard(monkeypatch) -> list[str]:
     return offenders
 
 
+def test_block_fastembed_blocks_cached_submodules_too(monkeypatch):
+    """The CLI gates lean on this helper. A bare ``sys.modules['fastembed'] =
+    None`` sentinel leaks: a submodule cached by an earlier test (e.g.
+    ``fastembed.rerank.cross_encoder`` via the auto reranker) would still
+    import. Plant fakes and prove the block kills every route in."""
+    import types
+
+    for name in ("fastembed", "fastembed.rerank", "fastembed.rerank.cross_encoder"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+
+    _block_fastembed(monkeypatch)
+
+    with pytest.raises(ImportError):
+        import fastembed  # noqa: F401
+    with pytest.raises(ImportError):
+        from fastembed.rerank.cross_encoder import TextCrossEncoder  # noqa: F401
+
+    # And the facade's auto pickers take their no-extra fallbacks under the block.
+    from rekoll.memory import _auto_embedder, _auto_reranker
+
+    assert isinstance(_auto_embedder(), StubEmbedder)
+    assert _auto_reranker() is None
+
+
 def test_default_path_makes_no_outbound_network_call(network_guard):
     """ADR-0007: the privacy guarantee. A full write+read cycle on the default
     (stub, local SQLite) path must not open any non-loopback socket."""
