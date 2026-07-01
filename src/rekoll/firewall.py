@@ -280,19 +280,48 @@ def screened_record(
     return record
 
 
+_ENVELOPE_HEADER_RE = re.compile(
+    r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
+)
+_ROLE_TAG_RE = re.compile(r"(?i)</?(?:system|assistant|user)>")
+
+
+def _sub_folded(pattern: "re.Pattern[str]", repl: str, text: str) -> str:
+    """Like ``pattern.sub(repl, text)`` but MATCH against a confusable-folded copy.
+
+    A homoglyph-spoofed delimiter (e.g. Cyrillic 'і' in 'dіrectives') is caught
+    while the ORIGINAL text is what gets edited. ``_CONFUSABLES`` maps single
+    char → single char, so match spans align 1:1 between the folded and original
+    copies. Folding is detection-only here — legitimate non-Latin content that
+    isn't a forged delimiter is preserved byte-for-byte.
+    """
+    folded = text.translate(_CONFUSABLES)
+    out: list[str] = []
+    last = 0
+    for m in pattern.finditer(folded):
+        out.append(text[last:m.start()])
+        out.append(repl)
+        last = m.end()
+    out.append(text[last:])
+    return "".join(out)
+
+
 def _neutralize_delimiters(text: str) -> str:
-    """Stop a memory from forging the envelope's own section markers / role tags."""
+    """Stop a memory from forging the envelope's own section markers / role tags.
+
+    Header and role-tag matching folds cross-script confusables first, so a
+    homoglyph-spoofed 'Trusted dіrectives' can't slip a forged header past the
+    data frame — the same defense the ingest markers use.
+    """
     out = sanitize_unicode(text)
     # Neutralize the envelope's own section headers regardless of the leading
     # markup used to forge them (#, **bold**, setext ===/---, blockquote >),
     # not only a '#'-anchored heading.
-    out = re.sub(
-        r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$",
-        "[marker]", out,
-    )
-    out = re.sub(r"(?i)</?(?:system|assistant|user)>", "[tag]", out)
+    out = _sub_folded(_ENVELOPE_HEADER_RE, "[marker]", out)
+    out = _sub_folded(_ROLE_TAG_RE, "[tag]", out)
     # Defuse a forged evidence index so a stored string can't fake the renderer's
-    # own '[n]' numbering: rewrite any line-leading [12] to (12).
+    # own '[n]' numbering: rewrite any line-leading [12] to (12). (Digits aren't
+    # confusable-folded; NFKC in sanitize_unicode already folds fullwidth digits.)
     out = re.sub(r"(?m)^(\s*)\[(\d+)\]", r"\1(\2)", out)
     return out
 
