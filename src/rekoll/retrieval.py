@@ -83,6 +83,7 @@ def hybrid_search(
     reranker: Optional[Reranker] = None,
     candidates: Optional[int] = None,
     include_quarantined: bool = False,
+    use_vector: bool = True,
 ) -> QueryResult:
     """Vector + (optional) lexical search fused by RRF, then optionally reranked.
 
@@ -98,17 +99,30 @@ def hybrid_search(
     Every candidate is content-hash verified before surfacing; a mismatch
     (direct-DB tampering) is demoted to QUARANTINED in memory and warned about
     (ADR-0019).
+
+    ``use_vector=False`` refuses the vector leg entirely — the query is never
+    embedded and ``vector_query`` is never called. Callers use this for honest
+    lexical-only degradation when the scope's stored vectors are not comparable
+    to the current embedder (embedder-identity mismatch, ADR-0024). With no
+    lexical capability either, the result is honestly empty rather than a
+    garbage ranking.
     """
     query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
     pool = candidates or max(k * 6, k)
-    query_vec = embedder.embed([query])[0]
-    lists: list[Iterable[QueryHit]] = [
-        adapter.vector_query(scope=scope, embedding=query_vec, k=pool, kind=kind, where=where).hits
-    ]
+    lists: list[Iterable[QueryHit]] = []
+    if use_vector:
+        query_vec = embedder.embed([query])[0]
+        lists.append(
+            adapter.vector_query(scope=scope, embedding=query_vec, k=pool, kind=kind, where=where).hits
+        )
     if adapter.supports(CAP_LEXICAL):
         lists.append(
             adapter.lexical_query(scope=scope, text=query, k=pool, kind=kind, where=where).hits
         )
+    if not lists:
+        # No vector leg (refused) AND no lexical capability: honestly empty
+        # rather than a garbage ranking (ADR-0024).
+        return QueryResult(hits=())
     fused = _verify_hits(rrf_fuse(lists, k=rrf_k, top=pool))
     if not include_quarantined:
         fused = [h for h in fused if h.record.status is not Status.QUARANTINED]
