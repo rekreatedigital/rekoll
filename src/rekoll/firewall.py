@@ -73,6 +73,20 @@ _SECRET_PATTERNS = [
     )),
 ]
 
+# PII patterns — OPT-IN only (ADR-0021). Default-OFF because Rekoll's core JTBD
+# is "understand my codebase", and code/git logs are full of legitimate emails
+# (author lines, CODEOWNERS, mailto:) and number sequences; default-on redaction
+# would corrupt legitimate content and gut recall. A user handling PII-bearing
+# corpora opts in via ``Memory(redact_pii=True)``. Conservative, separator-
+# anchored patterns keep false positives low even when enabled.
+_PII_PATTERNS = [
+    ("email", re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")),
+    ("us_ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),  # dashed form only — bare 9 digits is too ambiguous
+    # Two separators required (ddd-ddd-dddd, optional +cc / parens) so version
+    # strings, ports, and IPs don't trip. Bare digit runs are intentionally missed.
+    ("phone", re.compile(r"(?<!\w)(?:\+\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\w)")),
+]
+
 # Prompt-injection markers (case-insensitive). These lower trust on UNTRUSTED input.
 # Tested against the homoglyph-folded, casefolded detection copy (``_marker_scan``),
 # and regression-gated by the versioned attack corpus (benchmarks/attack_corpus.json,
@@ -177,11 +191,17 @@ def _fingerprint(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
 
 
-def screen(text: str, *, source_trust: TrustTier) -> DefenseDecision:
-    """Screen raw text at the ingestion boundary; returns a deterministic decision."""
+def screen(text: str, *, source_trust: TrustTier, redact_pii: bool = False) -> DefenseDecision:
+    """Screen raw text at the ingestion boundary; returns a deterministic decision.
+
+    Secrets are ALWAYS redacted (defense in depth). PII (email/SSN/phone) is
+    redacted only when ``redact_pii=True`` — off by default so code ingestion
+    isn't corrupted by author emails and number sequences (ADR-0021).
+    """
     content = sanitize_unicode(text)
     redactions: list[str] = []
-    for name, pattern in _SECRET_PATTERNS:
+    patterns = _SECRET_PATTERNS + _PII_PATTERNS if redact_pii else _SECRET_PATTERNS
+    for name, pattern in patterns:
         def _sub(match: "re.Match[str]", _name: str = name) -> str:
             redactions.append(f"{_name}:{_fingerprint(match.group(0))}")
             return f"[REDACTED:{_name}]"
@@ -218,14 +238,16 @@ def screened_record(
     provenance: Provenance,
     trust_tier: TrustTier,
     metadata: Optional[Mapping[str, object]] = None,
+    redact_pii: bool = False,
     **kwargs: object,
 ) -> MemoryRecord:
     """Screen raw text, then build a record from the cleaned content + adjusted trust.
 
     Screening happens BEFORE id/hash computation, so the content-address reflects
     the stored (cleaned) content. Quarantined records get ``status=QUARANTINED``.
+    ``redact_pii`` opts into PII redaction (ADR-0021).
     """
-    decision = screen(content, source_trust=trust_tier)
+    decision = screen(content, source_trust=trust_tier, redact_pii=redact_pii)
     if not decision.content:
         raise ValueError(
             "content is empty after firewall sanitization "

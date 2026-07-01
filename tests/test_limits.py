@@ -169,3 +169,17 @@ def test_screen_is_time_bounded_on_pathological_input(name, payload):
         f"({len(payload):,} chars) — a pattern likely regressed to "
         "catastrophic backtracking"
     )
+
+
+def test_screen_with_pii_on_is_time_bounded():
+    # The opt-in PII patterns must also stay near-linear on pathological input.
+    import time
+
+    from rekoll import TrustTier
+    from rekoll.firewall import screen
+
+    n = 20_000
+    for payload in ("a" * n + "@" + "b" * n, ("1-" * n) + "2", "@." * n):
+        start = time.perf_counter()
+        screen(payload, source_trust=TrustTier.UNVERIFIED, redact_pii=True)
+        assert time.perf_counter() - start < REDOS_BUDGET_SECONDS

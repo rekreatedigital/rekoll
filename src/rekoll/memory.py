@@ -124,6 +124,7 @@ class Memory:
         reranker: object = "auto",
         screen: bool = True,
         default_trust: TrustTier = TrustTier.OWNER,
+        redact_pii: bool = False,
         max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     ) -> None:
@@ -143,6 +144,7 @@ class Memory:
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
+        self._redact_pii = redact_pii
         self._max_content_chars = max_content_chars
         self._max_file_bytes = max_file_bytes
 
@@ -451,7 +453,8 @@ class Memory:
         if self._screen:
             return screened_record(
                 scope=self.scope, kind=kind, content=content,
-                provenance=provenance, trust_tier=trust, metadata=metadata, **kwargs,
+                provenance=provenance, trust_tier=trust, metadata=metadata,
+                redact_pii=self._redact_pii, **kwargs,
             )
         return MemoryRecord.create(
             scope=self.scope, kind=kind, content=content,

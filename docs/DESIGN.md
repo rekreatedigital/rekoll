@@ -33,8 +33,10 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   Read-time ranking is currently RRF → optional rerank → quarantine exclusion, with
   **no trust/recency/proof weighting**. The structural defense (directives only from
   the trusted tier; quarantine never surfaces) IS shipped and does the load-bearing
-  work. Note §6.4 (weights 1.0/0.7/0.4) and §7 ("capped ~±20%") give conflicting
-  guidance — resolve before implementing (§13.3).
+  work. The earlier §6.4-vs-§7 contradiction (hard 1.0/0.7/0.4 weights vs a
+  "~±20% cap") is **resolved** to a single story — a bounded multiplicative trust
+  factor capped near ±20%, QUARANTINED excluded (ADR-0020) — still future work to
+  implement.
 - `sqlite-vec` acceleration (§5): vector search is currently an exact pure-Python
   cosine scan. The adapter contract is unchanged; only the index backend is pending.
 - The RRF **interleave** alternative (§7); real **LongMemEval/LoCoMo** gates (only a
@@ -162,7 +164,7 @@ Eight cooperating layers:
 1. **Data-vs-instructions envelope** — retrieved memories are never concatenated into the instruction region; returned in a typed envelope with a `directives` field populated **only from the TRUSTED tier** and an `evidence` field for everything else, with delimiter-spoofing neutralized (the explicit fix for Hindsight injecting recalled memory straight into a system message).
 2. **Monotonic, never-auto-elevating trust** — a derived memory inherits `trust = MIN(parents)`; a poisoned low-trust chunk can't launder itself by being summarized.
 3. **Ingest-time screen** — `ALLOW/REDACT/BLOCK` with fingerprint-not-leak previews + an NFKC-normalized injection-phrase detector (homoglyph/zero-width/bidi-aware); **default action on external content is QUARANTINE-not-drop** (auditable, no denial-of-ingest vector).
-4. **Deterministic zero-LLM trust-aware re-rank** (TRUSTED=1.0 / MEDIUM≈0.7 / LOW≈0.4, QUARANTINED excluded) — even an embedding-optimized AgentPoison trigger is penalized and routed to evidence, never directives.
+4. **Deterministic zero-LLM trust-aware re-rank** — a **bounded multiplicative trust factor capped near ±20%** (OWNER/CURATED at the top of the band, UNVERIFIED lightly penalized, QUARANTINED excluded outright), applied alongside recency/proof (ADR-0020). The cap is deliberate: the *structural* separation (directives only from the trusted tier; quarantine never surfaces) is the load-bearing defense, so the ranking factor only nudges an embedding-optimized AgentPoison trigger down toward evidence without crushing legitimate low-trust recall.
 5. **SHA-256 content-addressing** for tamper-evidence + dedup; **optional signing of the TRUSTED tier** (an unsigned mutation auto-demotes to QUARANTINED).
 6. **Optional local PII detection** (regex floor + opt-in local NER, never a remote API).
 7. **Auth DEFAULT-ON** — the server **refuses to start bound to a non-loopback interface without an auth provider** (fatal startup error; the explicit inversion of Hindsight's `0.0.0.0` + allow-all default).
@@ -174,7 +176,7 @@ Eight cooperating layers:
 
 ## 7. Retrieval & Learning
 
-**Retrieval — 100% zero-LLM (CI-enforced; a mocked-client test asserts `call_count==0`).** Fixed-arm parallel fetch (semantic cosine + BM25 Okapi k1=1.5/b=0.75, optional graph/temporal arms, each capped) → **RRF k=60** (interleave alternative shipped for the documented RRF average-down case) → local `ms-marco-MiniLM` cross-encoder rerank (CPU, no network, default-on with a rank-seeded passthrough fallback) → multiplicative `CE_norm × recency × temporal × proof × trust` with small alphas capped near ±20%. Verbatim per-rule store is the always-on floor; advisory indexes can never inject or hide a record. Chunking is one-record-per-rule, structure-aware (tree-sitter for code, headings for markdown), content-hash idempotent with parent/sibling FK links.
+**Retrieval — 100% zero-LLM (CI-enforced; a mocked-client test asserts `call_count==0`).** Fixed-arm parallel fetch (semantic cosine + BM25 Okapi k1=1.5/b=0.75, optional graph/temporal arms, each capped) → **RRF k=60** (interleave alternative shipped for the documented RRF average-down case) → local `ms-marco-MiniLM` cross-encoder rerank (CPU, no network, default-on with a rank-seeded passthrough fallback) → multiplicative `CE_norm × recency × temporal × proof × trust`, each a small factor capped near ±20% (trust included — the single resolved story, ADR-0020; QUARANTINED is excluded before ranking, not merely down-weighted). Verbatim per-rule store is the always-on floor; advisory indexes can never inject or hide a record. Chunking is one-record-per-rule, structure-aware (tree-sitter for code, headings for markdown), content-hash idempotent with parent/sibling FK links.
 
 **Learning — batched, background, the only place an LLM writes.** Consolidation reads new raw facts + K nearest observations → strict `{creates, updates, deletes}` op-stream with a **required reason** per op (the audit trail that feeds the gate), transactional with adaptive batch-halving, tag-scoped, backstopped by a deterministic create-time **and** update-time SQL semantic-dedup. Three physical tiers: raw verbatim facts → consolidated observations (proof_count + algorithmic trend) → on-demand reflect answers.
 
@@ -260,7 +262,7 @@ A single **tight monorepo** (not Hindsight's 16-separately-licensed sub-packages
 
 1. **Index ownership** — does `StorageAdapter` own both vector and lexical indexes (unified-per-adapter) or can they split? Leaning unified-per-adapter w/ a capability flag. *(before P1 closes)*
 2. **Default fusion** — RRF k=60 vs MemPalace's 0.6/0.4 weighted blend, pending a LongMemEval+LoCoMo head-to-head; may be profile-dependent.
-3. **Exact trust-weight values** (1.0 / 0.7 / 0.4) — tune empirically against the MINJA/AgentPoison reproduction so down-ranking defeats optimized triggers without crushing legitimate low-trust recall.
+3. **Exact trust-factor values** — the *shape* is settled (a bounded multiplicative factor capped near ±20%, QUARANTINED excluded, ADR-0020); the exact per-tier values within that band are still to be tuned empirically against the MINJA/AgentPoison reproduction so down-ranking defeats optimized triggers without crushing legitimate low-trust recall.
 4. **Trust-score formula inputs/weighting** (source reputation, graduated-vs-raw, screen verdict, proof_count, trend) — settle jointly with the firewall; ADR before P0 closes.
 5. **`episode` kind lifecycle** — thin table vs view over verbatim_records grouped by session.
 6. **Scope granularity** — per-project / per-source / per-trust-tier? Affects isolation + DB-schema partitioning.
