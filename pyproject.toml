@@ -27,6 +27,9 @@ dependencies = []
 dev = ["pytest>=8"]
 embeddings = ["fastembed>=0.3"]
 
+[project.scripts]
+rekoll = "rekoll.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/ryankyleocampo-github/rekoll"
 Source = "https://github.com/ryankyleocampo-github/rekoll"
