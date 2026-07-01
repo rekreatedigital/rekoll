@@ -36,6 +36,11 @@ the underlying pure functions stay composable:
   embedding/lexical search (read path must degrade, never DoS — truncation
   over raising). Shipped with the read-path hardening commit (P2-8, this ADR
   governs the value).
+- `consolidate()` (the third write door, added by the providers PR): the LLM
+  summary is bound by the same `max_content_chars` and **raises** when
+  exceeded — a summary should be shorter than its sources, so an over-long one
+  means the consolidator failed to condense, not that we should store an
+  unbounded model output.
 
 Chunk sizes are already bounded by the chunkers (≤ ~2 000 chars), so ingest
 chunks need no separate cap. Limits are overridable (power users, tests) but

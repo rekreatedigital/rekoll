@@ -60,6 +60,21 @@ def test_consolidate_by_ids_full_provenance(mem):
     assert len(stored) == 1 and stored[0].content == fake.reply
 
 
+def test_consolidate_respects_max_content_chars(tmp_path):
+    # The third write door is bounded like remember() (ADR-0018): an over-long
+    # LLM summary must be rejected, not stored unbounded.
+    memory = Memory(path=":memory:", embedder=StubEmbedder(), reranker=None, max_content_chars=200)
+    memory.remember("we chose postgres over bigquery for cost")
+    runaway = FakeConsolidator(reply="x" * 201)
+    with pytest.raises(ValueError, match="max_content_chars"):
+        memory.consolidate(query="postgres", k=3, consolidator=runaway)
+    # A summary within the bound still stores.
+    ok = FakeConsolidator(reply="postgres chosen for cost.")
+    record = memory.consolidate(query="postgres", k=3, consolidator=ok)
+    assert record.content == "postgres chosen for cost."
+    memory.close()
+
+
 def test_consolidate_by_query_uses_recall_selection(mem):
     mem.remember("postgres was chosen for cost reasons")
     mem.remember("bigquery was rejected as too expensive")

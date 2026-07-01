@@ -407,9 +407,21 @@ class Memory:
         summary = consolidator.summarize([r.content for r in sources])
         if not isinstance(summary, str) or not summary.strip():
             raise ValueError("consolidator returned no text")
+        summary = summary.strip()
+        # The third write door respects the same per-record bound as remember()
+        # (ADR-0018): a summary should be SHORTER than its sources, so exceeding
+        # the cap means the consolidator failed to condense — fail loud rather
+        # than store an unbounded LLM output.
+        if len(summary) > self._max_content_chars:
+            raise ValueError(
+                f"consolidator returned {len(summary):,} chars, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a consolidation summary should be shorter than its "
+                "sources — raise max_content_chars if this is intended (ADR-0018)."
+            )
         name = str(getattr(consolidator, "name", type(consolidator).__name__))
         record = self._make_record(
-            content=summary.strip(),
+            content=summary,
             kind=Kind.OBSERVATION,
             provenance=Provenance(
                 source_uri=f"consolidator://{name}",
