@@ -309,6 +309,27 @@ def test_forget_without_a_store_fails(project, capsys):
     assert "no memory store" in capsys.readouterr().err
 
 
+def test_forget_tolerates_crlf_contaminated_ids(project, capsys):
+    # Windows pipes emit \r\n; `$(rekoll recall --ids)` in Git Bash can hand
+    # forget ids with a glued \r, which must still delete (verified live: they
+    # silently matched nothing before).
+    _remember("crlf pipeline fact one")
+    _remember("crlf pipeline fact two")
+    capsys.readouterr()
+    main(["recall", "crlf pipeline", "--ids", "-k", "2"])
+    ids = [line + "\r" for line in capsys.readouterr().out.split()]
+    assert len(ids) == 2
+    assert main(["forget", *ids]) == 0
+    assert "Forgot 2 memories." in capsys.readouterr().out
+
+
+def test_forget_with_only_whitespace_ids_fails_plainly(project, capsys):
+    _remember("keep")
+    capsys.readouterr()
+    assert main(["forget", "  ", "\r"]) == 1
+    assert "no ids given" in capsys.readouterr().err
+
+
 # -- broken-store handling (clean errors, no tracebacks) ----------------------
 
 def test_remember_with_unwritable_store_path_fails_cleanly(project, capsys):
@@ -505,6 +526,106 @@ def test_init_with_bare_filename_path_names_the_file_not_dot(project, capsys):
     assert "git-ignore ." not in out.replace("git-ignore mem.db", "")
 
 
+# -- process behavior: dying pipes, interrupts, claimed non-behaviors ----------
+
+def test_broken_pipe_exits_zero_quietly(project, capsys, monkeypatch):
+    def die(_args):
+        raise BrokenPipeError
+
+    monkeypatch.setattr("rekoll.cli.cmd_recall", die)
+    assert main(["recall", "x", "--path", ":memory:"]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_windows_style_pipe_death_exits_zero_quietly(project, capsys, monkeypatch):
+    # On Windows a write to a closed pipe raises OSError(EINVAL), not
+    # BrokenPipeError (observed live; see the CPython note on SIGPIPE).
+    import errno
+
+    def die(_args):
+        raise OSError(errno.EINVAL, "Invalid argument")
+
+    monkeypatch.setattr("rekoll.cli.cmd_recall", die)
+    assert main(["recall", "x", "--path", ":memory:"]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_pipe_death_during_the_exit_flush_is_also_caught(project, capsys, monkeypatch):
+    # The buffered case: every print succeeded, the failure only surfaces when
+    # the stream is flushed after the command returns. main() flushes inside
+    # its try block precisely so this is catchable (exit 120 otherwise).
+    _remember("a fact")
+    capsys.readouterr()
+
+    real_flush = sys.stdout.flush
+    calls = {"n": 0}
+
+    def dying_flush():
+        calls["n"] += 1
+        real_flush()
+        raise BrokenPipeError
+
+    monkeypatch.setattr(sys.stdout, "flush", dying_flush, raising=False)
+    rc = main(["recall", "fact"])
+    monkeypatch.undo()
+    assert calls["n"] >= 1  # the flush inside main() actually ran
+    assert rc == 0
+
+
+def test_real_storage_oserror_is_still_an_error(project, capsys, monkeypatch):
+    def die(_args):
+        raise OSError(28, "No space left on device")  # ENOSPC: NOT pipe death
+
+    monkeypatch.setattr("rekoll.cli.cmd_remember", die)
+    assert main(["remember", "x", "--path", ":memory:"]) == 1
+    assert "bad state" in capsys.readouterr().err
+
+
+def test_keyboard_interrupt_exits_130(project, capsys, monkeypatch):
+    def die(_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("rekoll.cli.cmd_recall", die)
+    assert main(["recall", "x", "--path", ":memory:"]) == 130
+    assert "interrupted" in capsys.readouterr().err
+
+
+def test_status_never_builds_an_embedder_and_stamps_no_identity(project, capsys, monkeypatch):
+    """status advertises 'loads no model' — enforce it: any embedder
+    construction fails the test, and a scope with no recorded identity still
+    has none after status ran."""
+    _remember("seed the store")  # writes identity for the default scope
+    capsys.readouterr()
+
+    def bomb():
+        raise AssertionError("status must not construct an embedder")
+
+    monkeypatch.setattr("rekoll.memory._auto_embedder", bomb)
+    monkeypatch.setattr("rekoll.embedding.FastEmbedEmbedder", bomb, raising=False)
+    assert main(["status"]) == 0
+    assert main(["status", "--project", "never-written"]) == 0
+    out = capsys.readouterr().out
+    assert "none recorded yet" in out  # the fresh scope...
+
+    from rekoll.adapters.registry import get_adapter
+    from rekoll.model import Scope
+
+    adapter = get_adapter("sqlite", path=DB)
+    try:  # ...and status really did not stamp an identity onto it
+        assert adapter.get_embedder_identity(scope=Scope(project="never-written")) is None
+    finally:
+        adapter.close()
+
+
+def test_doctor_fails_when_python_is_too_old(project, capsys, monkeypatch):
+    import types
+
+    monkeypatch.setattr(sys, "version_info", types.SimpleNamespace(major=3, minor=9, micro=7))
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL" in out and "3.9.7" in out
+
+
 # -- real process wiring -----------------------------------------------------
 
 def test_python_dash_m_rekoll_version():
@@ -514,3 +635,22 @@ def test_python_dash_m_rekoll_version():
     )
     assert result.returncode == 0
     assert f"rekoll {__version__}" in result.stdout
+
+
+def test_piped_output_is_lf_only_even_on_windows(tmp_path):
+    """--ids exists to be piped; \r\n bytes break `$(...)` composition in Git
+    Bash and xargs-style consumers, so piped output must be \n-only."""
+    db = str(tmp_path / "mem.db")
+    env = _env_pinned_to_this_checkout()
+    seeded = subprocess.run(
+        [sys.executable, "-m", "rekoll", "remember", "lf discipline fact", "--path", db],
+        capture_output=True, env=env,
+    )
+    assert seeded.returncode == 0
+    result = subprocess.run(
+        [sys.executable, "-m", "rekoll", "recall", "lf discipline", "--ids", "--path", db],
+        capture_output=True, env=env,  # binary capture: we are asserting on bytes
+    )
+    assert result.returncode == 0
+    assert b"\r" not in result.stdout
+    assert result.stdout.decode().startswith("rk_")

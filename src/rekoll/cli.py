@@ -21,6 +21,7 @@ Design rules for this module:
 from __future__ import annotations
 
 import argparse
+import errno
 import importlib.util
 import os
 import sqlite3
@@ -287,18 +288,24 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 def cmd_forget(args: argparse.Namespace) -> int:
     if not _require_store(args):
         return 1
+    # Ids are rk_<hex>; surrounding whitespace is never legitimate. Strip it so
+    # CRLF-contaminated pipelines (Windows \r\n through `$(...)`, id files made
+    # in an editor) can't silently match nothing.
+    ids = [i.strip() for i in args.ids if i.strip()]
+    if not ids:
+        return _fail("no ids given (did the recall --ids pipeline produce nothing?)")
     mem = _open_memory(args)
     if mem is None:
         return 1
     try:
-        removed = mem.forget(*args.ids)
+        removed = mem.forget(*ids)
     finally:
         mem.close()
     if removed == 0:
         _err("rekoll: error: no memories matched those ids (already forgotten, or a different scope/path?)")
         return 1
-    if removed < len(args.ids):
-        _out(f"Forgot {removed} of {len(args.ids)} memories (the rest didn't match).")
+    if removed < len(ids):
+        _out(f"Forgot {removed} of {len(ids)} memories (the rest didn't match).")
     else:
         _out(f"Forgot {removed} memor{'ies' if removed != 1 else 'y'}.")
     return 0
@@ -681,12 +688,27 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _quiet_pipe_death() -> None:
+    """Our stdout reader is gone (`rekoll ... | head`). Point stdout at devnull
+    so the interpreter's exit-time flush cannot raise a second error and print
+    "Exception ignored" noise after main() has already returned."""
+    try:
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+    except (OSError, ValueError):
+        pass
+
+
 def main(argv: Optional[list[str]] = None) -> int:
-    # Recall output is arbitrary user text; never let a cp1252 console crash on it.
+    # Two stream adjustments for scripting-grade output (the git/rg convention):
+    #  - errors="replace": recall output is arbitrary user text; never let a
+    #    cp1252 console crash on it.
+    #  - newline="": emit \n-only even on Windows. Piped \r\n breaks the
+    #    documented `forget $(recall --ids)` composition in Git Bash and any
+    #    xargs-style consumer (verified live: \r-suffixed ids match nothing).
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:
-                stream.reconfigure(errors="replace")
+                stream.reconfigure(errors="replace", newline="")
             except (OSError, ValueError):  # pragma: no cover - exotic hosts
                 pass
     parser = _build_parser()
@@ -695,20 +717,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.print_help()
         return 0
     try:
-        return args.func(args)
+        rc = args.func(args)
+        # Flush NOW so a dead pipe surfaces here (catchable) instead of in the
+        # interpreter's exit flush (exit code 120 + "Exception ignored" noise —
+        # observed on Windows, where buffered writes defer the failure).
+        sys.stdout.flush()
+        return rc
     except KeyboardInterrupt:  # pragma: no cover - interactive only
         _err("rekoll: interrupted")
         return 130
-    except BrokenPipeError:  # pragma: no cover - e.g. `rekoll recall ... | head`
-        # (Before the OSError net below — BrokenPipeError IS an OSError.)
-        # Point stdout at devnull so the interpreter's exit-flush doesn't
-        # raise a second BrokenPipeError ("Exception ignored" noise).
-        try:
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        except OSError:
-            pass
+    except BrokenPipeError:
+        _quiet_pipe_death()
         return 0
-    except (sqlite3.Error, OSError, ValueError) as exc:
+    except OSError as exc:
+        # Windows raises EINVAL (not BrokenPipeError) for writes to a closed
+        # pipe — see the CPython "note on SIGPIPE" docs. Same meaning, same
+        # quiet exit; everything else is a real storage/filesystem failure.
+        if exc.errno in (errno.EPIPE, errno.EINVAL):
+            _quiet_pipe_death()
+            return 0
+        return _fail(f"the store or its data is in a bad state: {exc} (try: rekoll doctor)")
+    except (sqlite3.Error, ValueError) as exc:
         # Safety net for mid-operation storage/data failures (disk full, a store
         # someone edited by hand, ...): a plain error, never a traceback.
         return _fail(f"the store or its data is in a bad state: {exc} (try: rekoll doctor)")
