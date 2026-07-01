@@ -81,10 +81,35 @@ def test_default_path_imports_no_network_or_llm_library():
         "m.context('hello', k=2)\n"
         "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
         "leaked = sorted(banned & set(sys.modules))\n"
+        "leaked += sorted(m for m in sys.modules if m.startswith('rekoll.providers'))\n"
         "assert not leaked, 'default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert result.returncode == 0, (result.stdout + result.stderr)
+
+
+def test_no_args_memory_never_touches_the_providers_package(tmp_path):
+    """BYO-AI is OPT-IN (ADR-0015): a plain ``Memory()`` — auto embedder and
+    all — must never import ``rekoll.providers``, so it can never construct a
+    cloud provider, read a provider API-key env var, or open a socket toward
+    one. (Run in a clean subprocess; cwd=tmp so ./.rekoll lands in a sandbox.)"""
+    code = (
+        "import sys\n"
+        "from rekoll import Memory\n"
+        "m = Memory()\n"
+        "m.remember('hello world fact')\n"
+        "m.recall('hello', k=2).texts()\n"
+        "m.close()\n"
+        "leaked = sorted(m for m in sys.modules if m.startswith('rekoll.providers'))\n"
+        "assert not leaked, 'no-args Memory() imported: ' + repr(leaked)\n"
+        "banned = {'anthropic', 'openai', 'httpx', 'requests', 'urllib3'}\n"
+        "leaked = sorted(banned & set(sys.modules))\n"
+        "assert not leaked, 'no-args Memory() imported: ' + repr(leaked)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=tmp_path
     )
     assert result.returncode == 0, (result.stdout + result.stderr)
 
