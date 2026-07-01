@@ -1,8 +1,9 @@
 # Quickstart — pick your door
 
 Rekoll gives your project a private, durable memory that AI tools can use but
-can't be tricked by. Everything below runs on your machine: **no API key, no
-internet needed to save or search, nothing leaves your box.**
+can't be tricked by. Everything below runs on your machine: **no API key,
+nothing leaves your box** — semantic mode downloads its small model once at
+first use, then saving and searching work fully offline.
 
 Rekoll isn't on PyPI yet. Until it is, install from git:
 
@@ -101,7 +102,8 @@ output into its context.
   git-ignores it for you.
 - **Keyword vs semantic?** Keyword mode matches words; semantic mode matches
   meaning ("why postgres?" finds "we chose Postgres over BigQuery"). Get
-  semantic with `pip install "rekoll[embeddings]"`, ideally before you store
-  anything (run `rekoll doctor` to see your current mode).
+  semantic by reinstalling with the `[embeddings]` extra (the install line at
+  the top), ideally before you store anything — `rekoll doctor` shows your
+  current mode.
 - **Something's broken.** `rekoll doctor` — it checks Python, the search
   extras, storage, and the firewall, in plain language.

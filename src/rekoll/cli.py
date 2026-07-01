@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import sqlite3
 import sys
 import tempfile
@@ -70,19 +71,25 @@ def _human_size(n: float) -> str:
 def _open_memory(args: argparse.Namespace):
     """Build a Memory for the scope/path args, routing its warnings to stderr.
 
-    ``Memory()`` warns (embedder-identity mismatch) via ``warnings``; in a
-    terminal the raw warning format is noise, so re-emit plainly on stderr.
+    Returns ``None`` (after printing a plain error) when the store can't be
+    opened — an unwritable directory, a corrupt db file. ``Memory()`` warns
+    (embedder-identity mismatch) via ``warnings``; in a terminal the raw
+    warning format is noise, so re-emit plainly on stderr.
     """
     from .memory import Memory
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        mem = Memory(
-            path=args.path,
-            project=args.project,
-            tenant=args.tenant,
-            agent=args.agent,
-        )
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            mem = Memory(
+                path=args.path,
+                project=args.project,
+                tenant=args.tenant,
+                agent=args.agent,
+            )
+    except (OSError, sqlite3.Error) as exc:
+        _fail(f"could not open the memory store at {args.path}: {exc}")
+        return None
     for w in caught:
         _err(f"rekoll: warning: {w.message}")
     return mem
@@ -183,6 +190,8 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_remember(args: argparse.Namespace) -> int:
     mem = _open_memory(args)
+    if mem is None:
+        return 1
     try:
         record = mem.remember(
             args.text,
@@ -210,6 +219,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     if not target.exists():
         return _fail(f"path does not exist: {args.target}")
     mem = _open_memory(args)
+    if mem is None:
+        return 1
     _err(f"Indexing {target} ...")
     try:
         stats = mem.ingest_path(str(target), trust=TrustTier[args.trust.upper()])
@@ -230,6 +241,8 @@ def cmd_forget(args: argparse.Namespace) -> int:
     if not _require_store(args):
         return 1
     mem = _open_memory(args)
+    if mem is None:
+        return 1
     try:
         removed = mem.forget(*args.ids)
     finally:
@@ -252,6 +265,8 @@ def cmd_recall(args: argparse.Namespace) -> int:
     if not _require_store(args):
         return 1
     mem = _open_memory(args)
+    if mem is None:
+        return 1
     try:
         result = mem.recall(
             args.query, k=args.k, kind=Kind(args.kind) if args.kind else None
@@ -300,6 +315,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         total = adapter.count(scope=scope)
         by_kind = {k: adapter.count(scope=scope, kind=k) for k in Kind}
         identity = adapter.get_embedder_identity(scope=scope)
+    except sqlite3.Error as exc:  # e.g. a truncated/corrupt db that still opened
+        return _fail(f"could not read the store: {exc}")
     finally:
         adapter.close()
 
@@ -608,6 +625,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         _err("rekoll: interrupted")
         return 130
     except BrokenPipeError:  # pragma: no cover - e.g. `rekoll recall ... | head`
+        # Point stdout at devnull so the interpreter's exit-flush doesn't
+        # raise a second BrokenPipeError ("Exception ignored" noise).
+        try:
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        except OSError:
+            pass
         return 0
 
 

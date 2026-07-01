@@ -294,6 +294,33 @@ def test_forget_without_a_store_fails(project, capsys):
     assert "no memory store" in capsys.readouterr().err
 
 
+# -- broken-store handling (clean errors, no tracebacks) ----------------------
+
+def test_remember_with_unwritable_store_path_fails_cleanly(project, capsys):
+    (project / "blocker").write_text("a file, not a directory", encoding="utf-8")
+    rc = main(["remember", "x", "--path", "blocker/mem.db"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "could not open the memory store" in captured.err
+    assert captured.out == ""
+
+
+def test_recall_on_a_corrupt_store_fails_cleanly(project, capsys):
+    store = project / ".rekoll"
+    store.mkdir()
+    (store / "memory.db").write_bytes(b"this is not a sqlite database at all")
+    assert main(["recall", "anything"]) == 1
+    assert "could not open the memory store" in capsys.readouterr().err
+
+
+def test_status_on_a_corrupt_store_fails_cleanly(project, capsys):
+    store = project / ".rekoll"
+    store.mkdir()
+    (store / "memory.db").write_bytes(b"garbage" * 100)
+    assert main(["status"]) == 1
+    assert "could not open the store" in capsys.readouterr().err
+
+
 # -- status ------------------------------------------------------------------
 
 def test_status_reports_counts_by_kind_embedder_and_size(project, capsys):
