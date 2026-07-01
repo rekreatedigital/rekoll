@@ -36,6 +36,14 @@ Issues = "https://github.com/ryankyleocampo-github/rekoll/issues"
 [project.entry-points."rekoll.adapters"]
 sqlite = "rekoll.adapters.sqlite:SQLiteAdapter"
 
+# Built-in cloud embedders (opt-in, lazy), discoverable via the same group.
+# Third parties: ship `yourname = "your_pkg:YourEmbedder"`, called as
+# YourEmbedder(model_or_None, **kwargs) — see docs/PROVIDERS.md.
+[project.entry-points."rekoll.embedders"]
+openai = "rekoll.providers.openai_compat:OpenAICompatibleEmbedder"
+gemini = "rekoll.providers.gemini:GeminiEmbedder"
+voyage = "rekoll.providers.voyage:VoyageEmbedder"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

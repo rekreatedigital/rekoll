@@ -4,9 +4,10 @@ Public surface shipped today: the memory record model, the storage-adapter
 contract + reference SQLite adapter (via the registry), local embeddings +
 structure-aware chunking, hybrid (vector + lexical) retrieval with optional
 cross-encoder reranking, the injection firewall (ingest screen + read envelope),
-the importable conformance suite, and the high-level ``Memory`` facade. The
-learning/consolidation loop and additional backends arrive in later phases
-(see docs/DESIGN.md).
+the importable conformance suite, the high-level ``Memory`` facade, and the
+opt-in BYO-AI layer (cloud embedders via ``rekoll.providers`` + the write-side
+``Memory.consolidate`` seam). The full learning loop and additional backends
+arrive in later phases (see docs/DESIGN.md).
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from .adapters.base import (
 )
 from .adapters.registry import available_adapters, get_adapter, register_adapter
 from .chunking import chunk_file, chunk_markdown, chunk_text
+from .consolidation import Consolidator
+from .embedders import available_embedders, get_embedder, register_embedder
 from .embedding import (
     Embedder,
     EmbedderIdentity,
@@ -73,6 +76,12 @@ __all__ = [
     "compare_identity",
     "guard_identity",
     "cosine",
+    # embedder registry (BYO-AI is opt-in; rekoll.providers itself is lazy)
+    "register_embedder",
+    "get_embedder",
+    "available_embedders",
+    # write-side consolidation seam (the only place LLM output can enter)
+    "Consolidator",
     # storage
     "StorageAdapter",
     "QueryHit",
