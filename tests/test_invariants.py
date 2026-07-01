@@ -150,10 +150,11 @@ def test_default_path_imports_no_network_or_llm_library():
         "m.remember('hello world fact')\n"
         "m.recall('hello', k=2).texts()\n"
         "m.context('hello', k=2)\n"
-        "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
+        "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime','mcp'}\n"
         "leaked = sorted(banned & set(sys.modules))\n"
         "leaked += sorted(m for m in sys.modules if m.startswith('rekoll.providers'))\n"
         "assert not leaked, 'default path imported: ' + repr(leaked)\n"
+        "assert 'rekoll.mcp_server' not in sys.modules, 'default path imported rekoll.mcp_server'\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
