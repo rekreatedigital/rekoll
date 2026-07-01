@@ -25,6 +25,10 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   data-vs-instructions envelope; quarantine-by-trust (ADR-0013).
 - CI gates: storage conformance; a stub-embedder recall **smoke** fixture; and
   zero-network / zero-LLM / zero-dependency invariant tests.
+- The **MCP server** (`rekoll-mcp`, optional `mcp` extra): five tools over the
+  facade with server-pinned scope + trust (writes stamped UNVERIFIED by default,
+  no directive writes, ingest confined to a root) — ADR-0008 Door 1. The
+  no-Python Node/`npx` wrapper around it is still planned.
 
 **Planned — NOT yet implemented (described in present tense below):**
 - The learned consolidation loop (L3) and legible graduation gate (L4). No LLM
@@ -40,8 +44,8 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - `sqlite-vec` acceleration (§5): vector search is currently an exact pure-Python
   cosine scan. The adapter contract is unchanged; only the index backend is pending.
 - The RRF **interleave** alternative (§7); real **LongMemEval/LoCoMo** gates (only a
-  keyword smoke fixture exists); the MCP server, REST API, DB-schema/row ingestion,
-  and the TS client.
+  keyword smoke fixture exists); the Node/`npx` MCP wrapper, the REST API,
+  DB-schema/row ingestion, and the TS client.
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named

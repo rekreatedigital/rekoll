@@ -6,8 +6,9 @@ Give your agent durable memory of a whole codebase + database — that it can't 
 > **Status: pre-alpha, but usable.** Working today: the `rekoll` CLI, the
 > `Memory` facade, local semantic + keyword (hybrid) search with cross-encoder
 > reranking, the injection firewall, a bring-your-own-database adapter contract,
-> and a benchmark gate. Upcoming: the learning loop, more DB backends, and an
-> MCP server — see [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
+> an MCP server, and a benchmark gate. Upcoming: the learning loop, more DB
+> backends, and the no-Python `npx` wrapper — see
+> [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
 
 ---
 
@@ -23,7 +24,7 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 ## How you'll use it (three doors, one engine)
 
-1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python and no API key required**. *(Coming — the front door is Node/`npx` so non-technical users never touch Python.)*
+1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(Working today via `pip install "rekoll[mcp]"` — see [docs/MCP.md](docs/MCP.md); the Node/`npx` wrapper that hides Python entirely is still coming.)*
 2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. Installable from git today; `pip install rekoll` lands with the PyPI release.
 3. **Self-host service** — one container pointed at your own database.
 
@@ -103,6 +104,22 @@ contain, and they never reach the recall envelope's instruction channel. Vouch
 for a tree you control with `mem.ingest_path(".", trust=TrustTier.CURATED)`. Your
 own first-person notes via `mem.remember(...)` stay at `OWNER` (see
 [ADR-0016](docs/adr/0016-ingest-trust-default.md)).
+
+### Use from any agent (MCP)
+
+Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
+memory — no Python code to write:
+
+```bash
+pip install "rekoll[mcp]"                # or: pip install -e "/path/to/rekoll[mcp]"
+claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
+```
+
+The agent gets five tools (`remember`, `recall`, `ingest_path`, `forget`,
+`status`) over this project's private store. Scope and trust are pinned
+server-side — the calling model can't hop projects or promote its own writes,
+and everything it recalls arrives as firewalled DATA, never instructions. Setup
+for Cursor + generic clients, the trust model, and all knobs: **[docs/MCP.md](docs/MCP.md)**.
 
 ### Develop Rekoll itself
 
