@@ -276,11 +276,18 @@ class Memory:
         skip_dirs: Optional[Iterable[str]] = None,
         trust: Optional[TrustTier] = None,
         batch: int = 256,
+        follow_symlinks: bool = False,
     ) -> dict:
         """Index a file or directory (code + docs).
 
         Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
-        passed over (over ``max_file_bytes``, undecodable, or unreadable).
+        passed over (symlink, over ``max_file_bytes``, undecodable, or
+        unreadable).
+
+        Symlinked files are skipped unless ``follow_symlinks=True``: a planted
+        link in a third-party tree can point anywhere on disk (e.g.
+        ``~/.ssh/id_rsa``), and a bulk walk must not read outside the tree it
+        was pointed at. Directory symlinks are never descended.
 
         Files on disk are third-party by nature, so ``trust`` defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
@@ -298,6 +305,9 @@ class Memory:
         pending: list[MemoryRecord] = []
         for fp in targets:
             try:
+                if not follow_symlinks and fp.is_symlink():
+                    skipped += 1  # a planted link can point outside the tree
+                    continue
                 if fp.stat().st_size > self._max_file_bytes:
                     skipped += 1  # never read an oversized file into memory (ADR-0017)
                     continue
