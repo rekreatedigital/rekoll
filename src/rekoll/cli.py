@@ -12,7 +12,8 @@ Design rules for this module:
  - Results go to stdout; errors, warnings, and hints go to stderr.
  - Exit codes: 0 success, 1 operational failure (including "no results", like
    grep), 2 usage error (argparse). Suitable for scripting.
- - ASCII-only output so Windows cp1252 consoles never crash on a status line.
+ - Rekoll's own messages are ASCII-only; stored content is echoed as-is, with
+   ``errors="replace"`` guarding consoles that can't render it (cp1252 etc.).
  - Read-style commands (recall/forget/status) never create a store as a side
    effect; only ``init``, ``remember`` and ``ingest`` do.
 """
@@ -34,7 +35,9 @@ from .model import Kind, Status, TrustTier
 
 DEFAULT_DB_PATH = "./.rekoll/memory.db"
 _KIND_CHOICES = [k.value for k in Kind]
-_TRUST_CHOICES = [t.name.lower() for t in TrustTier]
+# QUARANTINED is a firewall OUTCOME, not an input a user can meaningfully assign
+# (such records would half-surface: listed by recall, dropped from --context).
+_TRUST_CHOICES = [t.name.lower() for t in TrustTier if t is not TrustTier.QUARANTINED]
 
 _GITIGNORE_FORMS = {".rekoll", ".rekoll/", "/.rekoll", "/.rekoll/"}
 
@@ -78,6 +81,8 @@ def _open_memory(args: argparse.Namespace):
     """
     from .memory import Memory
 
+    if _refuse_foreign_store(args.path):
+        return None
     try:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
@@ -97,6 +102,39 @@ def _open_memory(args: argparse.Namespace):
 
 def _store_exists(path: str) -> bool:
     return path == ":memory:" or Path(path).expanduser().is_file()
+
+
+def _is_rekoll_store(path: str) -> Optional[bool]:
+    """Read-only probe: True/False = the existing file is / is not a rekoll
+    store; None = can't tell (unreadable, corrupt, WAL-locked, ...).
+
+    Opening a SQLite file through the adapter CREATEs the rekoll schema in it —
+    fine for our own stores (a no-op), destructive surprise for someone else's
+    application database passed via a mistaken --path. Probe before adopting.
+    """
+    try:
+        uri = Path(path).resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedder_identity'"
+            ).fetchone()
+        finally:
+            conn.close()
+        return row is not None
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+
+
+def _refuse_foreign_store(path: str) -> bool:
+    """True (after printing the error) if ``path`` is someone else's database."""
+    if path != ":memory:" and Path(path).is_file() and _is_rekoll_store(path) is False:
+        _fail(
+            f"{path} is a SQLite file but not a rekoll memory store - refusing to "
+            "touch it (pick a different --path)"
+        )
+        return True
+    return False
 
 
 def _require_store(args: argparse.Namespace) -> bool:
@@ -138,20 +176,29 @@ def cmd_init(args: argparse.Namespace) -> int:
     except OSError as exc:
         return _fail(f"could not create {store_dir}: {exc}")
 
-    lines = [f"  {'found' if already else 'created'} {store_dir}  (the local memory store lives here)"]
+    cwd = Path.cwd()
+    if store_dir.resolve() == cwd.resolve():  # bare filename like --path mem.db
+        lines = [f"  store file: {Path(args.path).name}  (in this directory)"]
+    else:
+        lines = [f"  {'found' if already else 'created'} {store_dir}  (the local memory store lives here)"]
 
     # Only manage .gitignore for the conventional ./.rekoll layout; a custom
     # --path is the user's own layout to ignore (or not) as they see fit.
-    cwd = Path.cwd()
     if store_dir.name == ".rekoll" and store_dir.resolve().parent == cwd.resolve():
-        state = _ensure_gitignore(cwd)
-        gitignore_line = {
-            "added": "  added '.rekoll/' to .gitignore  (the store is a rebuildable index - keep it out of git)",
-            "created": "  created .gitignore with '.rekoll/'  (the store is a rebuildable index - keep it out of git)",
-            "present": "  .gitignore already covers '.rekoll/'",
-            "no-repo": "  not a git repository - skipped .gitignore",
-        }[state]
-        lines.append(gitignore_line)
+        try:
+            state = _ensure_gitignore(cwd)
+        except OSError as exc:
+            state = None
+            lines.append(f"  could not update .gitignore ({exc}) - add '.rekoll/' to it yourself")
+        if state:
+            lines.append({
+                "added": "  added '.rekoll/' to .gitignore  (local private memory - keep it out of git)",
+                "created": "  created .gitignore with '.rekoll/'  (local private memory - keep it out of git)",
+                "present": "  .gitignore already covers '.rekoll/'",
+                "no-repo": "  not a git repository - skipped .gitignore",
+            }[state])
+    elif store_dir.resolve() == cwd.resolve():
+        lines.append(f"  custom store path - remember to git-ignore {Path(args.path).name} if this is a repo")
     else:
         lines.append(f"  custom store path - remember to git-ignore {store_dir} if this is a repo")
 
@@ -303,6 +350,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     identity onto the scope; a status read must do neither."""
     if not _require_store(args):
         return 1
+    if _refuse_foreign_store(args.path):
+        return 1
     from .adapters.registry import get_adapter
     from .model import Scope
 
@@ -421,6 +470,8 @@ def _check_store_dir(path: str) -> tuple[str, str]:
 def _check_existing_store(args: argparse.Namespace) -> tuple[str, str]:
     if not _store_exists(args.path) or args.path == ":memory:":
         return ("ok", "no store here yet - create one with: rekoll init")
+    if _is_rekoll_store(args.path) is False:
+        return ("FAIL", f"{args.path} is a SQLite file but not a rekoll memory store")
     from .adapters.registry import get_adapter
     from .model import Scope
 
@@ -509,16 +560,40 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _scope_part(value: str) -> str:
+    """Reject at parse time what Scope would reject with a traceback later."""
+    if not value or "/" in value or "\x00" in value:
+        raise argparse.ArgumentTypeError("must be non-empty and contain no '/'")
+    return value
+
+
+def _db_path(value: str) -> str:
+    """Normalize --path once: reject empty (Memory would silently alias '' to a
+    throwaway in-memory store — data loss), and expand ~ so every command and
+    sqlite itself see the same real path."""
+    if value == ":memory:":
+        return value
+    if not value.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    try:
+        return str(Path(value).expanduser())
+    except (RuntimeError, ValueError) as exc:  # e.g. '~nosuchuser/x.db'
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     shared = argparse.ArgumentParser(add_help=False)
     where = shared.add_argument_group("where the memory lives")
     where.add_argument(
-        "--path", default=DEFAULT_DB_PATH,
+        "--path", type=_db_path, default=DEFAULT_DB_PATH,
         help=f"memory store file (default: {DEFAULT_DB_PATH})",
     )
-    where.add_argument("--project", default="default", help="project scope (default: %(default)s)")
-    where.add_argument("--tenant", default="default", help="tenant scope (default: %(default)s)")
-    where.add_argument("--agent", default="default", help="agent scope (default: %(default)s)")
+    where.add_argument("--project", type=_scope_part, default="default",
+                       help="project scope (default: %(default)s)")
+    where.add_argument("--tenant", type=_scope_part, default="default",
+                       help="tenant scope (default: %(default)s)")
+    where.add_argument("--agent", type=_scope_part, default="default",
+                       help="agent scope (default: %(default)s)")
 
     parser = argparse.ArgumentParser(
         prog="rekoll",
@@ -592,7 +667,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "status", parents=[shared],
         help="what's stored here (counts, embedder, store size)",
-        description="Report on the store without touching it (no model is loaded).",
+        description="Report on the store: counts by kind, embedder, size. Loads no model.",
     )
     p.set_defaults(func=cmd_status)
 
@@ -625,6 +700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         _err("rekoll: interrupted")
         return 130
     except BrokenPipeError:  # pragma: no cover - e.g. `rekoll recall ... | head`
+        # (Before the OSError net below — BrokenPipeError IS an OSError.)
         # Point stdout at devnull so the interpreter's exit-flush doesn't
         # raise a second BrokenPipeError ("Exception ignored" noise).
         try:
@@ -632,6 +708,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         except OSError:
             pass
         return 0
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        # Safety net for mid-operation storage/data failures (disk full, a store
+        # someone edited by hand, ...): a plain error, never a traceback.
+        return _fail(f"the store or its data is in a bad state: {exc} (try: rekoll doctor)")
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via `python -m rekoll`

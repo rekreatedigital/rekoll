@@ -98,8 +98,9 @@ output into its context.
   model (or plain keyword matching) — free, offline, private.
 - **Where is my data?** In `./.rekoll/memory.db`, a normal SQLite file you can
   inspect, back up, or delete. It never leaves your machine.
-- **Should I commit `.rekoll/`?** No — it's a rebuildable index. `rekoll init`
-  git-ignores it for you.
+- **Should I commit `.rekoll/`?** No — keep it out of git; `rekoll init`
+  git-ignores it for you. Ingested files can be re-indexed anytime, but facts
+  you `remember` live only in this store — back it up if they matter.
 - **Keyword vs semantic?** Keyword mode matches words; semantic mode matches
   meaning ("why postgres?" finds "we chose Postgres over BigQuery"). Get
   semantic by reinstalling with the `[embeddings]` extra (the install line at

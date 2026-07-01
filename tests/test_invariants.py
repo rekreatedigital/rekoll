@@ -9,9 +9,11 @@ These lock in claims the docs make but nothing previously enforced:
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +21,26 @@ from rekoll import Kind, MemoryRecord, Memory, Provenance, Scope, TrustTier
 from rekoll.embedding import StubEmbedder
 
 _LOOPBACK = {"127.0.0.1", "::1", "localhost", None, ""}
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
+
+
+def _env_pinned_to_this_checkout() -> dict:
+    """Subprocess gates must exercise THIS checkout's rekoll, not whatever is
+    pip-installed (an editable install can point at a different worktree)."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+def _block_fastembed(monkeypatch) -> None:
+    """Force the no-extra default path even on machines WITH the extra.
+
+    A bare ``sys.modules['fastembed'] = None`` is not enough: submodules such as
+    ``fastembed.rerank.cross_encoder`` already cached by an earlier test would
+    still import fine. Blank out every cached fastembed name."""
+    for name in [m for m in list(sys.modules) if m == "fastembed" or m.startswith("fastembed.")]:
+        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "fastembed", None)
 
 
 def _exercise(mem: Memory) -> None:
@@ -78,11 +100,11 @@ def test_cli_default_path_makes_no_outbound_network_call(
     network_guard, monkeypatch, tmp_path, capsys
 ):
     """The CLI is the onboarding front door; it must hold the same privacy bar.
-    ``fastembed`` is blocked so the auto-embedder takes its stub fallback even on
-    machines that have the extra installed (matching the no-extra default path)."""
+    ``fastembed`` is blocked so the auto embedder AND reranker take their no-extra
+    fallbacks even on machines that have the extra installed."""
     from rekoll.cli import main
 
-    monkeypatch.setitem(sys.modules, "fastembed", None)
+    _block_fastembed(monkeypatch)
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     assert main(["init"]) == 0
@@ -109,7 +131,8 @@ def test_default_path_imports_no_network_or_llm_library():
         "assert not leaked, 'default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=_env_pinned_to_this_checkout(),
     )
     assert result.returncode == 0, (result.stdout + result.stderr)
 
@@ -132,7 +155,8 @@ def test_cli_default_path_imports_no_network_or_llm_library(tmp_path):
         "assert not leaked, 'CLI default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, env=_env_pinned_to_this_checkout(),
     )
     assert result.returncode == 0, (result.stdout + result.stderr)
 

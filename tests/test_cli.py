@@ -8,6 +8,8 @@ the 'embeddings' extra installed.
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -19,11 +21,24 @@ from rekoll.cli import main
 from rekoll.embedding import StubEmbedder
 
 DB = "./.rekoll/memory.db"
+_SRC = str(Path(__file__).resolve().parent.parent / "src")
+
+
+def _env_pinned_to_this_checkout() -> dict:
+    """Subprocesses must import THIS checkout's rekoll, not whatever happens to
+    be pip-installed (an editable install can point at a different worktree)."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _SRC + os.pathsep + env.get("PYTHONPATH", "")
+    return env
 
 
 @pytest.fixture(autouse=True)
-def _pin_stub_embedder(monkeypatch):
+def _pin_stub_embedder_and_no_reranker(monkeypatch):
+    """Deterministic and offline even on machines WITH the 'embeddings' extra:
+    pin the auto-picked embedder to the stub AND the auto reranker to None
+    (a real CrossEncoder would download a model on first use)."""
     monkeypatch.setattr("rekoll.memory._auto_embedder", lambda: StubEmbedder())
+    monkeypatch.setattr("rekoll.memory._auto_reranker", lambda: None)
 
 
 @pytest.fixture()
@@ -386,12 +401,116 @@ def test_doctor_fails_when_the_firewall_is_broken(project, capsys, monkeypatch):
     assert "problem" in capsys.readouterr().out
 
 
+# -- argument validation (parse-time, exit code 2) -----------------------------
+
+@pytest.mark.parametrize("bad", ["a/b", ""])
+def test_scope_args_are_validated_at_parse_time(project, bad):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["remember", "x", "--project", bad])
+    assert excinfo.value.code == 2
+
+
+def test_empty_path_is_a_usage_error_not_silent_data_loss(project):
+    # Memory(path="") would alias to a throwaway in-memory store: "remembered",
+    # exit 0, data gone. Classic '--path "$UNSET_VAR"' accident.
+    with pytest.raises(SystemExit) as excinfo:
+        main(["remember", "important fact", "--path", ""])
+    assert excinfo.value.code == 2
+
+
+def test_trust_quarantined_is_not_an_accepted_input(project):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["remember", "x", "--trust", "quarantined"])
+    assert excinfo.value.code == 2
+
+
+def test_tilde_paths_expand_the_same_way_for_every_command(project, monkeypatch):
+    monkeypatch.setenv("HOME", str(project))          # posix expanduser
+    monkeypatch.setenv("USERPROFILE", str(project))   # windows expanduser
+    assert main(["remember", "tilde fact", "--path", "~/tilde/mem.db"]) == 0
+    assert (project / "tilde" / "mem.db").is_file()
+    assert main(["recall", "tilde fact", "--path", "~/tilde/mem.db"]) == 0
+    assert main(["status", "--path", "~/tilde/mem.db"]) == 0
+
+
+# -- protecting data that isn't ours -------------------------------------------
+
+def test_foreign_sqlite_database_is_refused_and_left_untouched(project, capsys):
+    foreign = project / "someapp.db"
+    conn = sqlite3.connect(foreign)
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+    conn.execute("INSERT INTO users (name) VALUES ('alice')")
+    conn.commit()
+    conn.close()
+
+    for argv in (
+        ["status", "--path", str(foreign)],
+        ["remember", "x", "--path", str(foreign)],
+        ["recall", "x", "--path", str(foreign)],
+        ["forget", "rk_x", "--path", str(foreign)],
+    ):
+        assert main(argv) == 1, argv
+        assert "not a rekoll memory store" in capsys.readouterr().err
+
+    conn = sqlite3.connect(foreign)  # and rekoll injected no schema into it
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert tables == {"users"}
+
+
+def test_doctor_flags_a_foreign_database_at_the_store_path(project, capsys):
+    foreign = project / ".rekoll"
+    foreign.mkdir()
+    conn = sqlite3.connect(foreign / "memory.db")
+    conn.execute("CREATE TABLE users (id INTEGER)")
+    conn.commit()
+    conn.close()
+    assert main(["doctor"]) == 1
+    assert "not a rekoll memory store" in capsys.readouterr().out
+
+
+def test_recall_on_a_hand_edited_store_fails_cleanly(project, capsys):
+    _remember("a fact that will be vandalized")
+    db = project / ".rekoll" / "memory.db"
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE verbatim_records SET embedding = 'not json at all'")
+    conn.commit()
+    conn.close()
+    capsys.readouterr()
+    assert main(["recall", "vandalized"]) == 1  # clean error, not a traceback
+    assert "bad state" in capsys.readouterr().err
+
+
+def test_init_with_readonly_gitignore_degrades_gracefully(project, capsys):
+    import stat
+
+    (project / ".git").mkdir()
+    gitignore = project / ".gitignore"
+    gitignore.write_text("node_modules/\n", encoding="utf-8")
+    gitignore.chmod(stat.S_IREAD)
+    try:
+        assert main(["init"]) == 0
+        out = capsys.readouterr().out
+        assert "could not update .gitignore" in out
+        assert (project / ".rekoll").is_dir()  # setup still completed
+    finally:
+        gitignore.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_init_with_bare_filename_path_names_the_file_not_dot(project, capsys):
+    (project / ".git").mkdir()
+    assert main(["init", "--path", "mem.db"]) == 0
+    out = capsys.readouterr().out
+    assert "git-ignore mem.db" in out
+    assert "git-ignore ." not in out.replace("git-ignore mem.db", "")
+
+
 # -- real process wiring -----------------------------------------------------
 
 def test_python_dash_m_rekoll_version():
     result = subprocess.run(
         [sys.executable, "-m", "rekoll", "--version"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=_env_pinned_to_this_checkout(),
     )
     assert result.returncode == 0
     assert f"rekoll {__version__}" in result.stdout
