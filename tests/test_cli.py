@@ -8,6 +8,7 @@ the 'embeddings' extra installed.
 
 from __future__ import annotations
 
+import codecs
 import os
 import sqlite3
 import subprocess
@@ -130,6 +131,33 @@ def test_init_with_custom_path_leaves_gitignore_alone(project, capsys):
     assert (project / "elsewhere").is_dir()
     assert not (project / ".gitignore").exists()
     assert "custom store path" in capsys.readouterr().out
+
+
+def test_init_with_utf16_gitignore_warns_and_leaves_it_untouched(project, capsys):
+    (project / ".git").mkdir()
+    gitignore = project / ".gitignore"
+    gitignore.write_bytes("node_modules/\n".encode("utf-16"))  # BOM + UTF-16-LE
+    before = gitignore.read_bytes()
+    assert main(["init"]) == 0
+    assert gitignore.read_bytes() == before  # never append UTF-8 into a UTF-16 file
+    out = capsys.readouterr().out
+    assert "UTF-16" in out and "convert it to UTF-8" in out
+    assert (project / ".rekoll").is_dir()  # setup itself still completed
+
+
+def test_init_with_utf8_bom_gitignore_still_recognizes_entries(project):
+    gitignore = project / ".gitignore"
+    gitignore.write_bytes(codecs.BOM_UTF8 + b".rekoll/\n")
+    assert main(["init"]) == 0
+    assert gitignore.read_bytes() == codecs.BOM_UTF8 + b".rekoll/\n"  # no duplicate
+
+
+def test_init_memory_path_explains_and_creates_nothing(project, capsys):
+    assert main(["init", "--path", ":memory:"]) == 0
+    out = capsys.readouterr().out
+    assert "temporary" in out and "nothing to set up" in out
+    assert "store file: :memory:" not in out
+    assert not (project / ".rekoll").exists()
 
 
 # -- remember ----------------------------------------------------------------
@@ -366,6 +394,7 @@ def test_status_reports_counts_by_kind_embedder_and_size(project, capsys):
     assert main(["status"]) == 0
     out = capsys.readouterr().out
     assert "Memories: 2" in out
+    assert "quarantined-for-audit" in out  # counts are labeled as inclusive
     assert "raw_fact:" in out and "observation:" in out
     assert "stub-hash" in out  # the recorded embedder identity
     assert "memory.db" in out
@@ -477,6 +506,24 @@ def test_foreign_sqlite_database_is_refused_and_left_untouched(project, capsys):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
     assert tables == {"users"}
+
+
+def test_foreign_store_probe_passes_a_bounded_timeout(project, monkeypatch):
+    # A busy foreign database must stall the probe ~1s at most, not sqlite's
+    # 5s default (the probe runs before every store open).
+    import rekoll.cli as cli
+
+    _remember("seed the store")
+    seen: dict = {}
+    real_connect = cli.sqlite3.connect
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(cli.sqlite3, "connect", spy)
+    assert cli._is_rekoll_store(DB) is True
+    assert 0 < seen.get("timeout", 99) <= 2
 
 
 def test_doctor_flags_a_foreign_database_at_the_store_path(project, capsys):

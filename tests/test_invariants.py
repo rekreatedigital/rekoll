@@ -177,6 +177,7 @@ def test_cli_default_path_imports_no_network_or_llm_library(tmp_path):
         "assert main(['status', '--path', db]) == 0\n"
         "banned = {'anthropic','openai','httpx','requests','urllib3','fastembed','torch','numpy','onnxruntime'}\n"
         "leaked = sorted(m for m in banned if sys.modules.get(m) is not None)\n"
+        "leaked += sorted(m for m in sys.modules if m.startswith('rekoll.providers'))\n"
         "assert not leaked, 'CLI default path imported: ' + repr(leaked)\n"
     )
     result = subprocess.run(

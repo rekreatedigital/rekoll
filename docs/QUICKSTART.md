@@ -55,6 +55,10 @@ Useful flags:
 
 - `rekoll remember --kind directive "always use tabs"` — kinds are
   `raw_fact` (default), `observation`, `directive`, `episode`.
+- `rekoll ingest vendor/ --trust unverified` — indexing content you didn't
+  write (vendored code, scraped docs, other people's notes)? Lower its trust
+  so the injection firewall treats it as untrusted; the default is `owner`,
+  meant for your own files.
 - `--project`, `--tenant`, `--agent` — keep separate memory spaces in one store.
 
 For scripts: results go to stdout, messages to stderr; exit code `0` = success,

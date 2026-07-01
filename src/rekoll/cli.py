@@ -21,6 +21,7 @@ Design rules for this module:
 from __future__ import annotations
 
 import argparse
+import codecs
 import errno
 import importlib.util
 import os
@@ -112,10 +113,15 @@ def _is_rekoll_store(path: str) -> Optional[bool]:
     Opening a SQLite file through the adapter CREATEs the rekoll schema in it —
     fine for our own stores (a no-op), destructive surprise for someone else's
     application database passed via a mistaken --path. Probe before adopting.
+
+    Deliberately fails OPEN: on None the caller proceeds and the real open
+    surfaces the real error (a locked/corrupt file must not lock users out of
+    their own store). The timeout is bounded so a busy foreign database can
+    only stall the probe for ~1s, not sqlite's 5s default.
     """
     try:
         uri = Path(path).resolve().as_uri() + "?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
+        conn = sqlite3.connect(uri, uri=True, timeout=1.0)
         try:
             row = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='embedder_identity'"
@@ -153,10 +159,16 @@ def _require_store(args: argparse.Namespace) -> bool:
 
 def _ensure_gitignore(cwd: Path) -> str:
     """Make sure ``.rekoll/`` is git-ignored. Returns what happened:
-    'added' | 'created' | 'present' | 'no-repo'."""
+    'added' | 'created' | 'present' | 'no-repo' | 'utf16'."""
     gitignore = cwd / ".gitignore"
     if gitignore.is_file():
-        text = gitignore.read_text(encoding="utf-8", errors="replace")
+        raw = gitignore.read_bytes()
+        if raw.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+            # Appending UTF-8 bytes to a UTF-16 file would corrupt it further —
+            # and git itself can't read UTF-16 .gitignore patterns anyway.
+            return "utf16"
+        text = raw.decode("utf-8-sig" if raw.startswith(codecs.BOM_UTF8) else "utf-8",
+                          errors="replace")
         if any(line.strip() in _GITIGNORE_FORMS for line in text.splitlines()):
             return "present"
         prefix = "" if (not text or text.endswith("\n")) else "\n"
@@ -170,6 +182,10 @@ def _ensure_gitignore(cwd: Path) -> str:
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    if args.path == ":memory:":
+        _out("':memory:' is a temporary in-process store - nothing to set up.")
+        _out("Use a file path for a store that persists (the default is ./.rekoll/memory.db).")
+        return 0
     store_dir = Path(args.path).expanduser().parent
     already = store_dir.is_dir()
     try:
@@ -197,6 +213,8 @@ def cmd_init(args: argparse.Namespace) -> int:
                 "created": "  created .gitignore with '.rekoll/'  (local private memory - keep it out of git)",
                 "present": "  .gitignore already covers '.rekoll/'",
                 "no-repo": "  not a git repository - skipped .gitignore",
+                "utf16": "  your .gitignore is UTF-16 encoded (git cannot read that) - "
+                         "convert it to UTF-8, then add '.rekoll/' to it",
             }[state])
     elif store_dir.resolve() == cwd.resolve():
         lines.append(f"  custom store path - remember to git-ignore {Path(args.path).name} if this is a repo")
@@ -382,7 +400,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         db = Path(args.path).expanduser()
         _out(f"Store:  {db}  ({_human_size(db.stat().st_size)})")
     _out(f"Scope:  {scope.key()}")
-    _out(f"Memories: {total}")
+    # TODO(adapter-status-count): when the adapter grows a status filter on
+    # count(), report quarantined-for-audit rows as their own number (issue #9).
+    _out(f"Memories: {total}  (includes any quarantined-for-audit rows)")
     for kind in Kind:
         _out(f"  {kind.value + ':':<13}{by_kind[kind]}")
     if identity is None:
