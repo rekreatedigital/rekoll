@@ -29,7 +29,14 @@ from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screene
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
-__all__ = ["Memory", "RecallResult"]
+__all__ = ["Memory", "RecallResult", "DEFAULT_INGEST_TRUST"]
+
+# Files and bulk documents are third-party by nature: ingestion defaults to
+# UNVERIFIED so the firewall can quarantine injection markers (quarantine only
+# fires at trust <= UNVERIFIED). Only first-person ``remember()`` follows the
+# constructor's ``default_trust``. Pass ``trust=`` to vouch for a source you
+# control (ADR-0015).
+DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -105,6 +112,13 @@ class Memory:
         screen: bool = True,
         default_trust: TrustTier = TrustTier.OWNER,
     ) -> None:
+        """``default_trust`` applies to first-person ``remember()`` calls ONLY.
+
+        Bulk ingestion (``ingest_text`` / ``ingest_path``) always defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) regardless of this setting, so a
+        high default can never silently exempt third-party files from the
+        firewall's quarantine (ADR-0015).
+        """
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
@@ -178,9 +192,15 @@ class Memory:
         kind: Kind = Kind.RAW_FACT,
         trust: Optional[TrustTier] = None,
     ) -> int:
-        """Chunk a document and store it. Returns the number of chunks stored."""
+        """Chunk a document and store it. Returns the number of chunks stored.
+
+        Ingested text is third-party by nature, so ``trust`` defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0015). Pass
+        ``trust=`` explicitly to vouch for a source you control.
+        """
         src = source or f"text://{name}"
-        trust = self._default_trust if trust is None else trust
+        trust = DEFAULT_INGEST_TRUST if trust is None else trust
         records = []
         for i, piece in enumerate(chunk_file(name, text)):
             if self._screen and not sanitize_unicode(piece):
@@ -208,10 +228,16 @@ class Memory:
         trust: Optional[TrustTier] = None,
         batch: int = 256,
     ) -> dict:
-        """Index a file or directory (code + docs). Returns {files, chunks, total}."""
+        """Index a file or directory (code + docs). Returns {files, chunks, total}.
+
+        Files on disk are third-party by nature, so ``trust`` defaults to
+        ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
+        chunk — NOT to the constructor's ``default_trust`` (ADR-0015). Pass
+        ``trust=`` explicitly to vouch for a tree you control.
+        """
         include = set(include_ext) if include_ext else DEFAULT_INCLUDE_EXT
         skip = set(skip_dirs) if skip_dirs else DEFAULT_SKIP_DIRS
-        trust = self._default_trust if trust is None else trust
+        trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
         targets = [root] if root.is_file() else list(self._walk(root, include, skip))
         files = 0

@@ -16,7 +16,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from rekoll import Memory
+from rekoll import Memory, TrustTier
 
 REPO = Path(__file__).resolve().parents[1]
 DB = REPO / ".rekoll" / "rekoll.db"
@@ -33,7 +33,10 @@ def ingest() -> None:
         if stale.exists():
             stale.unlink()
     mem = _memory()
-    stats = mem.ingest_path(str(REPO), include_ext=INCLUDE_EXT)
+    # Our own repo: vouch for it explicitly. At the safe UNVERIFIED ingest
+    # default (ADR-0015) the firewall docs/tests — which quote injection
+    # phrases — would be quarantined and unrecallable.
+    stats = mem.ingest_path(str(REPO), include_ext=INCLUDE_EXT, trust=TrustTier.CURATED)
     print(f"embedder: {mem.embedder.identity().name}")
     print(f"ingested {stats['files']} files -> {stats['chunks']} chunks; "
           f"store holds {stats['total']} memories at {DB.relative_to(REPO).as_posix()}")
