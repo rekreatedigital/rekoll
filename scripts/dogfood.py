@@ -70,6 +70,15 @@ def status() -> None:
     print(f"store:    {DB.relative_to(REPO).as_posix()}")
     print(f"memories: {mem.count()}  (scope {mem.scope.key()})")
     print(f"embedder: {mem.embedder.identity().name}")
+    report = mem.health()
+    print(f"mode:     {report.mode}")
+    print(f"health:   ok={report.ok} identity={report.identity} "
+          f"(checked {report.checked}: {report.embedded} embedded, "
+          f"{report.retrievable} retrievable)")
+    for note in report.notes:
+        print(f"          note: {note}")
+    probe = mem.self_test()
+    print(f"probe:    {'PASS' if probe['ok'] else 'FAIL'} (rank {probe['rank']})")
     mem.close()
 
 
