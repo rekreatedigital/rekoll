@@ -46,6 +46,23 @@ def test_register_rejects_colon_names():
         register_embedder("bad:name", lambda model=None, **kwargs: StubEmbedder())
 
 
+def test_entry_point_beats_builtin(monkeypatch):
+    """The documented precedence: explicit register > entry point > built-in."""
+    marker = StubEmbedder(dim=9)
+
+    class ShadowStub:
+        name = "stub"
+
+        @staticmethod
+        def load():
+            return lambda model=None, **kwargs: marker
+
+    monkeypatch.setattr(embedders_module, "_entry_points", lambda: {"stub": ShadowStub})
+    assert get_embedder("stub") is marker            # entry point shadows the built-in
+    register_embedder("stub", lambda model=None, **kwargs: StubEmbedder(dim=3))
+    assert get_embedder("stub").dim == 3             # explicit registration beats both
+
+
 def test_entry_point_resolution(monkeypatch):
     calls = {}
 

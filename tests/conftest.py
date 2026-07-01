@@ -122,7 +122,16 @@ def _make_handler(box: FakeProvider):
 
 
 @pytest.fixture()
-def fake_provider():
+def fake_provider(monkeypatch):
+    # urllib honors proxies from env vars AND (on Windows/macOS) system
+    # settings; behind a corporate proxy that would route or block the
+    # loopback fake. Neutralize every proxy source for the test and drop
+    # urllib's cached opener so a proxy-free one is built — production
+    # behavior (real proxies honored) is untouched.
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "getproxies", dict)
+    monkeypatch.setattr(urllib.request, "_opener", None)
     box = FakeProvider()
     yield box
     box.close()

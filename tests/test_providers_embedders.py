@@ -41,7 +41,11 @@ def test_embed_round_trip_shape_and_order(fake_provider):
 
 
 def test_construction_opens_no_socket(monkeypatch):
-    """Opt-in construction ≠ egress: no DNS, no connect until first use."""
+    """Opt-in construction ≠ egress: no DNS, no connect until first use —
+    for every provider class AND the registry path (the ADR-0015 claim)."""
+    from rekoll import get_embedder
+    from rekoll.providers import OpenAICompatibleConsolidator
+
     offenders: list[str] = []
     real_connect = socket.socket.connect
     real_getaddrinfo = socket.getaddrinfo
@@ -56,6 +60,11 @@ def test_construction_opens_no_socket(monkeypatch):
     OpenAICompatibleEmbedder("m", api_key="k")
     GeminiEmbedder(api_key="k")
     VoyageEmbedder(api_key="k")
+    OpenAICompatibleConsolidator("m", api_key="k")
+    get_embedder("openai:m", api_key="k")
+    get_embedder("gemini:g", api_key="k")
+    get_embedder("voyage:v", api_key="k")
+    get_embedder("deepseek:d", api_key="k")
     assert offenders == []
 
 
