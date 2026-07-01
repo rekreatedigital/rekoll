@@ -172,7 +172,20 @@ class Memory:
 
         ``metadata`` values must be flat scalars (str/int/float/bool/None);
         nested or list values are rejected (ADR-0001, no unbounded JSON).
+
+        ``kind=Kind.DIRECTIVE`` requires an explicit ``trust=``: directives at
+        or above ``TrustTier.TRUSTED_SOURCE`` render in the recall envelope's
+        *instruction* channel, so minting one must be a conscious act of
+        vouching, never an inherited default (ADR-0016).
         """
+        if kind is Kind.DIRECTIVE and trust is None:
+            raise ValueError(
+                "kind=DIRECTIVE writes to the instruction channel of the recall "
+                "envelope and must carry an explicit trust= (e.g. "
+                "trust=TrustTier.OWNER for a rule you authored). Directives "
+                "below TrustTier.TRUSTED_SOURCE are stored but render as "
+                "evidence, never as instructions (ADR-0016)."
+            )
         record = self._make_record(
             content=content,
             kind=kind,
