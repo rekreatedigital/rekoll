@@ -89,6 +89,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (with the mcp extra)
-        run: pip install -e ".[dev,mcp]" "mcp${{ matrix.mcp-version }}"
+        # The [mcp] extra already carries the `mcp>=1.2` floor. Only the pinned
+        # matrix cell appends an explicit `mcp<constraint>`; other cells must NOT
+        # render a bare, unconstrained `mcp` requirement (which would silently
+        # override the declared floor). bash on all runners keeps this one line.
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.mcp-version }}" ]; then
+            pip install -e ".[dev,mcp]" "mcp${{ matrix.mcp-version }}"
+          else
+            pip install -e ".[dev,mcp]"
+          fi
       - name: Test
         run: pytest
