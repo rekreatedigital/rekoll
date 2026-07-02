@@ -306,8 +306,15 @@ def _forget(mem: Memory, ids: list[str]) -> dict:
 
 
 def _status(mem: Memory, config: ServerConfig) -> dict:
+    # The count MUST NOT surface quarantined records to the calling model: those
+    # are the firewall's audit rows, never recallable, and their very existence
+    # is not the model's business. So "memories" is the RECALLABLE count (total
+    # minus quarantined) — consistent with what recall can ever return. (The
+    # human-facing CLI stays transparent about quarantined-for-audit rows; this
+    # is the LLM boundary, where we don't.)
+    quarantined = mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value)
     return {
-        "memories": mem.count(),
+        "memories": mem.count() - quarantined,
         "scope": mem.scope.key(),
         "store": config.path,
         "write_trust": config.trust.name.lower(),
@@ -409,8 +416,9 @@ def build_server(config: ServerConfig):
 
     @server.tool()
     async def status() -> dict:
-        """Show the store location, pinned scope, memory count, write-trust
-        tier, and embedder for this server."""
+        """Show the store location, pinned scope, recallable memory count,
+        write-trust tier, and embedder for this server. (Quarantined-for-audit
+        records are never counted or otherwise surfaced here.)"""
         return _status(mem, config)
 
     return server

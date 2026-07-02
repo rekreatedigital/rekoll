@@ -365,14 +365,19 @@ class SQLiteAdapter(StorageAdapter):
             out.extend(self._row_to_record(row) for row in rows)
         return GetResult(records=tuple(out))
 
-    def count(self, *, scope: Scope, kind: Optional[Kind] = None) -> int:
+    def count(
+        self, *, scope: Scope, kind: Optional[Kind] = None, status: Optional[str] = None
+    ) -> int:
         skey = scope.key()
         tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
         total = 0
         for table in tables:
-            row = self._conn.execute(
-                f"SELECT COUNT(*) AS c FROM {table} WHERE scope_key=?", (skey,)
-            ).fetchone()
+            sql = f"SELECT COUNT(*) AS c FROM {table} WHERE scope_key=?"
+            params: list = [skey]
+            if status is not None:
+                sql += " AND status=?"
+                params.append(status)
+            row = self._conn.execute(sql, tuple(params)).fetchone()
             total += row["c"]
         return total
 

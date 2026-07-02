@@ -97,8 +97,12 @@ class StorageAdapter(ABC):
         """Fetch records by id within ``scope`` (cross-scope ids are ignored)."""
 
     @abstractmethod
-    def count(self, *, scope: Scope, kind: Optional[Kind] = None) -> int:
-        """Count records in ``scope`` (optionally filtered to one kind)."""
+    def count(
+        self, *, scope: Scope, kind: Optional[Kind] = None, status: Optional[str] = None
+    ) -> int:
+        """Count records in ``scope`` (optionally filtered to one kind and/or a
+        ``status`` value such as ``"active"`` / ``"quarantined"``; ``None`` counts
+        every row regardless of status)."""
 
     @abstractmethod
     def vector_query(

@@ -52,7 +52,7 @@ the working directory; that's how it knows which project's memory to open.
 | `recall` | Search memory (semantic + keyword, local, no LLM). Returns a safe context block + record ids. |
 | `ingest_path` | Index a file or folder (code + docs) — only inside the project root. |
 | `forget` | Delete memories by id (up to 256 per call). |
-| `status` | Show the store location, scope, memory count, and write-trust policy. |
+| `status` | Show the store location, scope, recallable memory count, and write-trust policy. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
 
 ## 4. The trust model, in one paragraph
 

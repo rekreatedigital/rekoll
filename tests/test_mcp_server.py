@@ -219,6 +219,22 @@ def test_ingest_path_indexes_inside_root_with_server_trust(tmp_path):
     assert hits and all(r.trust_tier is TrustTier.UNVERIFIED for r in hits)
 
 
+def test_ingest_path_uses_core_unverified_default_even_when_server_trust_elevated(tmp_path):
+    """MCP ingest with no explicit trust must inherit the CORE ingest default
+    (UNVERIFIED, ADR-0016), NOT the server's write-trust ceiling. Files on disk
+    are third-party by nature, so an operator's `--trust trusted_source` (which
+    governs remember() writes) must not silently exempt bulk-ingested files from
+    the firewall's quarantine. Elevate the constructor default and prove ingest
+    still stamps UNVERIFIED."""
+    mem = _mem(default_trust=TrustTier.TRUSTED_SOURCE)
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "note.md").write_text("# Deploy\n\nThe service deploys nightly.", encoding="utf-8")
+    _ingest_path(mem, tmp_path.resolve(), "docs")
+    hits = mem.recall("deploys nightly", k=3).records()
+    assert hits and all(r.trust_tier is TrustTier.UNVERIFIED for r in hits)
+
+
 # -- ingest_path: a symlinked FILE must not escape root containment ------------
 #
 # THE historical blocking bug: os.walk enumerates symlinked files and read_text
@@ -371,6 +387,28 @@ def test_status_reports_pinned_scope_and_write_policy(tmp_path):
     assert out["write_trust"] == "unverified"
     assert out["firewall"] == "on"
     assert "directive" not in out["writable_kinds"]
+
+
+def test_status_count_never_surfaces_quarantined_records(tmp_path):
+    """status is LLM-facing: its `memories` count must exclude quarantined rows,
+    so a calling model can neither read a quarantined record (recall already
+    excludes it) NOR learn one exists via the count. One benign write + one
+    injection => status reports 1, not 2."""
+    mem = _mem()
+    _remember(mem, "we chose Postgres over BigQuery for cost", "raw_fact")
+    poisoned = _remember(mem, INJECTION, "raw_fact")
+    assert poisoned["quarantined"] is True  # the injection was quarantined
+
+    cfg = ServerConfig(
+        path=str(tmp_path / "m.db"), tenant="default", project="unit",
+        agent="default", trust=TrustTier.UNVERIFIED, root=tmp_path,
+    )
+    out = _status(mem, cfg)
+    assert out["memories"] == 1  # only the recallable one; quarantined not counted
+    # Cross-check: the quarantined row still exists in storage (audit), it just
+    # never surfaces through the LLM-facing count.
+    assert mem.adapter.count(scope=mem.scope) == 2
+    assert mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value) == 1
 
 
 def test_build_server_without_mcp_extra_prints_hint_and_exits_1(tmp_path, monkeypatch, capsys):
