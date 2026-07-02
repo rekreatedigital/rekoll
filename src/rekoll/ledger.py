@@ -13,7 +13,7 @@ How the loop closes:
    action and attaches them to its own receipt/log — or, when it knows exactly
    which memories mattered, calls ``Memory.mark_used(*ids)`` directly.
 3. ``mark_used`` increments ``MemoryRecord.proof_count`` — the promotion-only
-   usage signal future consolidation/forgetting consumes (ADR-0016 design
+   usage signal future consolidation/forgetting consumes (ADR-0025 design
    note): usage may only EXTEND a memory's standing, never shorten another's.
 
 Discipline (ported from a production memory system):

@@ -14,7 +14,7 @@ Defaults: local SQLite store, real local embeddings + reranker if the
 Beyond the two verbs, the facade carries the memory-quality loop:
 ``mark_used``/``informed_by`` (the was-it-used usage signal), ``health()``
 (source-vs-index freshness), ``self_test()`` (golden probe), and honest
-degradation via ``RecallResult.mode`` (ADR-0015).
+degradation via ``RecallResult.mode`` (ADR-0024).
 """
 
 from __future__ import annotations
@@ -240,7 +240,7 @@ class Memory:
         else:
             self._identity_state = compare_identity(existing, current)
         if self._identity_state == "mismatch":
-            # Refuse-and-degrade (ADR-0015): a silent model/config swap is the
+            # Refuse-and-degrade (ADR-0024): a silent model/config swap is the
             # classic silent recall killer — vectors from two embedders are not
             # comparable, so ranking across them returns confidently-wrong
             # results. We refuse the vector leg (reads go lexical-only, writes
@@ -253,7 +253,7 @@ class Memory:
                 f"[rekoll] this scope was embedded with {existing.name!r} "
                 f"(dim={existing.dim}, config={existing.config_hash}), but the current embedder "
                 f"is {current.name!r} (dim={current.dim}, config={current.config_hash}). "
-                f"The vector leg is REFUSED for this scope (ADR-0015): recall degrades to "
+                f"The vector leg is REFUSED for this scope (ADR-0024): recall degrades to "
                 f"lexical-only (see RecallResult.mode) and new writes are stored without "
                 f"vectors. Re-ingest this scope with one embedder, or use a separate scope.",
                 stacklevel=2,
@@ -678,7 +678,7 @@ class Memory:
                 stale.append(record.id)
         if self._identity_state == "mismatch":
             notes.append(
-                "embedder identity mismatch — vector leg refused (ADR-0015); "
+                "embedder identity mismatch — vector leg refused (ADR-0024); "
                 "re-ingest this scope with one embedder"
             )
         ok = not stale and self._identity_state != "mismatch"
@@ -770,7 +770,7 @@ class Memory:
         if not records:
             return
         # Under an identity mismatch we store WITHOUT vectors rather than write a
-        # second vector family into the scope (ADR-0015): those vectors would be
+        # second vector family into the scope (ADR-0024): those vectors would be
         # unqueryable (the leg is refused) and would deepen the very corruption
         # the guard exists to stop. Lexical indexing still covers the content;
         # health() flags the scope until it is re-ingested with one embedder.

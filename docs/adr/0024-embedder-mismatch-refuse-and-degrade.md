@@ -1,4 +1,4 @@
-# ADR-0015 — On embedder-identity mismatch: refuse the vector leg, degrade honestly
+# ADR-0024 — On embedder-identity mismatch: refuse the vector leg, degrade honestly
 
 **Status:** Accepted · **Date:** 2026-07-02 · **Amends:** ADR-0014 (warn-only), ADR-0009 (identity guard)
 

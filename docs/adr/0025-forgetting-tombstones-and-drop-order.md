@@ -1,4 +1,4 @@
-# ADR-0016 — Forgetting/compaction: kind-aware drop order, tombstoned evictions, loud budget breaches
+# ADR-0025 — Forgetting/compaction: kind-aware drop order, tombstoned evictions, loud budget breaches
 
 **Status:** Proposed (design note — no implementation in this ADR) · **Date:** 2026-07-02
 

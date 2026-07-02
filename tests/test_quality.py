@@ -1,5 +1,5 @@
 """The memory-quality loop: honest degradation (RecallResult.mode), the
-refuse-the-vector-leg identity guard (ADR-0015), the was-it-used usage signal,
+refuse-the-vector-leg identity guard (ADR-0024), the was-it-used usage signal,
 mem.health() freshness, the golden-probe self-test, and cache-stable context.
 
 Stub embedder, no network, no LLM — same discipline as the rest of the suite.
@@ -74,7 +74,7 @@ def test_direct_recallresult_construction_defaults_to_unspecified():
     assert RecallResult(hits=()).mode == "unspecified"
 
 
-# -- ADR-0015: refuse the vector leg on identity mismatch --------------------
+# -- ADR-0024: refuse the vector leg on identity mismatch --------------------
 
 
 def test_mismatch_refuses_vector_leg_never_embeds_the_query(tmp_path):
@@ -289,7 +289,7 @@ def test_health_flags_identity_mismatch_even_when_records_look_fine(tmp_path):
     report = mem.health(n=1)
     assert report.ok is False
     assert report.identity == "mismatch"
-    assert any("ADR-0015" in n for n in report.notes)
+    assert any("ADR-0024" in n for n in report.notes)
     assert report.mode == "lexical-only: embedder mismatch"
     mem.close()
 

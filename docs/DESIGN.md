@@ -46,7 +46,7 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named
 in `RecallResult.mode`), writes store no vector, the construction warning stays,
-and `health()` reports the scope degraded until re-ingest (ADR-0015). This
+and `health()` reports the scope degraded until re-ingest (ADR-0024). This
 resolves the previously open decision between ADR-0014's warn-only wording and
 §10 P1's "hard-fails" wording: neither invisible nor an outage. The hard-fail
 `guard_identity()` remains available for callers who want construction to raise.
