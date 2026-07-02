@@ -31,7 +31,7 @@ from .chunking import chunk_file
 from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder, compare_identity
 from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
-from .ledger import RecallLedger
+from .ledger import LedgerEntry, RecallLedger
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
 
@@ -596,7 +596,7 @@ class Memory:
         """
         return self.adapter.bump_proof_count(scope=self.scope, ids=list(ids))
 
-    def informed_by(self, call_id: Optional[str] = None, *, limit: int = 5) -> list:
+    def informed_by(self, call_id: Optional[str] = None, *, limit: int = 5) -> list[LedgerEntry]:
         """The recent recalls (ids + query + ts) that plausibly informed an
         action being finished right now — for hosts that attach usage evidence
         to their own receipts/logs instead of calling :meth:`mark_used`
