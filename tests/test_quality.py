@@ -454,6 +454,54 @@ def test_health_reports_unknown_when_adapter_cannot_enumerate(monkeypatch):
     mem.close()
 
 
+def test_health_is_failsoft_when_enumeration_raises_any_error(monkeypatch):
+    # A storage error that is NOT UnsupportedCapabilityError must still degrade
+    # to an honest report, never propagate — health() must never crash the host.
+    mem = _mem()
+    mem.remember("a fact in a store that is about to error on enumeration")
+
+    def _boom(**kwargs):
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(mem.adapter, "newest", _boom)
+    report = mem.health()  # must not raise
+    assert report.ok is None
+    assert any("health unknown" in n for n in report.notes)
+    mem.close()
+
+
+def test_health_is_failsoft_when_count_raises(monkeypatch):
+    mem = _mem()
+    mem.remember("a fact whose store cannot even be counted")
+
+    def _boom(**kwargs):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(mem.adapter, "count", _boom)
+    report = mem.health()  # must not raise
+    assert report.ok is None
+    assert any("health unknown" in n for n in report.notes)
+    mem.close()
+
+
+def test_health_is_failsoft_when_a_retrievability_probe_raises(monkeypatch):
+    # A broken search leg (probe raises) must read as not-ok for that record,
+    # with a note — never propagate. This is exactly the "index is broken" state
+    # health() exists to surface, so it must survive it.
+    mem = _mem()
+    mem.remember("a fact whose retrievability probe will explode")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("search index on fire")
+
+    monkeypatch.setattr(mem, "_search", _boom)
+    report = mem.health(n=1)  # must not raise
+    assert report.ok is False
+    assert report.retrievable == 0
+    assert any("probe(s) raised" in n for n in report.notes)
+    mem.close()
+
+
 def test_adapter_newest_returns_recent_first_and_respects_scope():
     from rekoll import MemoryRecord, Provenance, Scope
 

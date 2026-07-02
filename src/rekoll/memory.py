@@ -626,12 +626,22 @@ class Memory:
         reports the embedder-identity state and the exact recall mode, so a
         degraded scope can't look healthy.
 
-        Never raises for an empty/unsupported store — it reports ``ok=None``
-        with a note instead (fail-soft: health must never take the host down).
+        Fail-soft, always: health must never take the host down. An empty or
+        unsupported store, a storage read that errors, or a retrievability probe
+        that raises (a broken index leg) all degrade to an honest report (``ok``
+        is ``None`` when nothing was checkable, ``False`` when a checked record
+        failed) with a diagnostic note — never a propagated exception.
         """
         notes: list[str] = []
         mode = self._mode()
-        total = self.count()
+        try:
+            total = self.count()
+        except Exception as exc:  # a store that can't even be counted is not "ok"
+            return HealthReport(
+                ok=None, identity=self._identity_state, mode=mode, total=0,
+                checked=0, embedded=0, retrievable=0,
+                notes=(f"could not read the store ({type(exc).__name__}) — health unknown",),
+            )
         if total == 0:
             return HealthReport(
                 ok=None, identity=self._identity_state, mode=mode, total=0,
@@ -650,6 +660,14 @@ class Memory:
                     "freshness unknown",
                 ),
             )
+        except Exception as exc:
+            # Fail-soft: ANY other storage error is reported, never raised — a
+            # health check must never take the host down (the whole point).
+            return HealthReport(
+                ok=None, identity=self._identity_state, mode=mode, total=total,
+                checked=0, embedded=0, retrievable=0,
+                notes=(f"could not enumerate records ({type(exc).__name__}) — health unknown",),
+            )
         active_all = [r for r in newest if r.status is Status.ACTIVE]
         active = active_all[:n]
         skipped = len(newest) - len(active_all)
@@ -664,21 +682,35 @@ class Memory:
         embedded = 0
         retrievable = 0
         stale: list[str] = []
+        probe_errors = 0
         for record in active:
             has_vector = record.embedding is not None
             embedded += int(has_vector)
             # Retrievability probe: search the record's own content through the
             # real read path (no reranker — membership in the window is the
             # check, not order; no ledger — probes must not claim usage credit).
-            probe = self._search(
-                record.content[:_PROBE_MAX_CHARS],
-                k=max(k, _PROBE_MIN_POOL),
-                rerank=False,
-            )
-            found = record.id in {h.record.id for h in probe.hits}
+            # Fail-soft per record: a probe that RAISES (a broken index leg) must
+            # degrade this record to stale + not-ok, never propagate and take the
+            # host down. That is exactly the "index is broken" state health exists
+            # to surface honestly.
+            try:
+                probe = self._search(
+                    record.content[:_PROBE_MAX_CHARS],
+                    k=max(k, _PROBE_MIN_POOL),
+                    rerank=False,
+                )
+                found = record.id in {h.record.id for h in probe.hits}
+            except Exception:
+                found = False
+                probe_errors += 1
             retrievable += int(found)
             if not (has_vector and found):
                 stale.append(record.id)
+        if probe_errors:
+            notes.append(
+                f"{probe_errors} retrievability probe(s) raised — the search path "
+                "may be broken; treating those records as not retrievable"
+            )
         if self._identity_state == "mismatch":
             notes.append(
                 "embedder identity mismatch — vector leg refused (ADR-0024); "
