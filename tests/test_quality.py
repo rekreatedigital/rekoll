@@ -106,6 +106,104 @@ def test_mismatch_still_warns_with_full_identity(tmp_path):
         Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None).close()
 
 
+def test_reingest_under_mismatch_preserves_existing_vectors(tmp_path):
+    # THE trap (ADR-0024): ids are content-addressed, so re-ingesting IDENTICAL
+    # content lands on the SAME row. Under a mismatch the write path stores no
+    # new vector — but it must NOT null out the vector already on that row.
+    # Otherwise the documented "re-ingest to recover" advice would DESTROY the
+    # good vectors it is meant to restore, and the mismatch could never clear.
+    db = str(tmp_path / "m.db")
+    first = Memory(path=db, embedder=StubEmbedder(dim=64), reranker=None)
+    rec = first.remember("alpha fact about postgres pooling written before the swap")
+    before = first.adapter.get(scope=first.scope, ids=[rec.id]).records[0]
+    assert before.embedding is not None  # the pre-swap vector exists
+    first.close()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mem = Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None)
+    # Re-ingest the exact same content (same content-addressed id).
+    again = mem.remember("alpha fact about postgres pooling written before the swap")
+    assert again.id == rec.id  # content-addressed: same row
+    after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert after.embedding is not None, "re-ingest under mismatch nulled a good vector"
+    assert tuple(after.embedding) == tuple(before.embedding)  # untouched, byte-identical
+    assert after.embedder_dim == before.embedder_dim == 64  # still the pre-swap identity
+    mem.close()
+
+
+def test_reindex_recovers_the_scope_and_clears_the_mismatch(tmp_path):
+    # The REAL recovery path (ADR-0024): reindex() re-embeds every in-scope
+    # record with the current embedder and THEN rebinds the scope's stored
+    # identity, so the vector leg comes back and health() reads green again.
+    db = str(tmp_path / "m.db")
+    first = Memory(path=db, embedder=StubEmbedder(dim=64), reranker=None)
+    first.remember("alpha fact about postgres pooling written before the swap")
+    first.remember("beta fact about redis eviction policies before the swap")
+    first.close()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mem = Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None)
+    assert mem._identity_state == "mismatch"
+    assert mem.recall("postgres pooling", k=3).mode == "lexical-only: embedder mismatch"
+    assert mem.health(n=2).ok is False
+
+    n = mem.reindex()
+    assert n == 2  # both records re-embedded
+
+    # Identity is now the current embedder; the vector leg is restored.
+    assert mem._identity_state == "match"
+    report = mem.health(n=2)
+    assert report.ok is True
+    assert report.identity == "match"
+    assert report.embedded == report.checked
+    res = mem.recall("postgres pooling", k=3)
+    assert res.mode == "vector+lexical (stub-embedder)"
+    assert any("postgres" in t for t in res.texts())
+    # Every record now carries a current-dim vector (no stale dim=64 rows left).
+    for r in mem.adapter.newest(scope=mem.scope, n=10).records:
+        assert r.embedding is not None
+        assert r.embedder_dim == 128
+    mem.close()
+
+
+def test_reindex_survives_a_process_restart(tmp_path):
+    # reindex() must persist: reopening the store with the NEW embedder is a
+    # match (not a fresh mismatch), because the stored identity was rebound.
+    db = str(tmp_path / "m.db")
+    first = Memory(path=db, embedder=StubEmbedder(dim=64), reranker=None)
+    first.remember("gamma fact about kafka partitions before the swap")
+    first.close()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mem = Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None)
+    mem.reindex()
+    mem.close()
+
+    # A brand-new process opening with dim=128 must see a MATCH, no warning.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any mismatch warning would raise here
+        reopened = Memory(path=db, embedder=StubEmbedder(dim=128), reranker=None)
+    assert reopened._identity_state == "match"
+    assert reopened.health(n=1).ok is True
+    reopened.close()
+
+
+def test_reindex_on_a_matched_scope_is_a_safe_noop_that_keeps_vectors(tmp_path):
+    # Calling reindex() when there is no mismatch must not corrupt anything:
+    # same content, same vectors, still healthy.
+    mem = _mem()
+    rec = mem.remember("delta fact about the healthy matched scope")
+    before = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert mem.reindex() == 1
+    after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert after.embedding is not None
+    assert tuple(after.embedding) == tuple(before.embedding)
+    assert mem.health(n=1).ok is True
+    mem.close()
+
+
 def test_mismatch_with_no_lexical_arm_is_honestly_empty(tmp_path):
     # A vector-only backend under an identity mismatch has NOTHING honest to
     # serve — the result must be empty with a mode naming why, never a garbage

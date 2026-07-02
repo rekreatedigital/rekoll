@@ -255,7 +255,10 @@ class Memory:
                 f"is {current.name!r} (dim={current.dim}, config={current.config_hash}). "
                 f"The vector leg is REFUSED for this scope (ADR-0024): recall degrades to "
                 f"lexical-only (see RecallResult.mode) and new writes are stored without "
-                f"vectors. Re-ingest this scope with one embedder, or use a separate scope.",
+                f"vectors. To restore vector recall, call Memory.reindex() to re-embed this "
+                f"scope with the current embedder (do NOT just re-ingest: identical content is "
+                f"content-addressed and re-ingesting it under the mismatch stores no vector). "
+                f"Or open a separate scope for the new embedder.",
                 stacklevel=2,
             )
 
@@ -679,7 +682,7 @@ class Memory:
         if self._identity_state == "mismatch":
             notes.append(
                 "embedder identity mismatch — vector leg refused (ADR-0024); "
-                "re-ingest this scope with one embedder"
+                "call Memory.reindex() to re-embed this scope with the current embedder"
             )
         ok = not stale and self._identity_state != "mismatch"
         if stale:
@@ -719,6 +722,65 @@ class Memory:
             return {"ok": rank == 1, "rank": rank, "mode": result.mode}
         finally:
             self.forget(record.id)
+
+    # -- recovery ----------------------------------------------------------------
+    def reindex(self, *, batch: int = 256) -> int:
+        """Re-embed EVERY record in this scope with the current embedder, then
+        rebind the scope's stored embedder identity to it. Returns how many
+        records were re-embedded.
+
+        This is the real recovery from an embedder-identity mismatch (ADR-0024):
+        after a model/config swap the scope is refused the vector leg and reads
+        go lexical-only. ``reindex()`` rewrites every stored vector with the
+        embedder you are holding NOW and *then* claims the scope for it, so the
+        vector leg comes back and :meth:`health` reads green again — WITHOUT the
+        recovery trap of "just re-ingest" (re-ingesting identical content under
+        the mismatch stores no vector; this method computes them).
+
+        Order matters and is deliberate: vectors are written FIRST, the identity
+        is rebound LAST. A crash midway leaves the scope still-mismatched (safe,
+        degraded) rather than identity-clean over half-stale vectors — the write
+        is re-runnable and idempotent (same content-addressed ids, unchanged
+        trust, so the trust-monotonic upsert updates each row in place, ADR-0023).
+
+        Re-embedding is only skipped when the embedder is already a match AND no
+        record is missing a vector (a genuine no-op); otherwise every in-scope
+        record — active, superseded, or quarantined — is refreshed so no stale
+        vector family is left behind.
+        """
+        total = self.count()
+        current = self.embedder.identity()
+        if total == 0:
+            # Empty scope: nothing to embed, just (re)claim it for this embedder.
+            self.adapter.set_embedder_identity(scope=self.scope, identity=current)
+            self._identity_state = "match"
+            return 0
+        try:
+            records = list(self.adapter.newest(scope=self.scope, n=total).records)
+        except UnsupportedCapabilityError as exc:
+            raise UnsupportedCapabilityError(
+                f"adapter '{self.adapter.name}' cannot enumerate its records, so "
+                "reindex() cannot re-embed them; recover by re-ingesting this "
+                "scope's sources with the current embedder into a fresh store"
+            ) from exc
+        name, dim = current.name, self.embedder.dim
+        done = 0
+        for start in range(0, len(records), batch):
+            chunk = records[start : start + batch]
+            vectors = self.embedder.embed([r.content for r in chunk])
+            for record, vector in zip(chunk, vectors):
+                record.with_embedding(vector, name=name, dim=dim)
+            # Upsert re-embedded rows BEFORE rebinding identity: while the stored
+            # identity still mismatches, the trust-monotonic same-id upsert
+            # updates the embedding column in place (ADR-0023) — it neither drops
+            # trust nor nulls the vector we just computed.
+            self.adapter.upsert(records=chunk)
+            done += len(chunk)
+        # Vectors are all current: NOW claim the scope for this embedder so reads
+        # use the vector leg again.
+        self.adapter.set_embedder_identity(scope=self.scope, identity=current)
+        self._identity_state = "match"
+        return done
 
     # -- internals ----------------------------------------------------------
     def _search(
@@ -769,22 +831,46 @@ class Memory:
     def _embed_and_store(self, records: list[MemoryRecord]) -> None:
         if not records:
             return
-        # Under an identity mismatch we store WITHOUT vectors rather than write a
-        # second vector family into the scope (ADR-0024): those vectors would be
-        # unqueryable (the leg is refused) and would deepen the very corruption
-        # the guard exists to stop. Lexical indexing still covers the content;
-        # health() flags the scope until it is re-ingested with one embedder.
-        to_embed = (
-            [r for r in records if r.embedding is None]
-            if self._identity_state != "mismatch"
-            else []
-        )
-        if to_embed:
-            vectors = self.embedder.embed([r.content for r in to_embed])
-            name, dim = self.embedder.identity().name, self.embedder.dim
-            for record, vector in zip(to_embed, vectors):
-                record.with_embedding(vector, name=name, dim=dim)
+        if self._identity_state == "mismatch":
+            # Under a mismatch we do NOT embed NEW content with the current
+            # embedder (ADR-0024): a second vector family in the scope would be
+            # unqueryable (the leg is refused) and deepen the very corruption the
+            # guard exists to stop. Lexical indexing still covers the content;
+            # health() flags the scope until reindex() re-embeds it.
+            #
+            # But ids are content-addressed, so re-ingesting IDENTICAL content
+            # lands on a row that may ALREADY carry a good (pre-swap) vector. The
+            # upsert would rewrite that row with embedding=NULL — silently
+            # destroying the very vectors reindex() needs. Carry the stored
+            # embedding forward so the in-place rewrite preserves it verbatim.
+            self._preserve_existing_embeddings(records)
+        else:
+            to_embed = [r for r in records if r.embedding is None]
+            if to_embed:
+                vectors = self.embedder.embed([r.content for r in to_embed])
+                name, dim = self.embedder.identity().name, self.embedder.dim
+                for record, vector in zip(to_embed, vectors):
+                    record.with_embedding(vector, name=name, dim=dim)
         self.adapter.upsert(records=records)
+
+    def _preserve_existing_embeddings(self, records: list[MemoryRecord]) -> None:
+        """Copy any already-stored vector onto an embedding-less incoming record
+        so an in-place upsert never nulls a good vector (ADR-0024, the recovery
+        trap). Only touches records that would otherwise write NULL; genuinely
+        new content stays vector-free under the mismatch."""
+        needing = [r for r in records if r.embedding is None]
+        if not needing:
+            return
+        stored = {
+            r.id: r
+            for r in self.adapter.get(scope=self.scope, ids=[r.id for r in needing]).records
+        }
+        for record in needing:
+            prior = stored.get(record.id)
+            if prior is not None and prior.embedding is not None:
+                record.embedding = prior.embedding
+                record.embedder_name = prior.embedder_name
+                record.embedder_dim = prior.embedder_dim
 
     @staticmethod
     def _walk(root: Path, include: set, skip: set):
