@@ -17,6 +17,11 @@ may itself be reading attacker-controlled content):
   envelope's directive floor, so nothing written over MCP can enter the
   instruction channel. An operator may raise it to ``trusted_source`` via
   config — never through a tool argument, and never to curated/owner.
+  Caveat: quarantine only fires at trust <= ``UNVERIFIED``, so raising the
+  write tier to ``trusted_source`` DISABLES injection quarantine for MCP writes
+  (the operator has vouched for the source). The data envelope on ``recall``
+  still applies at every tier, so recalled content is never handed back as
+  instructions regardless.
 - **Directives cannot be written over MCP** at any configured trust: the
   ``kind`` allowlist is raw_fact/observation/episode only.
 - **Every tool input is size-capped**; ``ingest_path`` only reads inside the
@@ -363,9 +368,14 @@ def build_server(config: ServerConfig):
         """Save one memory (a fact, decision, or event) to this project's private store.
 
         Content is screened by the injection firewall and stamped with the
-        server's configured trust tier — flagged content is quarantined and
-        will never be recalled. Directives cannot be written over MCP.
-        Returns the record id.
+        server's configured trust tier. At the default `unverified` trust,
+        flagged content is quarantined and will never be recalled. Directives
+        cannot be written over MCP. Returns the record id.
+
+        Caveat: quarantine only fires at trust <= `unverified`. If the operator
+        launched the server with `--trust trusted_source`, injection markers no
+        longer quarantine the write — the operator has vouched for this source.
+        (Recall still wraps every hit in the DATA envelope regardless.)
         """
         return _remember(mem, content, kind)
 

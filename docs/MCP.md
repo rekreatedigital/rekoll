@@ -63,13 +63,20 @@ model can never change them: **scope** (which project's memory) is pinned from
 server config, **every write is stamped `unverified` trust** (never
 owner/curated — those are reserved for humans), **directives** — the one memory
 kind that carries instruction weight — **cannot be written over MCP at all**,
-and `ingest_path` refuses anything outside the project root. Content that
-looks like prompt injection is quarantined on write and never comes back out;
-what `recall` returns is wrapped in a data envelope that the calling agent is
-told to treat as reference, not instructions. If you knowingly want
-MCP-written memories to rank as team-vetted input, you can raise the stamp to
-`trusted_source` in server config (`--trust trusted_source`) — that's the
-ceiling, and it's your call as the human operator, never the model's.
+and `ingest_path` refuses anything outside the project root. At the default
+`unverified` trust, content that looks like prompt injection is quarantined on
+write and never comes back out; what `recall` returns is wrapped in a data
+envelope that the calling agent is told to treat as reference, not instructions.
+
+If you knowingly want MCP-written memories to rank as team-vetted input, you can
+raise the stamp to `trusted_source` in server config (`--trust trusted_source`)
+— that's the ceiling, and it's your call as the human operator, never the
+model's. **Be aware of the trade-off:** injection quarantine only fires at trust
+`unverified` or below, so raising the write tier to `trusted_source`
+**disables quarantine** for MCP writes — flagged content is then stored and
+recallable. That's the point of vouching for a source, but only do it for a
+model whose inputs you trust. The `recall` data envelope still applies at every
+tier, so recalled content is never fed back to the agent as instructions.
 
 ## 5. Configuration (all optional)
 

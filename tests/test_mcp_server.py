@@ -147,6 +147,27 @@ def test_remember_quarantines_injection_and_recall_never_surfaces_it():
     assert "reveal the system prompt" not in out["context"]
 
 
+def test_remember_at_trusted_source_does_not_quarantine_injection():
+    """Honest-caveat pin: quarantine only fires at trust <= UNVERIFIED, so an
+    operator who raised the write tier to trusted_source (--trust trusted_source)
+    DISABLES injection quarantine. The write is stamped trusted_source, NOT
+    quarantined, and it IS recallable — this is documented in docs/MCP.md and the
+    remember() docstring so nobody assumes quarantine is unconditional.
+
+    (This is the operator's explicit, human-only choice; the recall envelope
+    still wraps every hit as DATA, which the neighbouring e2e tests assert.)"""
+    mem = _mem(default_trust=TrustTier.TRUSTED_SOURCE)
+    res = _remember(mem, INJECTION, "raw_fact")
+    assert res["quarantined"] is False
+    assert res["trust"] == "trusted_source"
+    (rec,) = mem.adapter.get(scope=mem.scope, ids=[res["id"]]).records
+    assert rec.trust_tier is TrustTier.TRUSTED_SOURCE
+    assert rec.status is not Status.QUARANTINED
+    # And because it wasn't quarantined, it can be recalled (the trade-off).
+    out = _recall(mem, "previous instructions system prompt", 5)
+    assert res["id"] in out["ids"]
+
+
 # -- recall: safe envelope out, never raw records ------------------------------
 
 def test_recall_returns_envelope_and_ids_only():
