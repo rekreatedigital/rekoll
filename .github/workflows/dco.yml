@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Pinned to a full commit SHA (see ci.yml) — supply-chain posture.
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
       - name: Check Signed-off-by on every commit
@@ -37,6 +37,14 @@ jobs:
               continue
             fi
             author=$(git show -s --format='%an <%ae>' "$c")
+            # Exempt automated bots (e.g. dependabot[bot], github-actions[bot]).
+            # The DCO is a human authorship assertion; an automated dependency or
+            # action bump makes no such claim, and the maintainer who reviews and
+            # merges the PR takes responsibility for it. GitHub bot accounts carry
+            # a literal "[bot]" suffix in the author name, which humans cannot use.
+            case "$author" in
+              *"[bot] <"*) continue ;;
+            esac
             if ! git show -s --format='%B' "$c" | grep -qiF "Signed-off-by: $author"; then
               echo "::error::Commit ${c:0:8} by '$author' is missing a matching 'Signed-off-by: $author' line."
               fail=1
