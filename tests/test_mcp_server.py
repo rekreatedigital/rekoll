@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -195,6 +196,132 @@ def test_ingest_path_indexes_inside_root_with_server_trust(tmp_path):
     assert out["files"] == 1 and out["chunks"] >= 1 and out["total"] >= 1
     hits = mem.recall("deploys nightly", k=3).records()
     assert hits and all(r.trust_tier is TrustTier.UNVERIFIED for r in hits)
+
+
+# -- ingest_path: a symlinked FILE must not escape root containment ------------
+#
+# THE historical blocking bug: os.walk enumerates symlinked files and read_text
+# follows them, so a planted `docs/notes.md -> /outside/secret.txt` could pull
+# out-of-root content into memory — contradicting "refuses anything outside the
+# configured root". These tests plant that exact attack two ways: a real OS
+# symlink (skipped where the host can't create one), and the git-without-symlink-
+# support case (git checks the link out as a PLAIN FILE whose body is the target
+# path). Both must leave the secret un-ingested and un-recallable.
+
+def _make_symlink_or_skip(link: Path, target: Path) -> None:
+    """Create ``link`` -> ``target`` or skip the test if the host forbids it.
+
+    On Windows without Developer Mode / SeCreateSymbolicLinkPrivilege this raises
+    OSError (WinError 1314); some filesystems raise NotImplementedError. Either
+    way we can't exercise the real-symlink path here, so skip cleanly (Linux CI
+    — where the e2e suite also runs — still covers it)."""
+    try:
+        os.symlink(str(target), str(link))
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - host-dependent
+        pytest.skip(f"cannot create a symlink on this host: {exc}")
+
+
+def test_ingest_path_does_not_follow_symlinked_file_out_of_root(tmp_path):
+    """A symlinked FILE inside the root, pointing OUT of the root, must neither
+    be ingested nor become recallable.
+
+    The MCP boundary is fail-closed: `_assert_no_symlink_escape` refuses the
+    WHOLE ingest_path call the moment it sees a link resolving outside root
+    (defense-in-depth, before any read), rather than silently skipping just the
+    bad file. Either way the out-of-root secret never enters memory — which is
+    the property that matters — but refusing loudly tells the operator their
+    tree contains an escape. (The core `follow_symlinks=False` skip is the
+    second line: even if this guard were removed, the symlink is passed over.)"""
+    root = (tmp_path / "root").resolve()
+    docs = root / "docs"
+    docs.mkdir(parents=True)
+    (docs / "real.md").write_text("# Deploy\n\nThe service deploys nightly.", encoding="utf-8")
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("SUPERSECRET out-of-root credential material", encoding="utf-8")
+
+    _make_symlink_or_skip(docs / "notes.md", secret)  # planted escape
+
+    mem = _mem()
+    with pytest.raises(ValueError, match="outside the project root"):
+        _ingest_path(mem, root, "docs")
+    # Nothing was ingested (fail-closed), so the secret never entered memory.
+    assert mem.count() == 0
+    hit = mem.recall("SUPERSECRET credential material", k=5)
+    assert "SUPERSECRET" not in hit.context()
+    assert all("SUPERSECRET" not in t for t in hit.texts())
+
+
+def test_ingest_path_directly_pointed_symlinked_file_reads_nothing(tmp_path):
+    """Pointing ingest_path straight AT a symlinked file (not its parent dir)
+    must also read nothing out-of-root — the directly-pointed symlink is skipped
+    AND its resolved target lands outside the root, so containment refuses it."""
+    root = (tmp_path / "root").resolve()
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("SUPERSECRET out-of-root credential material", encoding="utf-8")
+
+    _make_symlink_or_skip(root / "link.md", secret)
+
+    mem = _mem()
+    # link.md resolves to an out-of-root real path: containment refuses it before
+    # any read (no need to even reach the core symlink skip).
+    with pytest.raises(ValueError, match="outside the project root"):
+        _ingest_path(mem, root, "link.md")
+    assert mem.count() == 0
+
+
+def test_ingest_path_git_checked_out_symlink_as_plain_file_is_inert(tmp_path):
+    """The git-without-symlink-support case: git writes the link out as a PLAIN
+    TEXT FILE whose *body* is the target path (e.g. "C:/outside/secret.txt").
+    That's just text — Rekoll indexes the literal path string, never the file it
+    names, so no out-of-root content leaks."""
+    mem = _mem()
+    root = (tmp_path / "root").resolve()
+    docs = root / "docs"
+    docs.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("SUPERSECRET out-of-root credential", encoding="utf-8")
+
+    # A symlink checked out on a symlink-less git is a regular file: its content
+    # is the *target path*, not the target's content.
+    (docs / "notes.md").write_text(str(outside / "secret.txt"), encoding="utf-8")
+
+    out = _ingest_path(mem, root, "docs")
+    assert out["files"] == 1  # the plain "link" file, indexed as text
+    hit = mem.recall("SUPERSECRET credential", k=5)
+    # The literal path may match; the SECRET BODY must never appear.
+    assert "SUPERSECRET" not in hit.context()
+    assert all("SUPERSECRET" not in t for t in hit.texts())
+
+
+def test_ingest_path_refuses_dir_containing_symlink_that_escapes_root(tmp_path):
+    """MCP-layer defense-in-depth: even if the core ever stopped skipping
+    symlinks, the MCP boundary must independently refuse to read a directory
+    whose subtree contains a link resolving OUTSIDE root. Proven by pointing the
+    private helper at such a tree."""
+    from rekoll.mcp_server import _assert_no_symlink_escape
+
+    root = (tmp_path / "root").resolve()
+    docs = root / "docs"
+    docs.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("SUPERSECRET", encoding="utf-8")
+
+    # A benign tree passes.
+    (docs / "ok.md").write_text("fine", encoding="utf-8")
+    _assert_no_symlink_escape(root, docs)  # no raise
+
+    _make_symlink_or_skip(docs / "escape.md", secret)
+    with pytest.raises(ValueError, match="outside the project root"):
+        _assert_no_symlink_escape(root, docs)
 
 
 # -- forget + status ------------------------------------------------------------

@@ -247,9 +247,41 @@ def _contained_path(root: Path, raw: str) -> Path:
     return resolved
 
 
+def _assert_no_symlink_escape(root: Path, target: Path) -> None:
+    """Defense-in-depth: refuse if ``target``'s subtree contains ANY entry whose
+    real (symlink-resolved) path escapes ``root``, before a byte is read.
+
+    The core ``Memory.ingest_path`` already skips symlinked files
+    (``follow_symlinks=False``), so this is belt-and-suspenders: it holds the
+    "only reads inside the configured root" promise at the MCP boundary even if
+    the core default ever changed. Directory symlinks are refused too (a link to
+    an out-of-root tree would otherwise expose everything under it). A file
+    target's own containment is already checked by ``_contained_path``.
+    """
+    root = root.resolve()
+    if target.is_file():
+        return  # already resolved + contained by _contained_path
+    for dirpath, dirnames, filenames in os.walk(target):
+        base = Path(dirpath)
+        for name in list(dirnames) + filenames:
+            entry = base / name
+            if not entry.is_symlink():
+                continue
+            resolved = entry.resolve()
+            if resolved != root and not resolved.is_relative_to(root):
+                raise ValueError(
+                    f"path is outside the project root ({root}): a symlink "
+                    f"({entry}) resolves out of the tree. This server only "
+                    "ingests files under its configured root."
+                )
+
+
 def _ingest_path(mem: Memory, root: Path, path: str) -> dict:
     target = _contained_path(root, path)
-    stats = mem.ingest_path(str(target))
+    _assert_no_symlink_escape(root, target)  # defense-in-depth over the core skip
+    # follow_symlinks stays False explicitly: the MCP boundary must never read a
+    # link out of its root, regardless of any future change to the core default.
+    stats = mem.ingest_path(str(target), follow_symlinks=False)
     return {"files": stats["files"], "chunks": stats["chunks"], "total": stats["total"]}
 
 
