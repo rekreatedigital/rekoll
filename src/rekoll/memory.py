@@ -587,18 +587,14 @@ class Memory:
         it never touches trust_tier or status (trust is set at the ingestion
         boundary and immutable to output, ADR-0002). Unknown / out-of-scope /
         quarantined ids are ignored.
+
+        The increment is a TARGETED, atomic ``proof_count += 1`` at the adapter
+        (``bump_proof_count``), not a read-modify-write of the whole row: two
+        concurrent credits both land, and a concurrent change to any OTHER
+        column is never reverted. (An adapter that hasn't specialized the bump
+        falls back to the read-modify-write, correct under a single writer.)
         """
-        records = [
-            r
-            for r in self.adapter.get(scope=self.scope, ids=list(ids)).records
-            if r.status is not Status.QUARANTINED
-        ]
-        if not records:
-            return 0
-        for record in records:
-            record.proof_count += 1
-        self.adapter.upsert(records=records)
-        return len(records)
+        return self.adapter.bump_proof_count(scope=self.scope, ids=list(ids))
 
     def informed_by(self, call_id: Optional[str] = None, *, limit: int = 5) -> list:
         """The recent recalls (ids + query + ts) that plausibly informed an

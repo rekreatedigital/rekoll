@@ -275,9 +275,43 @@ def test_mark_used_is_promotion_only_and_ignores_junk():
     mem.close()
 
 
+def test_mark_used_is_a_targeted_bump_and_never_reverts_concurrent_changes():
+    # mark_used is a targeted, atomic proof_count += 1 (bump_proof_count), NOT a
+    # read-modify-write of the whole row. A full-row upsert would revert any
+    # OTHER column changed between the read and the write; the targeted bump
+    # cannot. Simulate a concurrent writer: after the (implicit) read, another
+    # actor changes the record's status, THEN we credit it — the credit must
+    # land on proof_count without resurrecting the pre-change status.
+    from rekoll import Scope
+
+    mem = _mem()
+    rec = mem.remember("a fact that gets superseded mid-credit")
+    # A concurrent writer supersedes the row directly in the store.
+    stored = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    stored.status = Status.SUPERSEDED
+    mem.adapter.upsert(records=[stored])
+    # Now credit it (SUPERSEDED is not QUARANTINED, so it is eligible).
+    assert mem.mark_used(rec.id) == 1
+    after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert after.proof_count == 1               # the credit landed
+    assert after.status is Status.SUPERSEDED    # the concurrent change was NOT reverted
+    mem.close()
+
+
+def test_mark_used_increments_reflect_on_disk_not_a_stale_read():
+    # Two sequential credits must reach proof_count == 2 by reading the CURRENT
+    # on-disk value each time (proof_count = proof_count + 1), not by writing
+    # back a value computed from one stale in-memory read.
+    mem = _mem()
+    rec = mem.remember("a fact credited twice in a row")
+    mem.mark_used(rec.id)
+    mem.mark_used(rec.id)
+    assert mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0].proof_count == 2
+    mem.close()
+
+
 def test_mark_used_leaves_the_record_fully_intact_and_retrievable():
-    # mark_used persists via upsert, which rewrites the row + child tables +
-    # FTS entry. Crediting a memory must not corrupt anything about it: same
+    # Crediting a memory must not corrupt anything about it: same
     # content/metadata/embedding/trust, still retrievable by BOTH legs, and
     # context() renders byte-identically (cache stability survives usage).
     mem = _mem()

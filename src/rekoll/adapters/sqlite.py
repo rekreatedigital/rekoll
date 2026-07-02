@@ -327,6 +327,28 @@ class SQLiteAdapter(StorageAdapter):
         self._conn.commit()
         return removed
 
+    def bump_proof_count(self, *, scope: Scope, ids: Sequence[str]) -> int:
+        """Atomic, targeted ``proof_count += 1`` for in-scope, non-quarantined
+        ids (the was-it-used signal). Unlike a full-row upsert this can neither
+        lose a concurrent increment nor revert a concurrent change to any other
+        column: the increment happens IN the database (``SET proof_count =
+        proof_count + 1``), touching only that column."""
+        ids = list(ids)
+        if not ids:
+            return 0
+        skey = scope.key()
+        placeholders = ",".join("?" * len(ids))
+        credited = 0
+        for table in _KIND_TABLE.values():
+            cur = self._conn.execute(
+                f"UPDATE {table} SET proof_count = proof_count + 1 "
+                f"WHERE scope_key=? AND status!=? AND id IN ({placeholders})",
+                (skey, Status.QUARANTINED.value, *ids),
+            )
+            credited += cur.rowcount
+        self._conn.commit()
+        return credited
+
     # -- reads --------------------------------------------------------------
     def get(self, *, scope: Scope, ids: Sequence[str]) -> GetResult:
         ids = list(ids)
