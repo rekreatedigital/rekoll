@@ -23,6 +23,10 @@ htmlcov/
 memory.db
 .rekoll/
 
+# Agent tooling — local dev/session artifacts (worktrees, transcripts, local
+# settings); never part of the published package and may contain private notes.
+.claude/
+
 # OS / editor
 .DS_Store
 Thumbs.db
