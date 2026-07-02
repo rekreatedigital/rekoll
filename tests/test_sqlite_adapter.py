@@ -155,3 +155,67 @@ def test_persists_to_disk(tmp_path):
     assert len(got) == 1
     assert got.records[0].content == "persisted across connections"
     a2.close()
+
+
+def test_bump_proof_count_is_atomic_and_scope_and_status_aware():
+    """The SQLite bump is an in-DB proof_count += 1 (was-it-used signal): it
+    credits only in-scope, non-quarantined ids, is repeatable, and touches no
+    other column."""
+    from rekoll import Kind, MemoryRecord, Provenance, Status, TrustTier
+
+    adapter = _make()
+    scope = Scope(tenant="t", project="p", agent="a")
+    other = Scope(tenant="t", project="other", agent="a")
+
+    def rec(text, scp=scope, status=Status.ACTIVE):
+        r = MemoryRecord.create(
+            scope=scp, kind=Kind.RAW_FACT, content=text,
+            provenance=Provenance(source_uri="t://" + text[:12]), trust_tier=TrustTier.OWNER,
+        )
+        r.status = status
+        return r
+
+    live = rec("live fact to credit")
+    quar = rec("quarantined fact", status=Status.QUARANTINED)
+    elsewhere = rec("cross scope fact", scp=other)
+    adapter.upsert(records=[live, quar, elsewhere])
+
+    # Only the live in-scope id is credited; quarantined + cross-scope + unknown ignored.
+    credited = adapter.bump_proof_count(
+        scope=scope, ids=[live.id, quar.id, elsewhere.id, "no-such-id"]
+    )
+    assert credited == 1
+    assert adapter.get(scope=scope, ids=[live.id]).records[0].proof_count == 1
+    assert adapter.get(scope=scope, ids=[quar.id]).records[0].proof_count == 0
+    assert adapter.get(scope=other, ids=[elsewhere.id]).records[0].proof_count == 0
+
+    # Repeatable: a second bump reads the CURRENT on-disk value, reaching 2.
+    assert adapter.bump_proof_count(scope=scope, ids=[live.id]) == 1
+    got = adapter.get(scope=scope, ids=[live.id]).records[0]
+    assert got.proof_count == 2
+    assert got.content == "live fact to credit"  # nothing else changed
+    assert adapter.bump_proof_count(scope=scope, ids=[]) == 0  # empty is a no-op
+    adapter.close()
+
+
+def test_base_bump_proof_count_fallback_read_modify_write():
+    """An adapter that does NOT override bump_proof_count still works via the
+    base read-modify-write fallback (correct under a single writer)."""
+    from rekoll.adapters.base import StorageAdapter
+
+    class _NoBumpAdapter(SQLiteAdapter):
+        # Drop the specialized override to exercise the base fallback.
+        bump_proof_count = StorageAdapter.bump_proof_count
+
+    from rekoll import Kind, MemoryRecord, Provenance, TrustTier
+
+    adapter = _NoBumpAdapter(":memory:")
+    scope = Scope(tenant="t", project="p", agent="a")
+    r = MemoryRecord.create(
+        scope=scope, kind=Kind.RAW_FACT, content="credited via the base fallback",
+        provenance=Provenance(source_uri="t://fallback"), trust_tier=TrustTier.OWNER,
+    )
+    adapter.upsert(records=[r])
+    assert adapter.bump_proof_count(scope=scope, ids=[r.id]) == 1
+    assert adapter.get(scope=scope, ids=[r.id]).records[0].proof_count == 1
+    adapter.close()

@@ -334,6 +334,15 @@ class ContextEnvelope:
     evidence: tuple[str, ...]
 
     def render(self) -> str:
+        """Render the envelope. CACHE-STABLE BY CONTRACT: the output is a pure
+        function of the hit contents and their order — no timestamps, scores,
+        counts, run ids, or any other per-run metadata may enter this string.
+        Rekoll's context typically opens an agent's prompt, so identical hits
+        must render byte-identically or every volatile byte busts the host's
+        prompt-prefix cache on every call. Volatile diagnostics belong on
+        ``RecallResult`` (e.g. ``mode``) or in a host-appended footer, never
+        here. Guarded by a byte-identity test.
+        """
         parts: list[str] = []
         if self.directives:
             parts.append("# Trusted directives (rules to follow):")

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 from ..embedding import EmbedderIdentity
-from ..model import Kind, MemoryRecord, Scope
+from ..model import Kind, MemoryRecord, Scope, Status
 
 __all__ = [
     "StorageAdapter",
@@ -126,6 +126,50 @@ class StorageAdapter(ABC):
             f"adapter '{self.name}' does not support lexical search "
             f"(capability '{CAP_LEXICAL}' not advertised)"
         )
+
+    # --- optional: newest-record enumeration (freshness checks) -----------
+    def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
+        """The ``n`` most recently created records in ``scope``, newest first
+        (ties broken by id for determinism).
+
+        Consumed by ``Memory.health()``'s source-vs-index freshness check.
+        Optional the same way ``lexical_query`` is: a backend that cannot
+        enumerate by recency raises rather than silently returning a wrong
+        sample, and health() reports freshness as unknown.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support newest-record enumeration"
+        )
+
+    # --- was-it-used: proof_count increment -------------------------------
+    def bump_proof_count(self, *, scope: Scope, ids: Sequence[str]) -> int:
+        """Increment ``proof_count`` by one for each in-scope, non-quarantined
+        record named in ``ids``; return how many were credited.
+
+        This is the durable half of the was-it-used loop (``Memory.mark_used``).
+        It is a TARGETED, additive update on purpose: a full-row upsert would
+        (a) lose concurrent increments (read-modify-write races) and (b) revert
+        any other column a concurrent writer changed between the read and the
+        write. Adapters SHOULD implement this as an atomic ``proof_count =
+        proof_count + 1`` so neither happens.
+
+        The default here is a portable read-modify-write fallback for adapters
+        that haven't specialized it; it is correct only under a single writer.
+        The reference SQLite adapter overrides it with an atomic UPDATE.
+        """
+        wanted = list(ids)
+        if not wanted:
+            return 0
+        records = [
+            r for r in self.get(scope=scope, ids=wanted).records
+            if r.status is not Status.QUARANTINED
+        ]
+        if not records:
+            return 0
+        for record in records:
+            record.proof_count += 1
+        self.upsert(records=records)
+        return len(records)
 
     # --- embedder-identity guard (per scope) ------------------------------
     @abstractmethod

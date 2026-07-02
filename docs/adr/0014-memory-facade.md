@@ -1,6 +1,6 @@
 # ADR-0014 — The `Memory` facade is the public drop-in SDK (Door 2)
 
-**Status:** Accepted · **Date:** 2026-06-23
+**Status:** Accepted · **Date:** 2026-06-23 · **Amended by:** ADR-0024 (embedder-mismatch: refuse the vector leg, degrade honestly)
 
 ## Context
 By P2 the engine had all the parts (storage, embeddings, chunking, firewall,
@@ -18,7 +18,9 @@ A single `Memory` class with two core verbs and safe defaults:
 - Defaults: local SQLite at `./.rekoll/memory.db`, **auto** local embedder +
   reranker if the `embeddings` extra is present (else the stub), firewall ON,
   single-user scope. Embedder identity is recorded + checked (a model swap warns,
-  not corrupts).
+  not corrupts). *(Amended by ADR-0024: a mismatch now refuses the vector leg and
+  degrades to lexical-only — the warn is kept but no longer the whole story;
+  `Memory.reindex()` is the recovery.)*
 - `forget`, `count`, `close`, and a `Scope` (tenant/project/agent) for multi-tenant.
 
 ## Consequences

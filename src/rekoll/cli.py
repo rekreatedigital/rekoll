@@ -523,15 +523,52 @@ def _check_existing_store(args: argparse.Namespace) -> tuple[str, str]:
             return (
                 "WARN",
                 f"{detail}; stored with the keyword stub but semantic search is now "
-                "installed - re-ingest to upgrade old memories",
+                "installed - call Memory.reindex() to re-embed these memories with it "
+                "(re-ingesting identical content will NOT: ids are content-addressed, "
+                "so the stored vectors are reused, ADR-0024)",
             )
         if not stub_stored and not extra:
             return (
                 "WARN",
                 f"{detail}; stored with {identity.name} but the 'embeddings' extra is "
-                "gone - recall quality is degraded until you reinstall it",
+                "gone - recall quality is degraded until you reinstall it (or call "
+                "Memory.reindex() to re-embed with the current embedder)",
             )
     return ("ok", detail)
+
+
+def _check_freshness(args: argparse.Namespace) -> Optional[tuple[str, str]]:
+    """Render Memory.health() as a doctor line for an existing store.
+
+    Returns None (no line) when there is no store to check yet. Fail-soft:
+    health() never raises, and any open error degrades to a WARN, so doctor
+    itself never crashes on a broken store.
+    """
+    if not _store_exists(args.path) or args.path == ":memory:":
+        return None
+    if _is_rekoll_store(args.path) is False:
+        return None
+    from .memory import Memory
+
+    try:
+        mem = Memory(
+            path=args.path, tenant=args.tenant, project=args.project,
+            agent=args.agent, reranker=None,
+        )
+        try:
+            report = mem.health()
+        finally:
+            mem.close()
+    except Exception as exc:  # opening/reading a store must not crash doctor
+        return ("WARN", f"could not run the freshness check: {exc}")
+    detail = f"mode={report.mode}"
+    if report.notes:
+        detail += f" - {report.notes[0]}"
+    if report.ok is True:
+        return ("ok", f"index is fresh ({detail})")
+    if report.ok is None:
+        return ("ok", f"nothing to check yet ({detail})")
+    return ("WARN", f"index is degraded/stale ({detail})")
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -558,8 +595,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append((level, "store dir", detail))
     level, detail = _check_existing_store(args)
     checks.append((level, "store", detail))
-    # TODO(health-api): when Memory.health() lands (freshness/staleness API from a
-    # parallel session), call it here and render its findings as doctor lines.
+    freshness = _check_freshness(args)  # Memory.health() seam (ADR-0024)
+    if freshness is not None:
+        checks.append((freshness[0], "freshness", freshness[1]))
 
     for level, name, detail in checks:
         _out(f"  {level:<5} {name:<10} {detail}")

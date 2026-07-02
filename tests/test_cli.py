@@ -476,6 +476,17 @@ def test_doctor_sees_an_existing_store(project, capsys):
     assert "1 memory in scope" in capsys.readouterr().out
 
 
+def test_doctor_renders_the_health_freshness_line(project, capsys):
+    # The Memory.health() seam: doctor surfaces the freshness/mode of an
+    # existing store (the TODO(health-api) is now wired).
+    _remember("a fact so the store has something to check")
+    capsys.readouterr()
+    assert main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "freshness" in out
+    assert "mode=" in out  # the honest-degradation string is surfaced
+
+
 def test_doctor_fails_when_the_firewall_is_broken(project, capsys, monkeypatch):
     monkeypatch.setattr(
         "rekoll.cli._check_firewall",

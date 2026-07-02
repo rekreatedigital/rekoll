@@ -327,6 +327,28 @@ class SQLiteAdapter(StorageAdapter):
         self._conn.commit()
         return removed
 
+    def bump_proof_count(self, *, scope: Scope, ids: Sequence[str]) -> int:
+        """Atomic, targeted ``proof_count += 1`` for in-scope, non-quarantined
+        ids (the was-it-used signal). Unlike a full-row upsert this can neither
+        lose a concurrent increment nor revert a concurrent change to any other
+        column: the increment happens IN the database (``SET proof_count =
+        proof_count + 1``), touching only that column."""
+        ids = list(ids)
+        if not ids:
+            return 0
+        skey = scope.key()
+        placeholders = ",".join("?" * len(ids))
+        credited = 0
+        for table in _KIND_TABLE.values():
+            cur = self._conn.execute(
+                f"UPDATE {table} SET proof_count = proof_count + 1 "
+                f"WHERE scope_key=? AND status!=? AND id IN ({placeholders})",
+                (skey, Status.QUARANTINED.value, *ids),
+            )
+            credited += cur.rowcount
+        self._conn.commit()
+        return credited
+
     # -- reads --------------------------------------------------------------
     def get(self, *, scope: Scope, ids: Sequence[str]) -> GetResult:
         ids = list(ids)
@@ -353,6 +375,26 @@ class SQLiteAdapter(StorageAdapter):
             ).fetchone()
             total += row["c"]
         return total
+
+    def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
+        if n <= 0:
+            return GetResult(records=())
+        skey = scope.key()
+        tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
+        rows: list[sqlite3.Row] = []
+        for table in tables:
+            rows.extend(
+                self._conn.execute(
+                    # created_at is ISO-8601 UTC, so lexicographic order IS
+                    # chronological; id breaks same-instant ties deterministically
+                    # (DESC to match the Python merge sort below).
+                    f"SELECT * FROM {table} WHERE scope_key=? "
+                    f"ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (skey, n),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        return GetResult(records=tuple(self._row_to_record(row) for row in rows[:n]))
 
     def vector_query(
         self,
