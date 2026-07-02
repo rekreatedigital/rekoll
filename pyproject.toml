@@ -30,9 +30,14 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 embeddings = ["fastembed>=0.3"]
+mcp = ["mcp>=1.2"]
 
+# Both console scripts install unconditionally. `rekoll-mcp` needs the optional
+# `mcp` extra; without it, it exits with a plain-English install hint (all mcp
+# imports are lazy — see rekoll/mcp_server.py).
 [project.scripts]
 rekoll = "rekoll.cli:main"
+rekoll-mcp = "rekoll.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/ryankyleocampo-github/rekoll"

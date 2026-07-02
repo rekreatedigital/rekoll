@@ -134,6 +134,35 @@ def test_upsert_higher_trust_replaces_without_orphans():
     adapter.close()
 
 
+def test_count_filters_by_status():
+    """count() gained an optional keyword-only ``status`` filter (backward
+    compatible; default None counts every row). The MCP status tool leans on it
+    to report a recallable count that never surfaces quarantined-for-audit rows."""
+    from rekoll import Kind, MemoryRecord, Provenance, TrustTier
+    from rekoll.model import Status
+
+    adapter = _make()
+    scope = Scope(tenant="t", project="p", agent="a")
+
+    def rec(src, status):
+        r = MemoryRecord.create(
+            scope=scope, kind=Kind.RAW_FACT, content=f"body {src}",
+            provenance=Provenance(source_uri=src), trust_tier=TrustTier.UNVERIFIED,
+        )
+        r.status = status
+        return r
+
+    adapter.upsert(records=[
+        rec("src://a", Status.ACTIVE),
+        rec("src://b", Status.ACTIVE),
+        rec("src://c", Status.QUARANTINED),
+    ])
+    assert adapter.count(scope=scope) == 3  # default: everything, unchanged
+    assert adapter.count(scope=scope, status=Status.ACTIVE.value) == 2
+    assert adapter.count(scope=scope, status=Status.QUARANTINED.value) == 1
+    adapter.close()
+
+
 def test_persists_to_disk(tmp_path):
     from rekoll import Kind, MemoryRecord, Provenance, TrustTier
 
