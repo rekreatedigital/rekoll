@@ -373,6 +373,38 @@ def test_status_reports_pinned_scope_and_write_policy(tmp_path):
     assert "directive" not in out["writable_kinds"]
 
 
+def test_build_server_without_mcp_extra_prints_hint_and_exits_1(tmp_path, monkeypatch, capsys):
+    """Without the optional ``mcp`` extra, launching must fail with a plain
+    install hint and exit 1 — never a traceback. This is the base (no-mcp) CI
+    job's coverage of the lazy-import contract, so it must pass whether or not
+    the extra is installed: we block every ``mcp`` module to simulate its
+    absence (a bare ``sys.modules['mcp'] = None`` leaves cached submodules like
+    ``mcp.server.fastmcp`` importable, so blank them all)."""
+    from rekoll import mcp_server
+
+    for name in [m for m in list(sys.modules) if m == "mcp" or m.startswith("mcp.")]:
+        monkeypatch.setitem(sys.modules, name, None)
+    monkeypatch.setitem(sys.modules, "mcp", None)
+
+    # build_server raises the ImportError with the install hint...
+    with pytest.raises(ImportError) as build_exc:
+        mcp_server.build_server(
+            ServerConfig(
+                path=str(tmp_path / "m.db"), tenant="default", project="x",
+                agent="default", trust=TrustTier.UNVERIFIED, root=tmp_path,
+            )
+        )
+    assert 'pip install "rekoll[mcp]"' in str(build_exc.value)
+
+    # ...and main() turns that into a clean exit(1) with the hint on stderr.
+    with pytest.raises(SystemExit) as exc_info:
+        mcp_server.main(["--path", str(tmp_path / "m.db"), "--project", "x", "--root", str(tmp_path)])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert 'pip install "rekoll[mcp]"' in err
+    assert "Traceback" not in err  # first-run surface stays plain (ADR-0008)
+
+
 @requires_mcp  # without the extra, main() exits earlier with the install hint
 def test_main_reports_startup_failure_in_plain_english(tmp_path, capsys):
     blocker = tmp_path / "blocker"
