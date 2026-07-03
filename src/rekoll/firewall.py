@@ -297,7 +297,20 @@ def screened_record(
 _ENVELOPE_HEADER_RE = re.compile(
     r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
 )
-_ROLE_TAG_RE = re.compile(r"(?i)</?(?:system|assistant|user)>")
+# Read-side tag neutralizer. MUST cover the SAME forged role/channel vocabulary
+# the ingest markers flag (_INJECTION_MARKERS, structural section) — angle forms
+# system/assistant/user/im_start/im_end/tool AND bracket forms [system]/[inst]/
+# [assistant] with closers. A narrower read-side set let a TRUSTED record (an
+# OWNER directive, or a chat-log / prompt-eng doc you vouched for) render those
+# tags LIVE in recall().context(); an UNTRUSTED record is quarantined+dropped
+# before this runs, so only trusted content reaches here. Routed through
+# _sub_folded (below) so homoglyph-spoofed variants are caught too, and rewritten
+# to the stable "[tag]" placeholder to keep the envelope cache-stable. All fixed
+# alternations — no quantifier backtracking, ReDoS-gated like the rest.
+_ROLE_TAG_RE = re.compile(
+    r"(?i)(?:</?(?:system|assistant|user|im_start|im_end|tool)>"
+    r"|\[/?(?:system|inst|assistant)\])"
+)
 
 
 def _sub_folded(pattern: "re.Pattern[str]", repl: str, text: str) -> str:

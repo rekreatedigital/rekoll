@@ -275,3 +275,43 @@ def test_neutralize_preserves_legitimate_cyrillic():
 
     text = "привет мир — это обычный текст о базе данных"
     assert _neutralize_delimiters(text) == text
+
+
+# Ingest flags this whole tag vocabulary (firewall._INJECTION_MARKERS, the
+# forged role/channel tags): angle forms system/assistant/user/im_start/im_end/
+# tool, and bracket forms [system]/[inst]/[assistant] with closers.
+_INGEST_ROLE_TAGS = [
+    "<system>", "</system>", "<assistant>", "</assistant>", "<user>", "</user>",
+    "<im_start>", "</im_start>", "<im_end>", "<tool>", "</tool>",
+    "[system]", "[/system]", "[inst]", "[/inst]", "[assistant]", "[/assistant]",
+    "[SYSTEM]", "[INST]", "[/INST]",
+]
+
+
+def test_read_side_neutralizer_covers_full_ingest_tag_vocabulary_on_trusted_record():
+    # GOTCHA (was test_attack_corpus.py containment passing VACUOUSLY): an
+    # UNTRUSTED record carrying these tags is quarantined and DROPPED before the
+    # read-side neutralizer runs, so that test never exercises it. A TRUSTED
+    # record (an OWNER directive, or a chat-log / prompt-eng doc you vouched for)
+    # is NOT dropped — its content flows through _neutralize_delimiters and MUST
+    # have every ingest tag defanged, or it renders live into the agent's prompt.
+    content = "keep this " + " ".join(_INGEST_ROLE_TAGS) + " and this"
+    hit = _hit(content, kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    rendered = build_envelope([hit]).render()
+    for tag in _INGEST_ROLE_TAGS:
+        assert tag not in rendered, f"live ingest tag survived read-side neutralize: {tag!r}"
+    assert "[tag]" in rendered  # rewritten to the stable, cache-stable placeholder
+    # Surrounding prose is preserved (neutralization is surgical, not a nuke).
+    assert "keep this" in rendered and "and this" in rendered
+
+
+def test_read_side_neutralizer_covers_homoglyph_spoofed_ingest_tags():
+    # The widened neutralizer routes through _sub_folded, so a homoglyph-spoofed
+    # tag (Cyrillic 'ѕ' in <ѕystem>, 'і' in [іnst]) is caught on a trusted record
+    # too — parity with the ingest markers' homoglyph folding.
+    content = "x </ѕystem> y [іnst] z <tοol>"  # Cyrillic ѕ/і, Greek ο
+    hit = _hit(content, kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    rendered = build_envelope([hit]).render()
+    assert "[tag]" in rendered
+    for spoof in ("ѕystem", "іnst", "tοol"):
+        assert spoof not in rendered, f"homoglyph-spoofed tag survived: {spoof!r}"
