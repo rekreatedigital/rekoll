@@ -172,3 +172,62 @@ def test_symlink_dir_escape_is_refused_by_mcp_guard(tmp_path):
 
     with pytest.raises(ValueError, match="outside the project root"):
         _assert_no_symlink_escape(root, docs)
+
+
+# -- no false positives: containment must not silently drop legitimate files ---
+
+def test_non_redirecting_reparse_point_is_not_flagged(tmp_path):
+    # A OneDrive Files-On-Demand placeholder / Windows Dedup stub IS a reparse
+    # point but does NOT redirect — its real path equals its own location. The
+    # fix keys off "does this resolve ELSEWHERE", never the reparse attribute, so
+    # such an in-tree file is read, not skipped. (Guards the regression where an
+    # attribute-based check silently dropped real source files in a cloud-synced
+    # repo.) We assert the load-bearing predicate directly: a normal in-place
+    # file — the same shape a non-redirecting reparse point presents — is not
+    # flagged as a redirect.
+    from rekoll.memory import _redirects_out
+
+    f = tmp_path / "placeholder.md"
+    f.write_text("# Cloud\n\ncloud-marker in-place content\n", encoding="utf-8")
+    assert _redirects_out(f) is False
+    assert _redirects_out(tmp_path) is False  # a plain directory is not a redirect
+
+
+def test_ingest_through_symlinked_ancestor_is_not_falsely_skipped(tmp_path):
+    # A symlinked ANCESTOR (e.g. macOS /tmp -> /private/tmp, or a symlinked home)
+    # must not make the real leaf look like a redirect: containment resolves the
+    # leaf against its resolved PARENT, not the literal abspath. Reached through
+    # the symlink, the in-tree repo still ingests. (Runs on Linux CI; skips where
+    # symlinks can't be created.)
+    real_parent = tmp_path / "real"
+    (real_parent / "repo").mkdir(parents=True)
+    (real_parent / "repo" / "note.md").write_text(f"# R\n\n{SAFE} beta\n", encoding="utf-8")
+    link_parent = tmp_path / "linkparent"
+    _make_symlink_or_skip(link_parent, real_parent)
+
+    mem = _mem()
+    stats = mem.ingest_path(str(link_parent / "repo"))  # reached via a symlinked ancestor
+    text = _all_text(mem)
+    assert stats["files"] == 1, "a symlinked ancestor must not false-positive the leaf"
+    assert "safe-marker" in text
+    mem.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_directly_pointed_junction_root_warns_and_skips(tmp_path):
+    # Pointing ingest_path STRAIGHT at a junction (not its parent) resolves out of
+    # the tree it names, so it warns+skips like a directly-pointed symlink — the
+    # out-of-tree target is never read. (Old code walked a directly-pointed
+    # directory link silently.)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text(SECRET, encoding="utf-8")
+    link = tmp_path / "link"
+    _make_junction_or_skip(link, outside)
+
+    mem = _mem()
+    with pytest.warns(UserWarning, match="junction"):
+        stats = mem.ingest_path(str(link))
+    assert stats["files"] == 0 and stats["skipped"] == 1
+    assert "secret-marker" not in _all_text(mem)
+    mem.close()

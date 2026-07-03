@@ -20,7 +20,6 @@ degradation via ``RecallResult.mode`` (ADR-0024).
 from __future__ import annotations
 
 import os
-import stat
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,10 +82,11 @@ _PROBE_MIN_POOL = 20
 # A planted link inside an ingested tree can point anywhere on disk. The load-
 # bearing guard is REAL-PATH CONTAINMENT: resolve every directory we would
 # descend and every file we would read, and refuse anything whose real location
-# is not inside the resolved root. That catches symlinks, NTFS junctions, and any
-# other reparse point on every OS — not a hard-coded list. ``is_symlink()`` alone
-# is not enough: it returns False for a junction (``mklink /J``, no admin), so a
-# walk that only trusted it would descend the junction and leak out-of-tree files.
+# is not inside the resolved root. ``os.path.realpath`` resolves symlinks AND
+# NTFS junctions (a directory reparse point; ``is_symlink()`` returns False for
+# one, so a walk that only trusted it would descend a junction and leak), so
+# containment catches symlinks, junctions, and any redirecting reparse point on
+# every OS — not a hard-coded list.
 
 def _real_path(path) -> Path:
     """The fully link-resolved real path (``os.path.realpath`` resolves symlinks
@@ -105,18 +105,27 @@ def _within(root_real: Path, path) -> bool:
     return real == root_real or real.is_relative_to(root_real)
 
 
-def _is_link_like(path: Path) -> bool:
-    """A symlink OR any other reparse point (Windows junction / mount point).
-    ``Path.is_symlink()`` is False for a junction, so a walk that only trusted it
-    would follow one out of the tree; the reparse-attribute check closes that."""
+def _redirects_out(path) -> bool:
+    """True iff ``path`` is a link that RESOLVES ELSEWHERE than where it sits — a
+    symlink, an NTFS junction, or a mount point. Used only to decide whether a
+    directly-pointed target should warn+skip.
+
+    Deliberately NOT "is this a reparse point": a non-redirecting reparse point
+    (a OneDrive Files-On-Demand placeholder, a Windows Dedup stub) has its real
+    path equal to its own location and is a legitimate in-tree file to read —
+    flagging those on the reparse attribute alone would silently drop real source
+    files. We instead ask whether resolving the leaf lands somewhere other than
+    ``<resolved parent>/<name>``. Comparing against the resolved PARENT (not the
+    literal abspath) means a symlinked ANCESTOR — e.g. macOS ``/tmp`` ->
+    ``/private/tmp`` — does not false-positive the leaf."""
+    p = Path(os.path.abspath(os.fspath(path)))
     try:
-        if path.is_symlink():  # POSIX symlinks (and the monkeypatched skip tests)
+        if p.is_symlink():  # POSIX symlinks (and the monkeypatched skip tests)
             return True
-        st = os.stat(path, follow_symlinks=False)
-    except OSError:
-        return False
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-    return bool(reparse and getattr(st, "st_file_attributes", 0) & reparse)
+        here = os.path.join(os.path.realpath(p.parent), p.name)
+        return os.path.normcase(os.path.realpath(p)) != os.path.normcase(here)
+    except OSError:  # pragma: no cover - unresolvable: treat as a redirect (skip)
+        return True
 
 
 def _auto_embedder() -> Embedder:
@@ -424,12 +433,12 @@ class Memory:
         skip = set(skip_dirs) if skip_dirs else DEFAULT_SKIP_DIRS
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
-        if not follow_symlinks and _is_link_like(root):
-            # A directly-pointed link (symlink OR junction/reparse point) is
-            # skipped, not read — it can resolve outside the intended tree. Say
-            # so: the caller almost certainly expected it to be ingested. (A
-            # directory junction pointed at directly used to be walked silently;
-            # this closes that.)
+        if not follow_symlinks and _redirects_out(root):
+            # A directly-pointed link (symlink OR junction) is skipped, not read
+            # — it resolves outside the tree it names. Say so: the caller almost
+            # certainly expected it to be ingested. (A directory symlink or
+            # junction pointed at directly used to be walked silently; this
+            # closes that.)
             warnings.warn(
                 f"[rekoll] ingest_path was pointed at a symlink or junction "
                 f"({path!r}); it was skipped because a link can point outside "
@@ -446,11 +455,13 @@ class Memory:
         for fp in targets:
             try:
                 if not follow_symlinks and (
-                    _is_link_like(fp) or not _within(root_real, fp)
+                    fp.is_symlink() or not _within(root_real, fp)
                 ):
-                    # A planted link/reparse point can point outside the tree,
-                    # and real-path containment refuses any file that resolves
-                    # out of root regardless of how it got there.
+                    # Skip a symlinked file (a planted link can point outside the
+                    # tree — pinned regardless of where it resolves) AND, defense-
+                    # in-depth, anything whose REAL path escapes root (a reparse
+                    # file or a mid-walk TOCTOU swap). A non-redirecting reparse
+                    # point that stays in-root (OneDrive/dedup) is read normally.
                     skipped += 1
                     continue
                 if fp.stat().st_size > self._max_file_bytes:
