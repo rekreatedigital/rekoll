@@ -78,6 +78,56 @@ _PROBE_MAX_CHARS = 2048
 _PROBE_MIN_POOL = 20
 
 
+# -- filesystem containment (a walk must never read outside its root) ----------
+# A planted link inside an ingested tree can point anywhere on disk. The load-
+# bearing guard is REAL-PATH CONTAINMENT: resolve every directory we would
+# descend and every file we would read, and refuse anything whose real location
+# is not inside the resolved root. ``os.path.realpath`` resolves symlinks AND
+# NTFS junctions (a directory reparse point; ``is_symlink()`` returns False for
+# one, so a walk that only trusted it would descend a junction and leak), so
+# containment catches symlinks, junctions, and any redirecting reparse point on
+# every OS — not a hard-coded list.
+
+def _real_path(path) -> Path:
+    """The fully link-resolved real path (``os.path.realpath`` resolves symlinks
+    AND Windows junctions/reparse points; on a missing path it just absolutizes)."""
+    return Path(os.path.realpath(os.fspath(path)))
+
+
+def _within(root_real: Path, path) -> bool:
+    """True iff ``path`` resolves (link-followed) to inside ``root_real`` (which
+    must already be a real path). Fail-safe: an unresolvable path reads as
+    outside, so the caller skips/refuses it rather than reading it."""
+    try:
+        real = _real_path(path)
+    except OSError:  # pragma: no cover - resolution failure is treated as escape
+        return False
+    return real == root_real or real.is_relative_to(root_real)
+
+
+def _redirects_out(path) -> bool:
+    """True iff ``path`` is a link that RESOLVES ELSEWHERE than where it sits — a
+    symlink, an NTFS junction, or a mount point. Used only to decide whether a
+    directly-pointed target should warn+skip.
+
+    Deliberately NOT "is this a reparse point": a non-redirecting reparse point
+    (a OneDrive Files-On-Demand placeholder, a Windows Dedup stub) has its real
+    path equal to its own location and is a legitimate in-tree file to read —
+    flagging those on the reparse attribute alone would silently drop real source
+    files. We instead ask whether resolving the leaf lands somewhere other than
+    ``<resolved parent>/<name>``. Comparing against the resolved PARENT (not the
+    literal abspath) means a symlinked ANCESTOR — e.g. macOS ``/tmp`` ->
+    ``/private/tmp`` — does not false-positive the leaf."""
+    p = Path(os.path.abspath(os.fspath(path)))
+    try:
+        if p.is_symlink():  # POSIX symlinks (and the monkeypatched skip tests)
+            return True
+        here = os.path.join(os.path.realpath(p.parent), p.name)
+        return os.path.normcase(os.path.realpath(p)) != os.path.normcase(here)
+    except OSError:  # pragma: no cover - unresolvable: treat as a redirect (skip)
+        return True
+
+
 def _auto_embedder() -> Embedder:
     try:
         from .embedding import FastEmbedEmbedder
@@ -366,10 +416,13 @@ class Memory:
         passed over (symlink, over ``max_file_bytes``, undecodable, or
         unreadable).
 
-        Symlinked files are skipped unless ``follow_symlinks=True``: a planted
-        link in a third-party tree can point anywhere on disk (e.g.
-        ``~/.ssh/id_rsa``), and a bulk walk must not read outside the tree it
-        was pointed at. Directory symlinks are never descended.
+        Linked files are skipped unless ``follow_symlinks=True``: a planted link
+        in a third-party tree can point anywhere on disk (e.g. ``~/.ssh/id_rsa``),
+        and a bulk walk must not read outside the tree it was pointed at.
+        Containment is by REAL path (``os.path.realpath`` + ``is_relative_to``),
+        so symlinks, NTFS junctions, and any other reparse point are all caught —
+        ``is_symlink()`` alone misses a junction. Directory links (symlink or
+        junction) are never descended, even under ``follow_symlinks=True``.
 
         Files on disk are third-party by nature, so ``trust`` defaults to
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
@@ -380,24 +433,36 @@ class Memory:
         skip = set(skip_dirs) if skip_dirs else DEFAULT_SKIP_DIRS
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
-        targets = [root] if root.is_file() else list(self._walk(root, include, skip))
-        if root.is_file() and root.is_symlink() and not follow_symlinks:
-            # A directly-pointed symlink is skipped, not read — say so, since the
-            # caller almost certainly expected it to be ingested.
+        if not follow_symlinks and _redirects_out(root):
+            # A directly-pointed link (symlink OR junction) is skipped, not read
+            # — it resolves outside the tree it names. Say so: the caller almost
+            # certainly expected it to be ingested. (A directory symlink or
+            # junction pointed at directly used to be walked silently; this
+            # closes that.)
             warnings.warn(
-                f"[rekoll] ingest_path was pointed at a symlink ({path!r}); it "
-                "was skipped because a link can point outside the intended tree. "
-                "Pass follow_symlinks=True to read it.",
+                f"[rekoll] ingest_path was pointed at a symlink or junction "
+                f"({path!r}); it was skipped because a link can point outside "
+                "the intended tree. Pass follow_symlinks=True to read it.",
                 stacklevel=2,
             )
+            return {"files": 0, "chunks": 0, "skipped": 1, "total": self.count()}
+        root_real = _real_path(root)
+        targets = [root] if root.is_file() else list(self._walk(root, include, skip))
         files = 0
         chunks = 0
         skipped = 0
         pending: list[MemoryRecord] = []
         for fp in targets:
             try:
-                if not follow_symlinks and fp.is_symlink():
-                    skipped += 1  # a planted link can point outside the tree
+                if not follow_symlinks and (
+                    fp.is_symlink() or not _within(root_real, fp)
+                ):
+                    # Skip a symlinked file (a planted link can point outside the
+                    # tree — pinned regardless of where it resolves) AND, defense-
+                    # in-depth, anything whose REAL path escapes root (a reparse
+                    # file or a mid-walk TOCTOU swap). A non-redirecting reparse
+                    # point that stays in-root (OneDrive/dedup) is read normally.
+                    skipped += 1
                     continue
                 if fp.stat().st_size > self._max_file_bytes:
                     skipped += 1  # fast-path skip for a known-oversized file
@@ -902,8 +967,19 @@ class Memory:
 
     @staticmethod
     def _walk(root: Path, include: set, skip: set):
+        # os.walk(followlinks=False) already refuses to DESCEND directory
+        # symlinks, but it happily descends a junction (is_symlink()==False). So
+        # prune any directory whose REAL path escapes the root before os.walk
+        # recurses into it — catching junctions, reparse points, and dir symlinks
+        # alike. This is unconditional (like "dir symlinks are never descended"):
+        # an out-of-tree directory is never walked, even under follow_symlinks.
+        root_real = _real_path(root)
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in skip and not d.endswith(".egg-info")]
+            dirnames[:] = [
+                d for d in dirnames
+                if d not in skip and not d.endswith(".egg-info")
+                and _within(root_real, os.path.join(dirpath, d))
+            ]
             for name in filenames:
                 fp = Path(dirpath) / name
                 if fp.suffix.lower() in include:
