@@ -43,6 +43,33 @@ def test_expanded_secret_patterns_are_redacted():
     assert "S3cr3tP" not in pg.content
 
 
+def test_modern_token_patterns_are_redacted():
+    # Tokens the older patterns miss: GitHub fine-grained PAT (prefix "github_pat_",
+    # not "ghp_"), Slack app-level ("xapp-"), and npm ("npm_" + 36 chars).
+    body = "A" * 22 + "_" + "b" * 59  # ~82 chars, github fine-grained PAT shape
+    cases = {
+        "github_pat": "token github_pat_" + body + " for CI",
+        "slack_app_token": "SLACK_APP_TOKEN=xapp-1-A01234567-1234567890123-abcdef0123456789abcdef then run",
+        "npm_token": "//registry.npmjs.org/:_authToken=npm_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+    }
+    for name, raw in cases.items():
+        decision = screen(raw, source_trust=TrustTier.OWNER)
+        assert decision.action is DefenseAction.REDACT, f"{name} not redacted: {decision.content!r}"
+        assert f"[REDACTED:{name}]" in decision.content, f"{name} marker missing: {decision.content!r}"
+        assert decision.redactions and decision.redactions[0].startswith(f"{name}:sha256:")
+    # The live token bodies must never survive.
+    assert "a1B2c3D4" not in screen(cases["npm_token"], source_trust=TrustTier.OWNER).content
+    assert "1-A01234567" not in screen(cases["slack_app_token"], source_trust=TrustTier.OWNER).content
+
+
+def test_modern_token_patterns_no_false_positive_on_benign_prose():
+    # The literal prefixes are distinctive: benign words that merely start similarly
+    # must not trip (no "github_pat_" underscore; npm_ run far shorter than 36).
+    for benign in ("see the github_pattern docs", "run npm_install now", "xapp-ui component"):
+        decision = screen(benign, source_trust=TrustTier.OWNER)
+        assert decision.action is DefenseAction.ALLOW, f"false-positive redaction on {benign!r}"
+
+
 def test_private_key_whole_block_is_redacted_not_just_header():
     # The header-only pattern left the base64 key BODY in stored content; the
     # whole-block pattern must redact header..footer so no key material survives.

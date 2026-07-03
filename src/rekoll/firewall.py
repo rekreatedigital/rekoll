@@ -52,7 +52,14 @@ _SECRET_PATTERNS = [
     ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
     ("stripe_key", re.compile(r"[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}")),
     ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
+    # GitHub fine-grained PAT: "github_pat_" + ~82 base62/underscore chars. The
+    # gh[pousr]_ pattern above can't match it (prefix is "github_", not "ghp_").
+    ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{60,255}")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+    # Slack app-level token ("xapp-…") — distinct prefix the xox[baprs]- class misses.
+    ("slack_app_token", re.compile(r"xapp-[A-Za-z0-9-]{10,}")),
+    # npm automation/granular access token: "npm_" + 36 base62 chars.
+    ("npm_token", re.compile(r"npm_[A-Za-z0-9]{36}")),
     ("slack_webhook", re.compile(r"https://hooks\.slack\.com/services/T[0-9A-Z]+/B[0-9A-Z]+/[A-Za-z0-9]+")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35,}")),
     ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
