@@ -152,6 +152,12 @@ _KEEP_CONTROL = {"\t", "\n", "\r"}
 # "ignоre all previous instructions" slips past every marker. Used ONLY on the
 # detection copy (``_marker_scan``) — never on stored content, so legitimate
 # non-Latin text is preserved byte-for-byte.
+#
+# HARD CONSTRAINT: every mapping is single char → single char. ``_sub_folded``
+# (read side) edits the ORIGINAL text at match spans taken from the folded copy,
+# which only aligns 1:1 if folding preserves length. A multi-char mapping (e.g. a
+# full TR39 'rn'→'m') would shift offsets and mis-edit the envelope — so this map
+# is deliberately NOT a full TR39 confusables table.
 _CONFUSABLES = str.maketrans({
     # Cyrillic → Latin
     "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o",
@@ -160,6 +166,32 @@ _CONFUSABLES = str.maketrans({
     # Greek → Latin
     "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
     "ρ": "p", "τ": "t", "υ": "u", "γ": "y", "χ": "x",
+    # Latin small-capital & IPA look-alikes (NFKC- and casefold-stable, so they
+    # slipped every marker: "iɡnore all previous instructions" was NOT detected).
+    # Single Latin twin each; detection-only, stored content untouched.
+    "ɡ": "g", "ɢ": "g",  # U+0261 script g, U+0262 small-cap G
+    "ɩ": "i", "ɪ": "i",  # U+0269 iota, U+026A small-cap I
+    "ɑ": "a", "ᴀ": "a",  # U+0251 alpha, U+1D00 small-cap A
+    "ʙ": "b",            # U+0299 small-cap B
+    "ᴄ": "c",            # U+1D04 small-cap C
+    "ᴅ": "d",            # U+1D05 small-cap D
+    "ᴇ": "e",            # U+1D07 small-cap E
+    "ʜ": "h",            # U+029C small-cap H
+    "ᴊ": "j",            # U+1D0A small-cap J
+    "ᴋ": "k",            # U+1D0B small-cap K
+    "ʟ": "l",            # U+029F small-cap L
+    "ᴍ": "m",            # U+1D0D small-cap M
+    "ɴ": "n",            # U+0274 small-cap N
+    "ᴏ": "o",            # U+1D0F small-cap O
+    "ᴘ": "p",            # U+1D18 small-cap P
+    "ʀ": "r",            # U+0280 small-cap R
+    "ꜱ": "s",            # U+A731 small-cap S
+    "ᴛ": "t",            # U+1D1B small-cap T
+    "ᴜ": "u",            # U+1D1C small-cap U
+    "ᴠ": "v",            # U+1D20 small-cap V
+    "ᴡ": "w",            # U+1D21 small-cap W
+    "ʏ": "y",            # U+028F small-cap Y
+    "ᴢ": "z",            # U+1D22 small-cap Z
 })
 
 
