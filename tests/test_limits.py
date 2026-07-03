@@ -161,6 +161,11 @@ _STRESS_BUILDERS = [
     ("url-no-terminator", lambda n: "x://" + "u" * n),
     ("keyword-marker-flood", lambda n: "ignore all " * n),
     ("word-space-flood", lambda n: "override your " * n),
+    # Repeated-prefix flood: a shape that RE-ANCHORS a lazy scan at every
+    # occurrence. The private_key full-block (repeated BEGIN header, no END) was
+    # O(n^2) here and INVISIBLE to the char-run floods above — the gate was blind
+    # to it until this builder landed. (jwt's eyJ flood joins below.)
+    ("pem-begin-flood", lambda n: "-----BEGIN PRIVATE KEY-----" * n),
     # Whitespace-only flood: pins the read-path '[n]' rewrite, where a plain
     # "\s*" under (?m) rescans across every newline (O(n^2) per recall). Ingest
     # patterns are linear on it; the read-path gate below is where it bites.
@@ -174,7 +179,7 @@ def _all_patterns():
     return out
 
 
-def _min_time(pattern, text, repeats=5):
+def _min_time(pattern, text, repeats=3):
     best = float("inf")
     for _ in range(repeats):
         t0 = _time.perf_counter()
@@ -248,7 +253,7 @@ def test_read_path_neutralize_scales_linearly():
     )
 
 
-def _min_time_call(fn, arg, repeats=5):
+def _min_time_call(fn, arg, repeats=3):
     best = float("inf")
     for _ in range(repeats):
         t0 = _time.perf_counter()

@@ -58,9 +58,17 @@ _SECRET_PATTERNS = [
     ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
     ("sendgrid_key", re.compile(r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}")),
     # Whole PEM block (header..footer) so the base64 key BODY is redacted, not
-    # just the header line. Lazy body + required terminator = linear, no ReDoS.
+    # just the header line. The body is BOUNDED ({0,8192}?), NOT an open lazy
+    # scan: unbounded, a flood of repeated "-----BEGIN ... PRIVATE KEY-----"
+    # headers with no terminator re-anchors the match at every header and lazily
+    # scans forward to end-of-string each time — O(n^2) (measured ~1.8s at the
+    # 100k cap). A bounded body caps the forward scan per anchor at a constant,
+    # so total work is linear. 8 KiB comfortably holds any real private-key PEM
+    # body (RSA-4096 ~3.3KB, encrypted PKCS#8 a touch more); a longer block still
+    # has its header flagged by the fallback pattern below, so no header slips.
+    # Bounded quantifier is also Python-3.10-safe (no atomic/possessive groups).
     ("private_key", re.compile(
-        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]{0,8192}?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
     )),
     # Fallback: a truncated/headers-only block still gets its header flagged.
     ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
