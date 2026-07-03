@@ -72,7 +72,13 @@ _SECRET_PATTERNS = [
     )),
     # Fallback: a truncated/headers-only block still gets its header flagged.
     ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    # JWT (header.payload.signature). The leading (?<![A-Za-z0-9_\-]) stops the
+    # match re-anchoring at EVERY "eyJ": in a "eyJeyJeyJ..." flood each interior
+    # eyJ is preceded by a base64 char, so only a boundary-anchored eyJ tries the
+    # (failing) greedy segment scan — without it every eyJ restarted a full
+    # forward scan, O(n^2) (measured ~20s at the 100k cap). Real JWTs sit after a
+    # boundary (space, ", :, =, start), so detection is unchanged.
+    ("jwt", re.compile(r"(?<![A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # scheme://user:pass@host — redacts the whole DSN (host included) so an
     # embedded '@' in the password can't leak a tail. The scheme is bounded to
     # {0,30} (real URI schemes are short, RFC 3986) so a "sk-sk-..." / "ab.+-..."
