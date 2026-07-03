@@ -254,30 +254,34 @@ def _contained_path(root: Path, raw: str) -> Path:
 
 def _assert_no_symlink_escape(root: Path, target: Path) -> None:
     """Defense-in-depth: refuse if ``target``'s subtree contains ANY entry whose
-    real (symlink-resolved) path escapes ``root``, before a byte is read.
+    REAL (link-resolved) path escapes ``root``, before a byte is read.
 
-    The core ``Memory.ingest_path`` already skips symlinked files
+    The core ``Memory.ingest_path`` already skips linked files
     (``follow_symlinks=False``), so this is belt-and-suspenders: it holds the
     "only reads inside the configured root" promise at the MCP boundary even if
-    the core default ever changed. Directory symlinks are refused too (a link to
-    an out-of-root tree would otherwise expose everything under it). A file
-    target's own containment is already checked by ``_contained_path``.
+    the core default ever changed. Containment is checked by real path
+    (``os.path.realpath`` + ``is_relative_to``) on EVERY entry — not just those
+    ``is_symlink()`` flags — because that returns False for an NTFS junction
+    (``mklink /J``, no admin), which ``os.walk`` would otherwise descend. Real
+    path resolves symlinks, junctions, and any other reparse point on every OS.
+    An escaping directory is caught in its parent's listing, before ``os.walk``
+    recurses into it, so nothing out-of-root is ever read. A file target's own
+    containment is already checked by ``_contained_path``.
     """
-    root = root.resolve()
+    root = Path(os.path.realpath(root))
     if target.is_file():
         return  # already resolved + contained by _contained_path
     for dirpath, dirnames, filenames in os.walk(target):
         base = Path(dirpath)
         for name in list(dirnames) + filenames:
             entry = base / name
-            if not entry.is_symlink():
-                continue
-            resolved = entry.resolve()
+            resolved = Path(os.path.realpath(entry))
             if resolved != root and not resolved.is_relative_to(root):
                 raise ValueError(
-                    f"path is outside the project root ({root}): a symlink "
-                    f"({entry}) resolves out of the tree. This server only "
-                    "ingests files under its configured root."
+                    f"path is outside the project root ({root}): {entry} "
+                    "resolves out of the tree (symlink, junction, or other "
+                    "reparse point). This server only ingests files under its "
+                    "configured root."
                 )
 
 
