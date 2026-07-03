@@ -274,6 +274,11 @@ def _pathological_inputs():
         "connection-string-bait": "scheme://" + "u" * n + ":" + "p" * n + "@",
         "key-prefix-flood": "sk-" * (n // 2),
         "email-local-flood": "1-" * n + "@x.co",
+        # Repeated-prefix floods: each 'eyJ' / '-----BEGIN ... PRIVATE KEY-----'
+        # used to re-anchor a full forward scan (jwt / private_key O(n^2)). These
+        # exercise screen()'s secret patterns on those shapes directly.
+        "jwt-eyj-flood": "eyJ" * n,
+        "pem-begin-flood": "-----BEGIN PRIVATE KEY-----" * (n // 4),
     }
 
 
@@ -294,3 +299,26 @@ def test_screen_does_not_hang_on_pathological_input(name):
             f"screen(redact_pii={pii}) took {elapsed:.2f}s on {name!r} "
             f"({len(payload):,} chars) — likely catastrophic backtracking"
         )
+
+
+@pytest.mark.parametrize("name", ["newline-flood", "pem-begin-flood", "jwt-eyj-flood", "bracket-index-flood"])
+def test_read_path_does_not_hang_on_pathological_input(name):
+    # The screen() backstop above never touches the READ path. This one does: a
+    # whitespace-heavy or repeated-prefix record run through build_envelope's
+    # neutralizer + render must not hang either (the '[n]' rewrite was O(n^2) on
+    # whitespace). bracket-index-flood pins the '[n]' rewrite shape specifically.
+    n = 20_000
+    payloads = {
+        "newline-flood": "\n" * n,
+        "pem-begin-flood": "-----BEGIN PRIVATE KEY-----" * (n // 4),
+        "jwt-eyj-flood": "eyJ" * n,
+        "bracket-index-flood": ("   [1] x\n" * n),
+    }
+    payload = payloads[name]
+    start = _time.perf_counter()
+    _read_path_render(payload)
+    elapsed = _time.perf_counter() - start
+    assert elapsed < _HANG_BUDGET_SECONDS, (
+        f"read-path render took {elapsed:.2f}s on {name!r} "
+        f"({len(payload):,} chars) — likely catastrophic backtracking"
+    )
