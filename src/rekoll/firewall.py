@@ -322,7 +322,12 @@ def _neutralize_delimiters(text: str) -> str:
     # Defuse a forged evidence index so a stored string can't fake the renderer's
     # own '[n]' numbering: rewrite any line-leading [12] to (12). (Digits aren't
     # confusable-folded; NFKC in sanitize_unicode already folds fullwidth digits.)
-    out = re.sub(r"(?m)^(\s*)\[(\d+)\]", r"\1(\2)", out)
+    # The leading-whitespace class is HORIZONTAL-only ([^\S\n], i.e. space/tab/CR/
+    # form-feed but not newline): a plain "\s*" spans newlines under (?m), so each
+    # of a record's line starts would rescan every following blank line — O(n^2) on
+    # a whitespace-heavy record, and this runs on EVERY recall. A per-line class
+    # can't cross a newline, so the rewrite stays linear (ReDoS-gated in test_limits).
+    out = re.sub(r"(?m)^([^\S\n]*)\[(\d+)\]", r"\1(\2)", out)
     return out
 
 

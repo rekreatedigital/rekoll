@@ -161,6 +161,10 @@ _STRESS_BUILDERS = [
     ("url-no-terminator", lambda n: "x://" + "u" * n),
     ("keyword-marker-flood", lambda n: "ignore all " * n),
     ("word-space-flood", lambda n: "override your " * n),
+    # Whitespace-only flood: pins the read-path '[n]' rewrite, where a plain
+    # "\s*" under (?m) rescans across every newline (O(n^2) per recall). Ingest
+    # patterns are linear on it; the read-path gate below is where it bites.
+    ("newline-flood", lambda n: "\n" * n),
 ]
 
 
@@ -200,6 +204,57 @@ def test_every_firewall_pattern_scales_linearly():
         "super-linear (ReDoS-prone) regex scaling — a pattern rescans on "
         "backtracking:\n  " + "\n  ".join(offenders)
     )
+
+
+def _read_path_render(text: str) -> None:
+    """Drive the FULL read path a recall exercises: neutralize + envelope render.
+
+    build_envelope() calls _neutralize_delimiters() on every hit's content, and
+    render() stitches them. This is what runs on EVERY recall/context() call, so
+    its regexes must scale as tightly as the ingest ones — the ingest-only gate
+    above never touched it, which is how the '[n]' whitespace quadratic shipped.
+    """
+    from rekoll import Kind, MemoryRecord, Provenance, Scope, TrustTier
+    from rekoll.adapters.base import QueryHit
+
+    record = MemoryRecord.create(
+        scope=Scope(), kind=Kind.RAW_FACT, content=text,
+        provenance=Provenance(source_uri="t://redos"), trust_tier=TrustTier.TRUSTED_SOURCE,
+    )
+    firewall.build_envelope([QueryHit(record=record, score=1.0)]).render()
+
+
+def test_read_path_neutralize_scales_linearly():
+    # Same runner-independent scaling assertion as the ingest gate, but over the
+    # READ path (_neutralize_delimiters + build_envelope().render()). The newline
+    # flood is the killer here: a "\s*"-anchored '[n]' rewrite rescans every line.
+    offenders = []
+    for target, label in ((firewall._neutralize_delimiters, "neutralize"),
+                          (_read_path_render, "envelope-render")):
+        for bname, build in _STRESS_BUILDERS:
+            t_n = _min_time_call(target, build(_SCALE_N))
+            t_big = _min_time_call(target, build(_SCALE_N * _SCALE_FACTOR))
+            if t_big < 2e-3:
+                continue
+            ratio = t_big / t_n if t_n > 1e-6 else 1.0
+            if ratio > _MAX_SCALE_RATIO:
+                offenders.append(
+                    f"{label} on {bname!r}: {t_n*1e3:.2f}ms -> {t_big*1e3:.2f}ms "
+                    f"(x{ratio:.1f} for {_SCALE_FACTOR}x input)"
+                )
+    assert not offenders, (
+        "super-linear scaling on the READ path (runs on every recall):\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def _min_time_call(fn, arg, repeats=5):
+    best = float("inf")
+    for _ in range(repeats):
+        t0 = _time.perf_counter()
+        fn(arg)
+        best = min(best, _time.perf_counter() - t0)
+    return best
 
 
 def _pathological_inputs():
