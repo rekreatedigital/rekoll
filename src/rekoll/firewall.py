@@ -46,7 +46,9 @@ class DefenseAction(str, Enum):
 
 
 # Secret/credential patterns. Matches are redacted (never stored raw), even from a
-# trusted source — defense in depth so the index never holds a live credential.
+# trusted source — defense in depth so the index never holds a live credential in
+# these known formats. (Pattern-based, not a guarantee for arbitrary secrets: a
+# credential in a format this list doesn't know is stored as-is.)
 _SECRET_PATTERNS = [
     ("aws_access_key", re.compile(r"AKIA[0-9A-Z]{16}")),
     ("anthropic_key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
