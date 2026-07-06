@@ -284,10 +284,11 @@ class Memory:
         heading-per-line document chunks at ~0.25 chunks/byte). All ADR-0018:
         overridable, never disable-able to zero.
         """
-        if not str(path).strip():
-            # An empty path used to fall through to the ':memory:' branch: the
-            # store LOOKED fine but was ephemeral, and every write evaporated
-            # on close. Ephemeral must be an explicit opt-in, never a typo.
+        if path is None or not str(path).strip():
+            # An empty (or None — e.g. an unset env var passed straight in)
+            # path used to fall through to the ':memory:' branch: the store
+            # LOOKED fine but was ephemeral, and every write evaporated on
+            # close. Ephemeral must be an explicit opt-in, never a typo.
             raise ValueError(
                 "path is empty; pass a real database file path, or ':memory:' "
                 "to explicitly opt into an ephemeral in-memory store"

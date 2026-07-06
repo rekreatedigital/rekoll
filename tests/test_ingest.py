@@ -284,7 +284,9 @@ def test_empty_path_is_rejected_not_aliased_to_memory():
     # #8.1: Memory(path="") used to fall through to the ':memory:' branch, so a
     # typo'd/empty path silently opened an EPHEMERAL store and every write
     # evaporated on close. An empty path is a config error and must fail loudly.
-    for bad in ("", "   ", "\t"):
+    # None is the same bug in its most realistic costume — an unset env var
+    # (os.environ.get("REKOLL_PATH")) passed straight in.
+    for bad in (None, "", "   ", "\t"):
         with pytest.raises(ValueError, match="path"):
             Memory(path=bad, embedder=StubEmbedder(), reranker=None)
     # The explicit ephemeral spelling keeps working.
