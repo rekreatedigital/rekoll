@@ -30,9 +30,12 @@ verbatim, at its original trust.
 ## Consequences
 
 - Detection, not prevention: an attacker who can write content can also
-  recompute `content_hash` (it is not keyed). The honest claim — made in
-  SECURITY.md — is that *naive* tampering is caught; a keyed/signed trusted
-  tier (DESIGN §13.10) is the escalation path and out of scope here.
+  recompute `content_hash` (it is not keyed). The digest also covers content
+  ALONE — a direct `UPDATE` of `trust_tier` or `status` passes `verify()`
+  unflagged, no recompute needed. The honest claim — made in
+  SECURITY.md — is that *naive* content tampering is caught; a keyed/signed
+  trusted tier (DESIGN §13.10) is the escalation path for both gaps and out of
+  scope here.
 - Tampered records silently drop out of results (plus a warning); callers who
   pinned exact hit counts against a hand-tampered store will notice — that is
   the point.

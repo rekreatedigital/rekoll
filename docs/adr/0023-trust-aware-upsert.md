@@ -4,7 +4,8 @@
 
 ## Context
 
-Records are content-addressed: `id = f(scope, source_uri, content_hash)`, with a
+Records are content-addressed: `id = f(scope, source_uri, content_hash)` (since
+ADR-0026 the payload also includes `kind`), with a
 DB `UNIQUE(scope_key, content_hash)` guaranteeing one row per (scope, content)
 for idempotent re-ingestion (ADR-0006). The reference adapter's `upsert` uses
 `INSERT OR REPLACE`.
