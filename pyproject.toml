@@ -31,6 +31,10 @@ dependencies = []
 dev = ["pytest>=8"]
 embeddings = ["fastembed>=0.3"]
 mcp = ["mcp>=1.2"]
+# ALL benchmark-only dependencies live here — the single canonical location for
+# the efficacy/benchmark harness. Aggregates [embeddings] because real-path
+# quality runs need the real embedder. Never imported on the default path.
+bench = ["rekoll[embeddings]"]
 
 # Both console scripts install unconditionally. `rekoll-mcp` needs the optional
 # `mcp` extra; without it, it exits with a plain-English install hint (all mcp
