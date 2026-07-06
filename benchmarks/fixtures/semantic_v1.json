@@ -114,7 +114,7 @@
     10000
    ]
   },
-  "content_sha256": "6b816a15a1d5f3903124db714104134f2c056c599b3d205f15f9190111ed7b78"
+  "content_sha256": "8580fe4bcce5415a7cdfcbbe534b08ffbcbd07b13d266317620d8442591a1a58"
  },
  "documents": [
   {
@@ -4399,14 +4399,14 @@
    "relevant": [
     "g-atlas-datastore-decision",
     "g-cinder-datastore-decision",
-    "g-ember-datastore-decision"
+    "g-ember-datastore-decision",
+    "d-atlas-postgres-version"
    ],
    "paraphrase": false,
    "control": false,
    "overlap": 0.2,
    "bucket": "low",
    "hard_negatives": [
-    "d-atlas-postgres-version",
     "d-atlas-migration",
     "g-beacon-images",
     "d-atlas-kafka-lag",
@@ -4425,7 +4425,8 @@
     "d-cinder-embeddings",
     "d-atlas-oncall",
     "g-drift-rollback",
-    "g-atlas-cert-incident"
+    "g-atlas-cert-incident",
+    "g-ember-sso"
    ]
   },
   {

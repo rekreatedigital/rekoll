@@ -23,7 +23,7 @@ FIXDIR = Path(__file__).resolve().parents[1] / "benchmarks" / "fixtures"
 FIXTURE_PATH = FIXDIR / "semantic_v1.json"
 
 # Frozen at the freeze commit; recorded in PREREGISTRATION_semantic_v1.md.
-EXPECTED_CONTENT_SHA256 = "6b816a15a1d5f3903124db714104134f2c056c599b3d205f15f9190111ed7b78"
+EXPECTED_CONTENT_SHA256 = "8580fe4bcce5415a7cdfcbbe534b08ffbcbd07b13d266317620d8442591a1a58"
 # Deterministic filler corpora (seed 20260707) for the 1k / 10k sweep.
 EXPECTED_FILLER_900_SHA256 = "04ab012e921bbbbc863192a069df26f42c59484c29226d90b94436c67bd8f1cf"
 EXPECTED_FILLER_9900_SHA256 = "a9f9d120db661a5c454edfb3390cfe84b84cf8bc3a593b45e5153c144522c762"

@@ -174,8 +174,34 @@ fix-orchestrator**:
 
 ---
 
-## Freeze record
+## Freeze record (appended at the freeze commit — still before any results commit)
 
-*(Intentionally empty at pre-registration time. The freeze commit — which
-still precedes any results commit — appends here: the fixture content_sha256,
-final composition counts, per-bucket counts, and the adjudication summary.)*
+- `semantic_v1.json` content_sha256:
+  `8580fe4bcce5415a7cdfcbbe534b08ffbcbd07b13d266317620d8442591a1a58`
+- Committed docs: 100 (46 gold, 54 near-miss distractors)
+- Scored queries: 118 — buckets LOW 33 / MED 34 / HIGH 51; paraphrase-flagged 64;
+  multi-gold (|G| >= 3) 15
+- Negative controls: 12 (excluded from all metric means)
+- Hard negatives: 20 per scored query, miner `okapi-bm25-stdlib (k1=1.5, b=0.75)`,
+  tiebreak seed 20260707
+- Filler corpora (seed 20260707): sha256 n=900 `04ab012e921bbbbc…`,
+  n=9900 `a9f9d120db661a5c…` (full values pinned in tests/test_semantic_fixture.py)
+- Adjudication (see `adjudication_semantic_v1.json` — annotators are AI passes,
+  honestly labeled):
+  - Round 1 (gold pairs only, 148): both passes all-yes; raw agreement 1.00;
+    κ UNDEFINED (degenerate all-yes marginals) — reported honestly; this
+    motivated round 2.
+  - Round 2 (calibrated: 148 gold + 40 blinded bait pairs = query × its own
+    top-ranked BM25 hard negative): gold accepted 148/148 by both passes; bait
+    rejected 39/40 by both; raw agreement 1.00; Cohen's κ = 1.00
+    (mixed-category set).
+  - One repair: (q102, d-atlas-postgres-version) — bait judged relevant by both
+    passes; relabeled as gold for q102 (keeping it a negative would have been
+    label noise biased against the lexical arm). Derived fields re-derived and
+    re-verified.
+  - Residual-noise estimate: 1/40 sampled top-rank hard negatives (2.5%) was an
+    unlabeled positive; the remaining mined negatives were not exhaustively
+    adjudicated (known weakness).
+- One earlier draft of the fixture (hash `6b816a15…`, pre-repair) was committed
+  before adjudication completed; the only content change since is the q102
+  relabel above. No retrieval results existed before this freeze commit.
