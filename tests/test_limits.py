@@ -136,6 +136,19 @@ def test_hybrid_search_truncates_oversized_query():
 # regardless of how fast the box is. Python's `re` has no atomic groups /
 # possessive quantifiers before 3.11, so bounded {m,n} quantifiers are the
 # 3.10-safe way to keep prefixes from rescanning.
+#
+# History (2026-07-06): the ratio of two sub-5ms wall-clock timings is pure
+# noise — on a loaded windows-3.13 CI runner a genuinely LINEAR pattern (`phone`
+# on a "1-"*n flood) measured 0.58ms -> 4.81ms (x8.3) and tripped the gate. A
+# whole BAND of fast combos spikes to x6-8+ from timing jitter alone. The ratio
+# is only trustworthy once the absolute time is out of that noise band, so we now
+# skip any combo whose 4x-input time is below _RATIO_NOISE_FLOOR_SECONDS. That is
+# SAFE, not a coverage hole: the 4x builders are already at/above the 100k content
+# cap, so a pattern that screens them in <50ms cannot DoS at any real input size;
+# and a true regression to super-linear lands 10x+ above the floor (the O(n^2)
+# bugs this suite guards were 0.8-8.6s), so it is still caught. Measured: every
+# linear combo sits at x4.0-4.5 once above the floor; the flakes live only below
+# ~5ms.
 
 import time as _time
 
@@ -146,6 +159,12 @@ _SCALE_FACTOR = 4
 # Linear -> ~4x for a 4x input. Allow 8x (2x margin over linear for timing
 # noise); quadratic (~16x) and exponential blow well past it.
 _MAX_SCALE_RATIO = 8.0
+# Only trust the scaling ratio once the 4x-input time clears the timing-noise
+# band (see the 2026-07-06 note above). 50ms is 10x over the observed flake band
+# (<5ms) and 2x over the slowest benign combo (~25ms); anything genuinely
+# super-linear blows far past it. Below it, the pattern is already fast enough at
+# >= production-scale input that no DoS is possible.
+_RATIO_NOISE_FLOOR_SECONDS = 5e-2
 # Absolute backstop: post-fix, screening these sizes is single-digit ms, so a
 # generous cap only ever trips on a true hang / exponential blowup.
 _HANG_BUDGET_SECONDS = 5.0
@@ -161,6 +180,24 @@ _STRESS_BUILDERS = [
     ("url-no-terminator", lambda n: "x://" + "u" * n),
     ("keyword-marker-flood", lambda n: "ignore all " * n),
     ("word-space-flood", lambda n: "override your " * n),
+    # Repeated-prefix floods: a shape that RE-ANCHORS a greedy/lazy scan at every
+    # occurrence. The private_key full-block (repeated BEGIN header, no END) and
+    # jwt (repeated eyJ) were both O(n^2) here and INVISIBLE to the char-run
+    # floods above — the gate was blind to them until these builders landed.
+    ("pem-begin-flood", lambda n: "-----BEGIN PRIVATE KEY-----" * n),
+    ("jwt-eyj-flood", lambda n: "eyJ" * n),
+    # Whitespace-only flood: pins the read-path '[n]' rewrite, where a plain
+    # "\s*" under (?m) rescans across every newline (O(n^2) per recall). Ingest
+    # patterns are linear on it; the read-path gate below is where it bites.
+    ("newline-flood", lambda n: "\n" * n),
+    # Markdown-markup + unclosed-tag floods: these specifically stress the READ-
+    # path delimiter regexes (_ENVELOPE_HEADER_RE's leading [ \t>#*=_~-]* class,
+    # and _ROLE_TAG_RE's tag alternation) — the header/tag neutralizers that the
+    # ingest per-pattern gate never touches. A future edit that makes either
+    # backtrack on forged-header / forged-tag input is caught here.
+    ("markup-mix-flood", lambda n: "#>*=_~- " * n),
+    ("angle-open-flood", lambda n: "<system" * n),
+    ("bracket-tag-flood", lambda n: "[inst" * n),
 ]
 
 
@@ -188,8 +225,8 @@ def test_every_firewall_pattern_scales_linearly():
         for bname, build in _STRESS_BUILDERS:
             t_n = _min_time(pat, build(_SCALE_N))
             t_big = _min_time(pat, build(_SCALE_N * _SCALE_FACTOR))
-            if t_big < 2e-3:
-                continue  # below timing noise — a fast (linear) pattern, fine
+            if t_big < _RATIO_NOISE_FLOOR_SECONDS:
+                continue  # too fast to time reliably (and too fast to DoS) — skip
             ratio = t_big / t_n if t_n > 1e-6 else 1.0
             if ratio > _MAX_SCALE_RATIO:
                 offenders.append(
@@ -200,6 +237,57 @@ def test_every_firewall_pattern_scales_linearly():
         "super-linear (ReDoS-prone) regex scaling — a pattern rescans on "
         "backtracking:\n  " + "\n  ".join(offenders)
     )
+
+
+def _read_path_render(text: str) -> None:
+    """Drive the FULL read path a recall exercises: neutralize + envelope render.
+
+    build_envelope() calls _neutralize_delimiters() on every hit's content, and
+    render() stitches them. This is what runs on EVERY recall/context() call, so
+    its regexes must scale as tightly as the ingest ones — the ingest-only gate
+    above never touched it, which is how the '[n]' whitespace quadratic shipped.
+    """
+    from rekoll import Kind, MemoryRecord, Provenance, Scope, TrustTier
+    from rekoll.adapters.base import QueryHit
+
+    record = MemoryRecord.create(
+        scope=Scope(), kind=Kind.RAW_FACT, content=text,
+        provenance=Provenance(source_uri="t://redos"), trust_tier=TrustTier.TRUSTED_SOURCE,
+    )
+    firewall.build_envelope([QueryHit(record=record, score=1.0)]).render()
+
+
+def test_read_path_neutralize_scales_linearly():
+    # Same runner-independent scaling assertion as the ingest gate, but over the
+    # READ path (_neutralize_delimiters + build_envelope().render()). The newline
+    # flood is the killer here: a "\s*"-anchored '[n]' rewrite rescans every line.
+    offenders = []
+    for target, label in ((firewall._neutralize_delimiters, "neutralize"),
+                          (_read_path_render, "envelope-render")):
+        for bname, build in _STRESS_BUILDERS:
+            t_n = _min_time_call(target, build(_SCALE_N))
+            t_big = _min_time_call(target, build(_SCALE_N * _SCALE_FACTOR))
+            if t_big < _RATIO_NOISE_FLOOR_SECONDS:
+                continue  # too fast to time reliably (and too fast to DoS) — skip
+            ratio = t_big / t_n if t_n > 1e-6 else 1.0
+            if ratio > _MAX_SCALE_RATIO:
+                offenders.append(
+                    f"{label} on {bname!r}: {t_n*1e3:.2f}ms -> {t_big*1e3:.2f}ms "
+                    f"(x{ratio:.1f} for {_SCALE_FACTOR}x input)"
+                )
+    assert not offenders, (
+        "super-linear scaling on the READ path (runs on every recall):\n  "
+        + "\n  ".join(offenders)
+    )
+
+
+def _min_time_call(fn, arg, repeats=5):
+    best = float("inf")
+    for _ in range(repeats):
+        t0 = _time.perf_counter()
+        fn(arg)
+        best = min(best, _time.perf_counter() - t0)
+    return best
 
 
 def _pathological_inputs():
@@ -213,6 +301,11 @@ def _pathological_inputs():
         "connection-string-bait": "scheme://" + "u" * n + ":" + "p" * n + "@",
         "key-prefix-flood": "sk-" * (n // 2),
         "email-local-flood": "1-" * n + "@x.co",
+        # Repeated-prefix floods: each 'eyJ' / '-----BEGIN ... PRIVATE KEY-----'
+        # used to re-anchor a full forward scan (jwt / private_key O(n^2)). These
+        # exercise screen()'s secret patterns on those shapes directly.
+        "jwt-eyj-flood": "eyJ" * n,
+        "pem-begin-flood": "-----BEGIN PRIVATE KEY-----" * (n // 4),
     }
 
 
@@ -233,3 +326,26 @@ def test_screen_does_not_hang_on_pathological_input(name):
             f"screen(redact_pii={pii}) took {elapsed:.2f}s on {name!r} "
             f"({len(payload):,} chars) — likely catastrophic backtracking"
         )
+
+
+@pytest.mark.parametrize("name", ["newline-flood", "pem-begin-flood", "jwt-eyj-flood", "bracket-index-flood"])
+def test_read_path_does_not_hang_on_pathological_input(name):
+    # The screen() backstop above never touches the READ path. This one does: a
+    # whitespace-heavy or repeated-prefix record run through build_envelope's
+    # neutralizer + render must not hang either (the '[n]' rewrite was O(n^2) on
+    # whitespace). bracket-index-flood pins the '[n]' rewrite shape specifically.
+    n = 20_000
+    payloads = {
+        "newline-flood": "\n" * n,
+        "pem-begin-flood": "-----BEGIN PRIVATE KEY-----" * (n // 4),
+        "jwt-eyj-flood": "eyJ" * n,
+        "bracket-index-flood": ("   [1] x\n" * n),
+    }
+    payload = payloads[name]
+    start = _time.perf_counter()
+    _read_path_render(payload)
+    elapsed = _time.perf_counter() - start
+    assert elapsed < _HANG_BUDGET_SECONDS, (
+        f"read-path render took {elapsed:.2f}s on {name!r} "
+        f"({len(payload):,} chars) — likely catastrophic backtracking"
+    )

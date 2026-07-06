@@ -52,19 +52,43 @@ _SECRET_PATTERNS = [
     ("openai_key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
     ("stripe_key", re.compile(r"[rsp]k_(?:live|test)_[A-Za-z0-9]{16,}")),
     ("github_token", re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}")),
+    # GitHub fine-grained PAT: "github_pat_" + ~82 base62/underscore chars. The
+    # gh[pousr]_ pattern above can't match it (prefix is "github_", not "ghp_").
+    ("github_pat", re.compile(r"github_pat_[A-Za-z0-9_]{60,255}")),
     ("slack_token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
+    # Slack app-level token ("xapp-…") — distinct prefix the xox[baprs]- class misses.
+    ("slack_app_token", re.compile(r"xapp-[A-Za-z0-9-]{10,}")),
+    # npm automation/granular access token: "npm_" + 36 base62 chars.
+    ("npm_token", re.compile(r"npm_[A-Za-z0-9]{36}")),
     ("slack_webhook", re.compile(r"https://hooks\.slack\.com/services/T[0-9A-Z]+/B[0-9A-Z]+/[A-Za-z0-9]+")),
     ("google_api_key", re.compile(r"AIza[0-9A-Za-z_\-]{35,}")),
     ("google_oauth_secret", re.compile(r"GOCSPX-[A-Za-z0-9_\-]{20,}")),
     ("sendgrid_key", re.compile(r"SG\.[A-Za-z0-9_\-]{22}\.[A-Za-z0-9_\-]{43}")),
     # Whole PEM block (header..footer) so the base64 key BODY is redacted, not
-    # just the header line. Lazy body + required terminator = linear, no ReDoS.
+    # just the header line. The body is BOUNDED ({0,8192}?), NOT an open lazy
+    # scan: unbounded, a flood of repeated "-----BEGIN ... PRIVATE KEY-----"
+    # headers with no terminator re-anchors the match at every header and lazily
+    # scans forward to end-of-string each time — O(n^2) (measured ~1.8s at the
+    # 100k cap). A bounded body caps the forward scan per anchor at a constant,
+    # so total work is linear. 8 KiB comfortably holds any real private-key PEM
+    # body: RSA-4096 ~3.3KB, encrypted PKCS#8 a touch more, and even the largest
+    # NIST post-quantum key, ML-DSA-87 (~4.9KB raw → ~6.6KB base64), fits. So do
+    # NOT raise this bound to "cover bigger keys" — nothing standardized needs it,
+    # and a larger constant only slows the ReDoS gate; a genuinely longer block
+    # still has its header flagged by the fallback pattern below, so none slips.
+    # Bounded quantifier is also Python-3.10-safe (no atomic/possessive groups).
     ("private_key", re.compile(
-        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
+        r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]{0,8192}?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"
     )),
     # Fallback: a truncated/headers-only block still gets its header flagged.
     ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----")),
-    ("jwt", re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
+    # JWT (header.payload.signature). The leading (?<![A-Za-z0-9_\-]) stops the
+    # match re-anchoring at EVERY "eyJ": in a "eyJeyJeyJ..." flood each interior
+    # eyJ is preceded by a base64 char, so only a boundary-anchored eyJ tries the
+    # (failing) greedy segment scan — without it every eyJ restarted a full
+    # forward scan, O(n^2) (measured ~20s at the 100k cap). Real JWTs sit after a
+    # boundary (space, ", :, =, start), so detection is unchanged.
+    ("jwt", re.compile(r"(?<![A-Za-z0-9_\-])eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")),
     # scheme://user:pass@host — redacts the whole DSN (host included) so an
     # embedded '@' in the password can't leak a tail. The scheme is bounded to
     # {0,30} (real URI schemes are short, RFC 3986) so a "sk-sk-..." / "ab.+-..."
@@ -138,6 +162,12 @@ _KEEP_CONTROL = {"\t", "\n", "\r"}
 # "ignоre all previous instructions" slips past every marker. Used ONLY on the
 # detection copy (``_marker_scan``) — never on stored content, so legitimate
 # non-Latin text is preserved byte-for-byte.
+#
+# HARD CONSTRAINT: every mapping is single char → single char. ``_sub_folded``
+# (read side) edits the ORIGINAL text at match spans taken from the folded copy,
+# which only aligns 1:1 if folding preserves length. A multi-char mapping (e.g. a
+# full TR39 'rn'→'m') would shift offsets and mis-edit the envelope — so this map
+# is deliberately NOT a full TR39 confusables table.
 _CONFUSABLES = str.maketrans({
     # Cyrillic → Latin
     "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o",
@@ -146,6 +176,32 @@ _CONFUSABLES = str.maketrans({
     # Greek → Latin
     "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
     "ρ": "p", "τ": "t", "υ": "u", "γ": "y", "χ": "x",
+    # Latin small-capital & IPA look-alikes (NFKC- and casefold-stable, so they
+    # slipped every marker: "iɡnore all previous instructions" was NOT detected).
+    # Single Latin twin each; detection-only, stored content untouched.
+    "ɡ": "g", "ɢ": "g",  # U+0261 script g, U+0262 small-cap G
+    "ɩ": "i", "ɪ": "i",  # U+0269 iota, U+026A small-cap I
+    "ɑ": "a", "ᴀ": "a",  # U+0251 alpha, U+1D00 small-cap A
+    "ʙ": "b",            # U+0299 small-cap B
+    "ᴄ": "c",            # U+1D04 small-cap C
+    "ᴅ": "d",            # U+1D05 small-cap D
+    "ᴇ": "e",            # U+1D07 small-cap E
+    "ʜ": "h",            # U+029C small-cap H
+    "ᴊ": "j",            # U+1D0A small-cap J
+    "ᴋ": "k",            # U+1D0B small-cap K
+    "ʟ": "l",            # U+029F small-cap L
+    "ᴍ": "m",            # U+1D0D small-cap M
+    "ɴ": "n",            # U+0274 small-cap N
+    "ᴏ": "o",            # U+1D0F small-cap O
+    "ᴘ": "p",            # U+1D18 small-cap P
+    "ʀ": "r",            # U+0280 small-cap R
+    "ꜱ": "s",            # U+A731 small-cap S
+    "ᴛ": "t",            # U+1D1B small-cap T
+    "ᴜ": "u",            # U+1D1C small-cap U
+    "ᴠ": "v",            # U+1D20 small-cap V
+    "ᴡ": "w",            # U+1D21 small-cap W
+    "ʏ": "y",            # U+028F small-cap Y
+    "ᴢ": "z",            # U+1D22 small-cap Z
 })
 
 
@@ -283,7 +339,20 @@ def screened_record(
 _ENVELOPE_HEADER_RE = re.compile(
     r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
 )
-_ROLE_TAG_RE = re.compile(r"(?i)</?(?:system|assistant|user)>")
+# Read-side tag neutralizer. MUST cover the SAME forged role/channel vocabulary
+# the ingest markers flag (_INJECTION_MARKERS, structural section) — angle forms
+# system/assistant/user/im_start/im_end/tool AND bracket forms [system]/[inst]/
+# [assistant] with closers. A narrower read-side set let a TRUSTED record (an
+# OWNER directive, or a chat-log / prompt-eng doc you vouched for) render those
+# tags LIVE in recall().context(); an UNTRUSTED record is quarantined+dropped
+# before this runs, so only trusted content reaches here. Routed through
+# _sub_folded (below) so homoglyph-spoofed variants are caught too, and rewritten
+# to the stable "[tag]" placeholder to keep the envelope cache-stable. All fixed
+# alternations — no quantifier backtracking, ReDoS-gated like the rest.
+_ROLE_TAG_RE = re.compile(
+    r"(?i)(?:</?(?:system|assistant|user|im_start|im_end|tool)>"
+    r"|\[/?(?:system|inst|assistant)\])"
+)
 
 
 def _sub_folded(pattern: "re.Pattern[str]", repl: str, text: str) -> str:
@@ -322,7 +391,12 @@ def _neutralize_delimiters(text: str) -> str:
     # Defuse a forged evidence index so a stored string can't fake the renderer's
     # own '[n]' numbering: rewrite any line-leading [12] to (12). (Digits aren't
     # confusable-folded; NFKC in sanitize_unicode already folds fullwidth digits.)
-    out = re.sub(r"(?m)^(\s*)\[(\d+)\]", r"\1(\2)", out)
+    # The leading-whitespace class is HORIZONTAL-only ([^\S\n], i.e. space/tab/CR/
+    # form-feed but not newline): a plain "\s*" spans newlines under (?m), so each
+    # of a record's line starts would rescan every following blank line — O(n^2) on
+    # a whitespace-heavy record, and this runs on EVERY recall. A per-line class
+    # can't cross a newline, so the rewrite stays linear (ReDoS-gated in test_limits).
+    out = re.sub(r"(?m)^([^\S\n]*)\[(\d+)\]", r"\1(\2)", out)
     return out
 
 
