@@ -29,3 +29,11 @@ the stub embedder.
   so the CI gate stays fast and network-free.
 - `run_benchmark.py` already supports `--fastembed`/`--rerank`, so wiring
   LongMemEval is "add a loader + a sealed split," not new harness code.
+
+## Addendum (2026-07-07) — metric policy for the extended evaluator
+`rekoll.evaluation` now also reports hit-rate@k, precision@k, MAP, and nDCG@k
+(binary + graded), plus per-query rows for CIs/paired tests. Policy: on
+binary/low-positive fixtures (the smoke gate, LongMemEval-style subsets),
+**recall@k / MRR / hit-rate@k are PRIMARY**; nDCG@k is a labeled diagnostic
+only (≈ rank-of-first on binary gold) and is headlined only on a genuinely
+graded fixture (real `relevant_grades`).
