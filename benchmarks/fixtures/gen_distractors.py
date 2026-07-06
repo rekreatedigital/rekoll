@@ -90,17 +90,33 @@ TEMPLATES = [
 
 
 def generate(count: int, seed: int = SEED) -> list[dict]:
-    """Deterministically generate `count` filler docs: [{"key","text"}...]."""
+    """Deterministically generate `count` UNIQUE filler docs: [{"key","text"}...].
+
+    Texts are deduplicated (draw-until-unique): the storage adapter enforces a
+    UNIQUE (scope, content_hash) constraint, so duplicate filler texts would be
+    unstorable. Deterministic for a given (count, seed); the sha256 of the
+    generated lists is pinned in tests/test_semantic_fixture.py.
+    """
     rng = random.Random(seed)
     docs = []
-    for i in range(count):
+    seen: set[str] = set()
+    i = 0
+    attempts = 0
+    while len(docs) < count:
+        attempts += 1
+        if attempts > count * 1000:  # template space is ample; this never fires
+            raise RuntimeError("filler template space exhausted")
         tpl = rng.choice(TEMPLATES)
         text = tpl.format(
             p=rng.choice(PROJECTS), s=rng.choice(SERVICES), t=rng.choice(TOOLS),
             x=rng.choice(TECH), n=rng.randint(2, 90), m=rng.randint(2, 30),
             d=rng.choice(WEEKDAYS),
         )
+        if text in seen:
+            continue
+        seen.add(text)
         docs.append({"key": f"f-{i:05d}", "text": text})
+        i += 1
     return docs
 
 

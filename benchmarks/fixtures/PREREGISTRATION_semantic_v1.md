@@ -184,8 +184,15 @@ fix-orchestrator**:
 - Negative controls: 12 (excluded from all metric means)
 - Hard negatives: 20 per scored query, miner `okapi-bm25-stdlib (k1=1.5, b=0.75)`,
   tiebreak seed 20260707
-- Filler corpora (seed 20260707): sha256 n=900 `04ab012e921bbbbc…`,
-  n=9900 `a9f9d120db661a5c…` (full values pinned in tests/test_semantic_fixture.py)
+- Filler corpora (seed 20260707): sha256 n=900 `73f7eae8d34bf067…`,
+  n=9900 `69e287192b9987ff…` (full values pinned in tests/test_semantic_fixture.py).
+  *Post-freeze amendment, disclosed:* the first generator version produced
+  duplicate texts, which the adapter's UNIQUE (scope, content_hash) constraint
+  rejects at ingest — the 1k corpus was unbuildable, so NO 1k/10k results ever
+  existed under the old hashes (`04ab012e…`/`a9f9d120…`). The generator gained
+  draw-until-unique dedup (same seed, same templates) and these hashes were
+  re-pinned BEFORE the first successful 1k/10k scoring run. Committed docs and
+  the fixture content hash are untouched.
 - Adjudication (see `adjudication_semantic_v1.json` — annotators are AI passes,
   honestly labeled):
   - Round 1 (gold pairs only, 148): both passes all-yes; raw agreement 1.00;
