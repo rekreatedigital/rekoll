@@ -42,6 +42,7 @@ __all__ = [
     "DEFAULT_INGEST_TRUST",
     "DEFAULT_MAX_CONTENT_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
+    "DEFAULT_MAX_CHUNKS_PER_DOC",
 ]
 
 # Files and bulk documents are third-party by nature: ingestion defaults to
@@ -55,8 +56,15 @@ DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
 # a document, not a fact — chunk it via ingest_text/ingest_path instead. A single
 # ingested file/document: 10 MiB of TEXT (~2 500 pages) — bigger inputs are
 # almost never prose and reading them unbounded is a memory-exhaustion vector.
+# The byte cap bounds BYTES, not WORK: a heading-per-line markdown document
+# chunks at ~0.25 chunks/byte (~2.6M chunks at the byte cap), so one document's
+# CHUNK COUNT is capped too. 25k clears the largest legitimate yield (a 10 MiB
+# plain-text file at the default stride is ~15k chunks) with headroom; past it
+# the ingest is REJECTED (ingest_text raises; ingest_path skips + counts the
+# file) — never silently truncated.
 DEFAULT_MAX_CONTENT_CHARS = 100_000
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_CHUNKS_PER_DOC = 25_000
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -240,6 +248,7 @@ class Memory:
         redact_pii: bool = False,
         max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        max_chunks_per_doc: int = DEFAULT_MAX_CHUNKS_PER_DOC,
     ) -> None:
         """``default_trust`` applies to first-person ``remember()`` calls ONLY.
 
@@ -249,8 +258,10 @@ class Memory:
         firewall's quarantine (ADR-0016).
 
         ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
-        caps one ingested file/document (ADR-0018). Both overridable, never
-        disable-able to zero.
+        caps one ingested file/document's bytes; ``max_chunks_per_doc`` caps how
+        many chunks one document may yield (bytes alone don't bound work — a
+        heading-per-line document chunks at ~0.25 chunks/byte). All ADR-0018:
+        overridable, never disable-able to zero.
         """
         if not str(path).strip():
             # An empty path used to fall through to the ':memory:' branch: the
@@ -260,14 +271,17 @@ class Memory:
                 "path is empty; pass a real database file path, or ':memory:' "
                 "to explicitly opt into an ephemeral in-memory store"
             )
-        if max_content_chars <= 0 or max_file_bytes <= 0:
-            raise ValueError("max_content_chars and max_file_bytes must be positive")
+        if max_content_chars <= 0 or max_file_bytes <= 0 or max_chunks_per_doc <= 0:
+            raise ValueError(
+                "max_content_chars, max_file_bytes and max_chunks_per_doc must be positive"
+            )
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
         self._redact_pii = redact_pii
         self._max_content_chars = max_content_chars
         self._max_file_bytes = max_file_bytes
+        self._max_chunks_per_doc = max_chunks_per_doc
 
         if backend == "sqlite" and path and path != ":memory:":
             Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -386,6 +400,7 @@ class Memory:
         source: Optional[str] = None,
         kind: Kind = Kind.RAW_FACT,
         trust: Optional[TrustTier] = None,
+        batch: int = 256,
     ) -> int:
         """Chunk a document and store it. Returns the number of chunks stored.
 
@@ -393,6 +408,12 @@ class Memory:
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
         chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
         ``trust=`` explicitly to vouch for a source you control.
+
+        A document over ``max_file_bytes`` OR chunking into more than
+        ``max_chunks_per_doc`` pieces raises (ADR-0018): bytes alone don't
+        bound work — a heading-per-line document yields ~0.25 chunks/byte.
+        Chunks are embedded + stored in bounded batches of ``batch``, so peak
+        memory tracks the batch, never the document.
         """
         n_bytes = len(text.encode("utf-8"))  # a BYTES limit — measure bytes, not chars
         if n_bytes > self._max_file_bytes:
@@ -401,13 +422,22 @@ class Memory:
                 f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
                 "split it or raise max_file_bytes (ADR-0018)."
             )
+        pieces = chunk_file(name, text)
+        if len(pieces) > self._max_chunks_per_doc:
+            raise ValueError(
+                f"document chunked into {len(pieces):,} pieces, over the "
+                f"max_chunks_per_doc={self._max_chunks_per_doc:,} ingestion "
+                "limit — rejected rather than silently truncated; split the "
+                "document or raise max_chunks_per_doc (ADR-0018)."
+            )
         src = source or f"text://{name}"
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
-        records = []
-        for i, piece in enumerate(chunk_file(name, text)):
+        stored = 0
+        pending: list[MemoryRecord] = []
+        for i, piece in enumerate(pieces):
             if self._screen and not sanitize_unicode(piece):
                 continue  # nothing survives screening (e.g. only zero-width chars)
-            records.append(
+            pending.append(
                 self._make_record(
                     content=piece,
                     kind=kind,
@@ -418,8 +448,13 @@ class Memory:
                     metadata={"path": name},
                 )
             )
-        self._embed_and_store(records)
-        return len(records)
+            stored += 1
+            if len(pending) >= batch:
+                self._embed_and_store(pending)
+                pending = []
+        if pending:
+            self._embed_and_store(pending)
+        return stored
 
     def ingest_path(
         self,
@@ -434,8 +469,8 @@ class Memory:
         """Index a file or directory (code + docs).
 
         Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
-        passed over (symlink, over ``max_file_bytes``, undecodable, or
-        unreadable).
+        passed over (symlink, over ``max_file_bytes``, over
+        ``max_chunks_per_doc``, undecodable, or unreadable).
 
         Linked files are skipped unless ``follow_symlinks=True``: a planted link
         in a third-party tree can point anywhere on disk (e.g. ``~/.ssh/id_rsa``),
@@ -502,6 +537,12 @@ class Memory:
                 continue
             rel = fp.name if root.is_file() else fp.relative_to(root).as_posix()
             pieces = chunk_file(rel, text)
+            if len(pieces) > self._max_chunks_per_doc:
+                # Chunk-count explosion (bytes don't bound work, ADR-0018):
+                # reject THIS document — whole, never truncated — and keep
+                # walking, mirroring the max_file_bytes skip above.
+                skipped += 1
+                continue
             if not pieces:
                 continue
             files += 1

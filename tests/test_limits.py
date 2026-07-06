@@ -69,6 +69,74 @@ def test_ingest_text_under_cap_still_works():
     mem.close()
 
 
+# ---- ingest: chunk-count cap + bounded batches (M7, ADR-0018) --------------
+#
+# max_file_bytes bounds BYTES, not WORK: a heading-per-line markdown document
+# chunks at ~0.25 chunks/byte (measured), i.e. ~2.6M chunks at the 10 MiB byte
+# cap — and ingest_text used to embed ALL of them in ONE call.
+
+class _CountingEmbedder(StubEmbedder):
+    """Records every embed() batch size — pins the bounded-batch contract."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batch_sizes: list[int] = []
+
+    def embed(self, texts):
+        self.batch_sizes.append(len(texts))
+        return super().embed(texts)
+
+
+def test_ingest_text_chunk_count_cap_rejects_explosive_docs():
+    # REJECT past the bound, loudly, like the byte cap — never silent truncation.
+    mem = _mem(max_chunks_per_doc=50)
+    with pytest.raises(ValueError, match="max_chunks_per_doc"):
+        mem.ingest_text("# h\n" * 51, name="explode.md")
+    assert mem.count() == 0, "a rejected document must store nothing"
+    assert mem.ingest_text("# h\n" * 50, name="ok.md") == 50  # at-cap still works
+    mem.close()
+
+
+def test_default_chunk_cap_exists_and_is_generous():
+    from rekoll.memory import DEFAULT_MAX_CHUNKS_PER_DOC
+
+    # ~15k chunks is the largest LEGITIMATE yield (10 MiB of plain text at the
+    # default stride); the default cap must clear that with headroom while
+    # cutting the ~2.6M pathological yield.
+    assert 15_000 < DEFAULT_MAX_CHUNKS_PER_DOC < 2_621_440
+
+
+def test_ingest_text_embeds_and_stores_in_bounded_batches():
+    # ingest_text used to build every record, then embed them all in ONE call —
+    # the memory spike. It must flush in bounded batches like ingest_path does.
+    emb = _CountingEmbedder()
+    mem = Memory(path=":memory:", embedder=emb, reranker=None)
+    doc = "".join(f"# heading {i}\n" for i in range(300))  # 300 DISTINCT chunks
+    assert mem.ingest_text(doc, name="many.md") == 300
+    assert max(emb.batch_sizes) <= 256, f"un-batched embed call: {emb.batch_sizes}"
+    assert sum(emb.batch_sizes) == 300  # batching must not drop chunks
+    assert mem.count() == 300
+    mem.close()
+
+
+def test_ingest_path_skips_chunk_explosive_files_and_counts_them(tmp_path):
+    # A bulk walk must not die on one pathological file: reject THAT document
+    # (skip + count), ingest the rest — mirroring the max_file_bytes behavior.
+    (tmp_path / "explode.md").write_text("# h\n" * 51, encoding="utf-8")
+    (tmp_path / "ok.md").write_text("# Ok\n\nplain prose here.", encoding="utf-8")
+    mem = _mem(max_chunks_per_doc=50)
+    stats = mem.ingest_path(str(tmp_path))
+    assert stats["files"] == 1
+    assert stats["skipped"] == 1
+    assert all("# h" not in t for t in mem.recall("h", k=10).texts())
+    mem.close()
+
+
+def test_chunk_cap_knob_must_be_positive():
+    with pytest.raises(ValueError, match="positive"):
+        _mem(max_chunks_per_doc=0)
+
+
 # ---- ingest_path(): oversized files skipped, never read --------------------
 
 def test_ingest_path_skips_oversized_files_and_counts_them(tmp_path):
