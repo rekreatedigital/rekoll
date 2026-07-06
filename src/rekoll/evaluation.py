@@ -29,7 +29,7 @@ from typing import (
 __all__ = [
     "LabeledQuery",
     "EvalResult",
-    "QueryResult",
+    "QueryMetrics",
     "recall_at_k",
     "reciprocal_rank",
     "hit_rate_at_k",
@@ -71,7 +71,10 @@ class LabeledQuery:
     def __post_init__(self) -> None:
         if self.relevant_grades is None:
             return
-        if any(g < 0 for g in self.relevant_grades.values()):
+        if any(
+            not isinstance(g, int) or g < 0 for g in self.relevant_grades.values()
+        ):
+            # bool is an int subclass and is deliberately allowed (True == 1).
             raise ValueError("relevant_grades must map ids to integer grades >= 0")
         binarized = frozenset(
             rid for rid, g in self.relevant_grades.items() if g >= 1
@@ -85,8 +88,12 @@ class LabeledQuery:
 
 
 @dataclass(frozen=True)
-class QueryResult:
+class QueryMetrics:
     """Per-query metric row from ``evaluate(..., per_query=True)``.
+
+    (Named ``QueryMetrics`` — not ``QueryResult`` — because
+    ``rekoll.adapters.base.QueryResult`` is an existing, unrelated retrieval
+    type; two public ``QueryResult`` classes in one package would confuse.)
 
     One row per labeled query, in input order. Rows carry every metric for
     that single query, so a downstream harness can compute bootstrap CIs and
@@ -120,7 +127,7 @@ class EvalResult:
     precision_at_k: float = 0.0
     average_precision: float = 0.0
     ndcg_at_k: float = 0.0
-    per_query: Optional[Tuple[QueryResult, ...]] = None
+    per_query: Optional[Tuple[QueryMetrics, ...]] = None
 
     def __str__(self) -> str:
         return (
@@ -150,6 +157,8 @@ def hit_rate_at_k(ranked_ids: Sequence[str], relevant: AbstractSet[str], k: int)
 
     Empty ``relevant`` (or ``k <= 0``) yields 0.0.
     """
+    if k <= 0:
+        return 0.0
     return 1.0 if any(rid in relevant for rid in ranked_ids[:k]) else 0.0
 
 
@@ -208,7 +217,8 @@ def ndcg_at_k(ranked_ids: Sequence[str], relevant: Relevance, k: int) -> float:
         nDCG@k   = DCG@k / IDCG@k,  or 0.0 when IDCG@k == 0
     """
     if isinstance(relevant, _MappingABC):
-        if any(g < 0 for g in relevant.values()):
+        if any(not isinstance(g, int) or g < 0 for g in relevant.values()):
+            # bool is an int subclass and is deliberately allowed (True == 1).
             raise ValueError("graded relevance requires integer grades >= 0")
         gold_grades = list(relevant.values())
 
@@ -250,7 +260,7 @@ def evaluate(
     runs exactly once, feeding all metrics.
 
     With ``per_query=True`` the result additionally carries one
-    :class:`QueryResult` row per query (input order) in ``EvalResult.per_query``
+    :class:`QueryMetrics` row per query (input order) in ``EvalResult.per_query``
     so downstream harnesses can bootstrap CIs / run paired tests without
     re-running search; the default (``per_query=False``) leaves that field
     None, preserving the original result shape.
@@ -270,7 +280,7 @@ def evaluate(
             q.relevant_grades if q.relevant_grades is not None else q.relevant_ids
         )
         rows.append(
-            QueryResult(
+            QueryMetrics(
                 query=q.query,
                 recall_at_k=recall_at_k(ranked, q.relevant_ids, k),
                 reciprocal_rank=reciprocal_rank(ranked, q.relevant_ids),

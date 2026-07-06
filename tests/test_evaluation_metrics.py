@@ -19,7 +19,7 @@ import pytest
 from rekoll.evaluation import (
     EvalResult,
     LabeledQuery,
-    QueryResult,
+    QueryMetrics,
     average_precision,
     evaluate,
     hit_rate_at_k,
@@ -50,6 +50,16 @@ def test_hit_rate_at_k_edges():
     # k longer than the ranking: same as scanning the whole (short) list.
     assert hit_rate_at_k(["a", "b", "c"], frozenset({"c"}), 10) == 1.0
     assert hit_rate_at_k([], frozenset({"a"}), 5) == 0.0  # empty ranking
+
+
+def test_negative_k_yields_zero_for_all_k_taking_metrics():
+    # Committed spec: k <= 0 yields 0.0. Without an explicit guard a negative
+    # k would slice from the END (ranked[:-1] scans ["a","b"] here) and
+    # hit_rate would wrongly return 1.0 for relevant {"a"}.
+    assert hit_rate_at_k(["a", "b", "c"], frozenset({"a"}), -1) == 0.0
+    assert precision_at_k(["a", "b", "c"], frozenset({"a"}), -1) == 0.0
+    assert ndcg_at_k(["a", "b", "c"], frozenset({"a"}), -1) == 0.0
+    assert ndcg_at_k(["a", "b", "c"], {"a": 2}, -1) == 0.0  # graded path too
 
 
 # --------------------------------------------------------------- precision_at_k
@@ -155,6 +165,15 @@ def test_ndcg_at_k_negative_grade_rejected():
         ndcg_at_k(["a"], {"a": -1}, 1)
 
 
+def test_ndcg_at_k_non_int_grade_rejected_bool_allowed():
+    # The pre-registered spec says INTEGER grades >= 0: floats are rejected.
+    with pytest.raises(ValueError):
+        ndcg_at_k(["a"], {"a": 1.5}, 1)
+    # bool is an int subclass (True == 1) and is deliberately allowed:
+    # [a] vs {a: True}: DCG = (2^1-1)/log2(2) = 1 = IDCG -> 1.0
+    assert ndcg_at_k(["a"], {"a": True}, 1) == pytest.approx(1.0)
+
+
 # ------------------------------------------------- LabeledQuery (graded shape)
 
 
@@ -183,6 +202,14 @@ def test_labeled_query_disagreeing_grades_raise():
 def test_labeled_query_negative_grade_raises():
     with pytest.raises(ValueError):
         LabeledQuery("q1", frozenset({"a"}), {"a": -2})
+
+
+def test_labeled_query_non_int_grade_raises_bool_allowed():
+    with pytest.raises(ValueError):
+        LabeledQuery("q1", frozenset({"a"}), {"a": 1.5})
+    # bool is an int subclass (True == 1 binarizes to relevant) — allowed.
+    q = LabeledQuery("q1", frozenset({"a"}), {"a": True, "b": False})
+    assert q.relevant_grades == {"a": True, "b": False}
 
 
 # --------------------------------------------------- EvalResult (old + new shape)
@@ -255,7 +282,7 @@ def test_evaluate_per_query_rows():
     r = evaluate(fake_search, queries, k=2, per_query=True)
     assert r.per_query is not None and len(r.per_query) == 2
     q1, q2 = r.per_query
-    assert isinstance(q1, QueryResult)
+    assert isinstance(q1, QueryMetrics)
     # Rows are in input order and carry the query string + every metric
     # (hand-derived in test_evaluate_means_hand_computed above).
     assert q1.query == "one"
