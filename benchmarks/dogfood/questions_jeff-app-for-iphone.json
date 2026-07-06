@@ -1,0 +1,77 @@
+{
+  "repo": "jeff-app-for-iphone",
+  "kind": "Expo/React Native news app",
+  "note": "Pre-registered BEFORE any recall ran. Each gold_path is the file a returning developer would need opened to answer. isolation=true marks questions whose answer exists ONLY in this repo (used for cross-scope leak checks).",
+  "questions": [
+    {
+      "id": "jef-01",
+      "question": "Where does the text-to-speech playback for articles live, and how does tapping the same story again stop it?",
+      "gold_path": "hooks/use-speech.ts",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "jef-02",
+      "question": "Where would we swap the fake articles for a real news API?",
+      "gold_path": "data/mockNews.ts",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "jef-03",
+      "question": "Which file defines the news category labels, their icons, and the default user preferences?",
+      "gold_path": "types/news.ts",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "jef-04",
+      "question": "Where are the bottom tabs configured, including the hidden leftover starter screen?",
+      "gold_path": "app/(tabs)/_layout.tsx",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "jef-05",
+      "question": "Where do we change the app's color palette, spacing scale, and per-category colors?",
+      "gold_path": "constants/theme.ts",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "jef-06",
+      "question": "How does the full-article screen estimate the audio duration from the reading time?",
+      "gold_path": "app/modal.tsx",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "jef-07",
+      "question": "Why do the tab buttons vibrate lightly when pressed on iOS?",
+      "gold_path": "components/haptic-tab.tsx",
+      "difficulty": "conceptual",
+      "isolation": true
+    },
+    {
+      "id": "jef-08",
+      "question": "Where are the static market index numbers shown on the finance screen defined?",
+      "gold_path": "app/(tabs)/finance.tsx",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "jef-09",
+      "question": "Which document lists what we deliberately have not built yet, like push notifications and a real data feed?",
+      "gold_path": "FUTURE_ENHANCEMENTS.md",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "jef-10",
+      "question": "Where do we set the iOS bundle identifier and the splash screen color?",
+      "gold_path": "app.json",
+      "difficulty": "keyword",
+      "isolation": false
+    }
+  ]
+}
