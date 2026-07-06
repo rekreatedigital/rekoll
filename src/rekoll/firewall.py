@@ -22,7 +22,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Mapping, Optional, Sequence
 
 from .adapters.base import QueryHit
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
@@ -32,6 +32,7 @@ __all__ = [
     "DefenseDecision",
     "screen",
     "screened_record",
+    "screen_pieces",
     "sanitize_unicode",
     "ContextEnvelope",
     "build_envelope",
@@ -292,6 +293,55 @@ def screen(text: str, *, source_trust: TrustTier, redact_pii: bool = False) -> D
         redactions=tuple(redactions),
         injection_markers=markers,
     )
+
+
+def _detection_text(text: str) -> str:
+    """The exact string the injection markers are tested against: sanitized
+    (NFKC + invisible-strip) then casefolded + confusable-folded."""
+    return _marker_scan(sanitize_unicode(text))
+
+
+def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
+    """Whole-document injection scan, attributed to the stored pieces.
+
+    Chunking can SPLIT a marker across a piece boundary (heading/AST units have
+    no overlap; text overlap is finite): neither fragment then trips the
+    per-piece screen, yet the DOCUMENT carried the marker and a reader that
+    concatenates recalled chunks reconstructs it. This scans the whole document
+    once with the same marker set and maps every match span onto the pieces it
+    overlaps, so the ingest boundary can quarantine exactly those pieces.
+
+    Returns ``{piece_index: overlapping_marker_count}`` — empty for a clean
+    document. Deterministic, zero-LLM (ADR-0013). Document and pieces are both
+    projected into detection coordinates (``sanitize_unicode`` + casefold +
+    confusable fold) before matching, so offsets line up; pieces are located in
+    order with a forward cursor (chunkers emit document-ordered, possibly
+    overlapping substrings). A piece that cannot be located at all — reachable
+    only for exotic normalization boundary effects, and only when the document
+    DOES contain a marker — is counted as affected: fail closed.
+    """
+    scan = _detection_text(document)
+    spans = [m.span() for p in _INJECTION_MARKERS for m in p.finditer(scan)]
+    if not spans:
+        return {}
+    affected: dict[int, int] = {}
+    cursor = 0
+    for i, piece in enumerate(pieces):
+        target = _detection_text(piece)
+        if not target:
+            continue  # nothing of this piece survives sanitization/storage
+        start = scan.find(target, cursor)
+        if start < 0:
+            start = scan.find(target)  # overlap can step back past the cursor
+        if start < 0:
+            affected[i] = 1  # unlocatable in a marker-bearing doc: fail closed
+            continue
+        end = start + len(target)
+        overlapping = sum(1 for a, b in spans if a < end and start < b)
+        if overlapping:
+            affected[i] = overlapping
+        cursor = max(cursor, start + 1)
+    return affected
 
 
 def screened_record(

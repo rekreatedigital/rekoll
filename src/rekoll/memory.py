@@ -30,7 +30,13 @@ from .adapters.registry import get_adapter
 from .chunking import chunk_file
 from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder, compare_identity
-from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
+from .firewall import (
+    ContextEnvelope,
+    build_envelope,
+    sanitize_unicode,
+    screen_pieces,
+    screened_record,
+)
 from .ledger import LedgerEntry, RecallLedger
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
@@ -134,6 +140,21 @@ def _redirects_out(path) -> bool:
         return os.path.normcase(os.path.realpath(p)) != os.path.normcase(here)
     except OSError:  # pragma: no cover - unresolvable: treat as a redirect (skip)
         return True
+
+
+def _quarantine_split_marker(record: MemoryRecord, marker_count: int) -> None:
+    """Quarantine a chunk flagged by the whole-document marker scan
+    (``firewall.screen_pieces``): a marker the chunker SPLIT across a boundary
+    trips no per-chunk screen, so the document-level decision is propagated
+    here — mirroring exactly what ``screened_record`` does when a chunk trips
+    its own screen (status + trust to QUARANTINED, ``injection_flags`` noted).
+    Runs at the ingestion boundary, deterministic and LLM-free (ADR-0002/0013).
+    """
+    record.status = Status.QUARANTINED
+    record.trust_tier = TrustTier.QUARANTINED
+    md = dict(record.metadata)
+    md["injection_flags"] = max(int(md.get("injection_flags") or 0), marker_count)
+    record.metadata = md
 
 
 def _auto_embedder() -> Embedder:
@@ -432,22 +453,32 @@ class Memory:
             )
         src = source or f"text://{name}"
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
+        # Boundary-split markers (L-chunk-split): a marker the chunker split in
+        # two trips NEITHER per-chunk screen. Screen the WHOLE document once and
+        # quarantine the affected pieces — under the same trust rule as the
+        # per-chunk screen (markers quarantine only untrusted input, ADR-0016).
+        split_hits = (
+            screen_pieces(text, pieces)
+            if self._screen and trust <= TrustTier.UNVERIFIED
+            else {}
+        )
         stored = 0
         pending: list[MemoryRecord] = []
         for i, piece in enumerate(pieces):
             if self._screen and not sanitize_unicode(piece):
                 continue  # nothing survives screening (e.g. only zero-width chars)
-            pending.append(
-                self._make_record(
-                    content=piece,
-                    kind=kind,
-                    provenance=Provenance(
-                        source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
-                    ),
-                    trust=trust,
-                    metadata={"path": name},
-                )
+            record = self._make_record(
+                content=piece,
+                kind=kind,
+                provenance=Provenance(
+                    source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
+                ),
+                trust=trust,
+                metadata={"path": name},
             )
+            if i in split_hits and record.status is not Status.QUARANTINED:
+                _quarantine_split_marker(record, split_hits[i])
+            pending.append(record)
             stored += 1
             if len(pending) >= batch:
                 self._embed_and_store(pending)
@@ -546,21 +577,29 @@ class Memory:
             if not pieces:
                 continue
             files += 1
+            # Same whole-document screen as ingest_text: a boundary-split
+            # marker trips no per-chunk screen (L-chunk-split).
+            split_hits = (
+                screen_pieces(text, pieces)
+                if self._screen and trust <= TrustTier.UNVERIFIED
+                else {}
+            )
             for i, piece in enumerate(pieces):
                 if self._screen and not sanitize_unicode(piece):
                     continue  # nothing survives screening (e.g. only zero-width chars)
-                pending.append(
-                    self._make_record(
-                        content=piece,
-                        kind=Kind.RAW_FACT,
-                        provenance=Provenance(
-                            source_uri=f"file://{rel}", adapter_name="memory",
-                            source_file=rel, chunk_index=i,
-                        ),
-                        trust=trust,
-                        metadata={"path": rel},
-                    )
+                record = self._make_record(
+                    content=piece,
+                    kind=Kind.RAW_FACT,
+                    provenance=Provenance(
+                        source_uri=f"file://{rel}", adapter_name="memory",
+                        source_file=rel, chunk_index=i,
+                    ),
+                    trust=trust,
+                    metadata={"path": rel},
                 )
+                if i in split_hits and record.status is not Status.QUARANTINED:
+                    _quarantine_split_marker(record, split_hits[i])
+                pending.append(record)
                 chunks += 1
                 if len(pending) >= batch:
                     self._embed_and_store(pending)
