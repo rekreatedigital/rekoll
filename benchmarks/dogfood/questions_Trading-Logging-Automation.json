@@ -1,0 +1,77 @@
+{
+  "repo": "Trading-Logging-Automation",
+  "kind": "Python scripts (Selenium scrapers + Drive upload; two Pygame games)",
+  "note": "Pre-registered BEFORE any recall ran. Each gold_path is the file a returning developer would need opened to answer. isolation=true marks questions whose answer exists ONLY in this repo (used for cross-scope leak checks). Known hazards, recorded up front: backup.py is an earlier near-duplicate of scrape_content_investorplace.py, so those golds may lose ranks to each other; README.md is nearly empty, so trd-08's answer signal is filename-only.",
+  "questions": [
+    {
+      "id": "trd-01",
+      "question": "Which script logs into InvestorPlace and scrapes the newsletter for stock picks?",
+      "gold_path": "scrape_content_investorplace.py",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "trd-02",
+      "question": "Which script pulls the latest articles from four different newsletter sections of the Masters in Trading site?",
+      "gold_path": "scrape_content_mastersintrading.py",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "trd-03",
+      "question": "Where do we ask the AI to extract option strikes and expiration dates from scraped content?",
+      "gold_path": "scrape_content_mastersintrading.py",
+      "difficulty": "keyword",
+      "isolation": true
+    },
+    {
+      "id": "trd-04",
+      "question": "How does the scraper use the article's publication date to name its output files?",
+      "gold_path": "scrape_content_investorplace.py",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "trd-05",
+      "question": "Which mini game gives the player an extra life as a bonus while dodging pipes?",
+      "gold_path": "bird.py",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "trd-06",
+      "question": "Where is the maze game with ghosts, pellets, and a two-minute timer implemented?",
+      "gold_path": "pacman.py",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "trd-07",
+      "question": "Where do we send scraped article text to the AI with a veteran investor persona for analysis?",
+      "gold_path": "scrape_content_investorplace.py",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "trd-08",
+      "question": "Which file is the older, simpler backup of the newsletter scraping flow?",
+      "gold_path": "backup.py",
+      "difficulty": "conceptual",
+      "isolation": false
+    },
+    {
+      "id": "trd-09",
+      "question": "Where do the combined logs get saved under the user's Documents folder before upload?",
+      "gold_path": "scrape_content_mastersintrading.py",
+      "difficulty": "keyword",
+      "isolation": true
+    },
+    {
+      "id": "trd-10",
+      "question": "How do gravity and flapping physics work in the bird game?",
+      "gold_path": "bird.py",
+      "difficulty": "conceptual",
+      "isolation": false
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "repo": "rekreate-ai-chat",
+  "kind": "Python Flask chatbot with a FAISS RAG pipeline",
+  "note": "Pre-registered BEFORE any recall ran. Each gold_path is the file a returning developer would need opened to answer. isolation=true marks questions whose answer exists ONLY in this repo (used for cross-scope leak checks). Known hazard, recorded up front: app_backup.py is a near-duplicate of app.py, so app.py golds may lose ranks to the duplicate.",
+  "questions": [
+    {
+      "id": "rag-01",
+      "question": "Which Flask route receives chat messages from the browser, and which model does it call?",
+      "gold_path": "app.py",
+      "difficulty": "keyword",
+      "isolation": true
+    },
+    {
+      "id": "rag-02",
+      "question": "How do we build the vector index from the PDF knowledge base?",
+      "gold_path": "ingest.py",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "rag-03",
+      "question": "Where is the retrieval chain that answers questions from the saved local vector index?",
+      "gold_path": "chatbot.py",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "rag-04",
+      "question": "How does the frontend decide whether to call the local server or the production chat domain?",
+      "gold_path": "static/script.js",
+      "difficulty": "conceptual",
+      "isolation": true
+    },
+    {
+      "id": "rag-05",
+      "question": "Where is the terms-of-use and privacy text shown in the chat popup defined?",
+      "gold_path": "static/modal.js",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "rag-06",
+      "question": "Which origins are allowed to call the chat endpoint cross-origin?",
+      "gold_path": "app.py",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "rag-07",
+      "question": "Where do we verify that the AI provider key loads correctly from the env file?",
+      "gold_path": "test_api.py",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "rag-08",
+      "question": "Which script runs a minimal chat demo that keeps the whole conversation in memory and serves its own inline page?",
+      "gold_path": "test.py",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "rag-09",
+      "question": "How do we display which source documents an answer was based on?",
+      "gold_path": "chatbot.py",
+      "difficulty": "conceptual",
+      "isolation": false
+    },
+    {
+      "id": "rag-10",
+      "question": "Where do we strip out links that lead to dead or paywalled pages before sending a reply?",
+      "gold_path": "app.py",
+      "difficulty": "paraphrase",
+      "isolation": false
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "repo": "powered-by-people-website",
+  "kind": "Vite/React marketing website",
+  "note": "Pre-registered BEFORE any recall ran. Each gold_path is the file a returning developer would need opened to answer. isolation=true marks questions whose answer exists ONLY in this repo (used for cross-scope leak checks).",
+  "questions": [
+    {
+      "id": "web-01",
+      "question": "Which component holds the contact form state and its submit handler?",
+      "gold_path": "src/components/ContactSection.tsx",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "web-02",
+      "question": "What are the steps to create the apps-script deployment that stores form entries in a sheet?",
+      "gold_path": "GOOGLE_SHEET_SETUP.md",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "web-03",
+      "question": "Where is the list of service offerings shown on the services page defined?",
+      "gold_path": "src/components/ServicesSection.tsx",
+      "difficulty": "keyword",
+      "isolation": true
+    },
+    {
+      "id": "web-04",
+      "question": "Where do we edit the leadership team members shown on the about page?",
+      "gold_path": "src/components/AboutSection.tsx",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "web-05",
+      "question": "Which file registers all the page routes, including the 404 catch-all?",
+      "gold_path": "src/App.tsx",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "web-06",
+      "question": "How does the top navigation switch from transparent to solid as you scroll down?",
+      "gold_path": "src/components/Navigation.tsx",
+      "difficulty": "paraphrase",
+      "isolation": true
+    },
+    {
+      "id": "web-07",
+      "question": "Where does the looping background video on the home hero come from?",
+      "gold_path": "src/components/HeroSection.tsx",
+      "difficulty": "paraphrase",
+      "isolation": false
+    },
+    {
+      "id": "web-08",
+      "question": "Which config sets the dev server port and the @ path alias?",
+      "gold_path": "vite.config.ts",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "web-09",
+      "question": "Where are the brand fonts and custom animation keyframes registered as utility classes?",
+      "gold_path": "tailwind.config.ts",
+      "difficulty": "keyword",
+      "isolation": false
+    },
+    {
+      "id": "web-10",
+      "question": "Why does each page start scrolled to the top after client-side navigation?",
+      "gold_path": "src/components/ScrollToTop.tsx",
+      "difficulty": "conceptual",
+      "isolation": false
+    }
+  ]
+}
