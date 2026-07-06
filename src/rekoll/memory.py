@@ -629,7 +629,9 @@ class Memory:
         consolidator (reads stay LLM-free, ADR-0007), and ``Memory`` holds no
         ambient consolidator — you pass one per call. Select sources with
         ``ids=[...]`` or ``query="..."`` (top-``k``). The consolidator's text
-        flows through the ingest firewall and is stored with:
+        flows through the ingest firewall — ALWAYS, even for a store built
+        with ``screen=False``: a host may vouch for its own writes, never for
+        what a model emits (#7.5, ADR-0015) — and is stored with:
 
          - ``kind=OBSERVATION``,
          - ``provenance.derived_from`` = the source record ids,
@@ -694,7 +696,22 @@ class Memory:
             trust=min(r.trust_tier for r in sources),
             metadata={**(metadata or {}), "consolidator": name, "source_count": len(sources)},
             declared_transformations=("llm_summary",),
+            # LLM output is never exempt from the firewall (#7.5): screening is
+            # forced even when the store was built with screen=False, keeping
+            # ADR-0015's "flows through the ingest firewall" true by
+            # construction. The trust rule is unchanged — markers quarantine
+            # only when the summary's (source-derived) trust is <= UNVERIFIED.
+            force_screen=True,
         )
+        # Same post-sanitization cap rule as remember(): NFKC can EXPAND, so
+        # re-check what would actually be stored (ADR-0018).
+        if len(record.content) > self._max_content_chars:
+            raise ValueError(
+                f"consolidator output is {len(record.content):,} chars after "
+                f"firewall sanitization, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory (ADR-0018)."
+            )
         self._embed_and_store([record])
         return record
 
@@ -1010,8 +1027,13 @@ class Memory:
             mode += " (stub-embedder)"  # deterministic hash vectors, no semantics
         return mode
 
-    def _make_record(self, *, content, kind, provenance, trust, metadata, **kwargs):
-        if self._screen:
+    def _make_record(
+        self, *, content, kind, provenance, trust, metadata, force_screen=False, **kwargs
+    ):
+        # force_screen: LLM output (consolidate) is screened even when the
+        # store was built with screen=False — a host may vouch for its OWN
+        # writes; it cannot vouch for what a model emits (#7.5, ADR-0015).
+        if self._screen or force_screen:
             return screened_record(
                 scope=self.scope, kind=kind, content=content,
                 provenance=provenance, trust_tier=trust, metadata=metadata,
