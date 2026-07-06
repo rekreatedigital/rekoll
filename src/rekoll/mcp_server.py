@@ -243,12 +243,16 @@ def _contained_path(root: Path, raw: str) -> Path:
     if not candidate.is_absolute():
         candidate = root / candidate
     resolved = candidate.resolve()
+    # Error text goes back to the calling model — never include the server's
+    # absolute paths (root or resolved form): where the operator's project
+    # physically lives is not the model's business, and the caller's own
+    # spelling is all it needs to correct the call (L-mcp-rootleak).
     _require(
         resolved == root or resolved.is_relative_to(root),
-        f"path is outside the project root ({root}). This server only ingests "
-        "files under its configured root; launch it with --root to widen that.",
+        "path is outside the project root. This server only ingests files "
+        "under its configured root; launch it with --root to widen that.",
     )
-    _require(resolved.exists(), f"path does not exist: {resolved}")
+    _require(resolved.exists(), f"path does not exist: {raw.strip()}")
     return resolved
 
 
@@ -277,11 +281,17 @@ def _assert_no_symlink_escape(root: Path, target: Path) -> None:
             entry = base / name
             resolved = Path(os.path.realpath(entry))
             if resolved != root and not resolved.is_relative_to(root):
+                # Name the offender relative to the root (fall back to its bare
+                # name): the operator can find it, but the calling model is not
+                # handed the server's absolute layout (L-mcp-rootleak).
+                try:
+                    shown = entry.relative_to(root)
+                except ValueError:  # pragma: no cover - resolve/realpath drift
+                    shown = Path(entry.name)
                 raise ValueError(
-                    f"path is outside the project root ({root}): {entry} "
-                    "resolves out of the tree (symlink, junction, or other "
-                    "reparse point). This server only ingests files under its "
-                    "configured root."
+                    f"path is outside the project root: {shown} resolves out "
+                    "of the tree (symlink, junction, or other reparse point). "
+                    "This server only ingests files under its configured root."
                 )
 
 
@@ -291,7 +301,16 @@ def _ingest_path(mem: Memory, root: Path, path: str) -> dict:
     # follow_symlinks stays False explicitly: the MCP boundary must never read a
     # link out of its root, regardless of any future change to the core default.
     stats = mem.ingest_path(str(target), follow_symlinks=False)
-    return {"files": stats["files"], "chunks": stats["chunks"], "total": stats["total"]}
+    # ``skipped`` must cross the boundary: the core signals skips (links/
+    # junctions, oversize, over-chunk-cap, undecodable) via warnings, which
+    # never cross stdio — without the count, a caller ingesting a tree of
+    # skipped files sees {files: 0, chunks: 0} with no explanation.
+    return {
+        "files": stats["files"],
+        "chunks": stats["chunks"],
+        "skipped": stats["skipped"],
+        "total": stats["total"],
+    }
 
 
 def _forget(mem: Memory, ids: list[str]) -> dict:
@@ -407,8 +426,10 @@ def build_server(config: ServerConfig):
         """Index a file or folder into memory (code + docs, chunked).
 
         Relative paths resolve against the server's project root; anything
-        outside that root is refused. Returns files/chunks counts and the new
-        store total.
+        outside that root is refused. Returns files/chunks counts, a `skipped`
+        count — files passed over unread (symlinks/junctions, files over the
+        size limit, documents over the per-file chunk cap, undecodable bytes)
+        — and the new store total.
         """
         return _ingest_path(mem, config.root, path)
 
