@@ -46,7 +46,7 @@ from typing import Literal, Mapping, Optional
 
 from ._version import __version__
 from .memory import Memory
-from .model import Kind, Scope, Status, TrustTier
+from .model import RECALLABLE_STATUSES, Kind, Scope, Status, TrustTier
 
 __all__ = [
     "ServerConfig",
@@ -310,15 +310,17 @@ def _forget(mem: Memory, ids: list[str]) -> dict:
 
 
 def _status(mem: Memory, config: ServerConfig) -> dict:
-    # The count MUST NOT surface quarantined records to the calling model: those
-    # are the firewall's audit rows, never recallable, and their very existence
-    # is not the model's business. So "memories" is the RECALLABLE count (total
-    # minus quarantined) — consistent with what recall can ever return. (The
-    # human-facing CLI stays transparent about quarantined-for-audit rows; this
-    # is the LLM boundary, where we don't.)
-    quarantined = mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value)
+    # The count MUST NOT surface non-recallable records to the calling model:
+    # quarantined rows are the firewall's audit rows (their very existence is
+    # not the model's business), and proposed/superseded/invalidated rows are
+    # lifecycle states, not memories. So "memories" is the RECALLABLE count —
+    # model.RECALLABLE_STATUSES, the SAME predicate recall filters by, so this
+    # count and what recall can ever return cannot disagree. (The human-facing
+    # CLI stays transparent about audit rows; this is the LLM boundary.)
     return {
-        "memories": mem.count() - quarantined,
+        "memories": sum(
+            mem.adapter.count(scope=mem.scope, status=s.value) for s in RECALLABLE_STATUSES
+        ),
         "scope": mem.scope.key(),
         "store": config.path,
         "write_trust": config.trust.name.lower(),

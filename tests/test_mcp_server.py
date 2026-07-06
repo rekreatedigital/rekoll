@@ -411,6 +411,25 @@ def test_status_count_never_surfaces_quarantined_records(tmp_path):
     assert mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value) == 1
 
 
+def test_status_count_excludes_non_active_lifecycle_rows(tmp_path):
+    """`memories` counts what recall could ever return: ACTIVE rows only
+    (model.RECALLABLE_STATUSES — the same definition recall filters by). A
+    superseded/proposed/invalidated row is lifecycle state, not a memory."""
+    mem = _mem()
+    _remember(mem, "live fact about the deploy window", "raw_fact")
+    ghost = _remember(mem, "superseded fact about the old deploy window", "raw_fact")
+    stored = mem.adapter.get(scope=mem.scope, ids=[ghost["id"]]).records[0]
+    stored.status = Status.SUPERSEDED
+    mem.adapter.upsert(records=[stored])
+
+    cfg = ServerConfig(
+        path=str(tmp_path / "m.db"), tenant="default", project="unit",
+        agent="default", trust=TrustTier.UNVERIFIED, root=tmp_path,
+    )
+    out = _status(mem, cfg)
+    assert out["memories"] == 1  # the superseded row is not "a memory"
+
+
 def test_build_server_without_mcp_extra_prints_hint_and_exits_1(tmp_path, monkeypatch, capsys):
     """Without the optional ``mcp`` extra, launching must fail with a plain
     install hint and exit 1 — never a traceback. This is the base (no-mcp) CI

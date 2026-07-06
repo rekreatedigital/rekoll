@@ -23,6 +23,7 @@ __all__ = [
     "Kind",
     "TrustTier",
     "Status",
+    "RECALLABLE_STATUSES",
     "Scope",
     "Provenance",
     "MemoryRecord",
@@ -57,6 +58,14 @@ class Status(str, Enum):
     QUARANTINED = "quarantined"
     SUPERSEDED = "superseded"
     INVALIDATED = "invalidated"
+
+
+#: The ONE definition of "recallable", shared by every read surface (the
+#: hybrid_search surfacing filter and the MCP status count): only ACTIVE
+#: records are memories a read may return. Proposed/superseded/invalidated are
+#: lifecycle states, and quarantined never surfaces anywhere. Kept in one place
+#: so a future supersede/propose loop cannot make the surfaces disagree.
+RECALLABLE_STATUSES: frozenset = frozenset({Status.ACTIVE})
 
 
 def _utcnow() -> datetime:
