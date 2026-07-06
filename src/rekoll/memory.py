@@ -1096,13 +1096,31 @@ class Memory:
         # recurses into it — catching junctions, reparse points, and dir symlinks
         # alike. This is unconditional (like "dir symlinks are never descended"):
         # an out-of-tree directory is never walked, even under follow_symlinks.
+        #
+        # CYCLE GUARD (issue #15): an IN-ROOT junction cycle (root/loop -> root)
+        # PASSES that containment — it never leaves the tree — yet os.walk still
+        # descends it, re-walking the same real directories until the OS
+        # path-length limit: an availability blow-up with every file re-read at
+        # every level. So also track the REAL path of every directory we agree
+        # to descend and prune one we've already seen — a directory reachable
+        # twice (a cycle, or a junction to an in-root sibling) is walked
+        # exactly once. Real paths are compared normcased (Windows-caseless).
         root_real = _real_path(root)
+        seen: set[str] = {os.path.normcase(str(root_real))}
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in skip and not d.endswith(".egg-info")
-                and _within(root_real, os.path.join(dirpath, d))
-            ]
+            kept = []
+            for d in dirnames:
+                if d in skip or d.endswith(".egg-info"):
+                    continue
+                full = os.path.join(dirpath, d)
+                if not _within(root_real, full):
+                    continue
+                real = os.path.normcase(os.path.realpath(full))
+                if real in seen:
+                    continue  # already walked via another route: cycle/duplicate
+                seen.add(real)
+                kept.append(d)
+            dirnames[:] = kept
             for name in filenames:
                 fp = Path(dirpath) / name
                 if fp.suffix.lower() in include:
