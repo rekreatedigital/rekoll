@@ -134,6 +134,16 @@ class MemoryRecord:
             self.trust_tier = TrustTier(int(self.trust_tier))
         if not isinstance(self.status, Status):
             self.status = Status(self.status)
+        if self.trust_tier <= TrustTier.QUARANTINED and self.status is Status.ACTIVE:
+            # Quarantine-level trust must never surface. An ACTIVE status at
+            # QUARANTINED trust made the read-path filters diverge: the
+            # envelope's trust floor dropped the record while the surfacing
+            # filter (status-only) let it reach the raw accessors
+            # (.texts()/.ids()/.records()). Rewriting at construction makes
+            # the divergent state unrepresentable — for records minted via the
+            # public API AND rows reconstructed by adapters. Other lifecycle
+            # states (superseded/invalidated/...) are preserved.
+            self.status = Status.QUARANTINED
         if not self.content:
             raise ValueError("content must be non-empty")
         if self.embedding is not None:

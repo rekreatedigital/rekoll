@@ -77,6 +77,49 @@ def test_include_quarantined_surfaces_tampered_record_flagged():
     mem.close()
 
 
+# ---- L-raw-accessor-leak (#8.2): quarantine-level TRUST must never surface --
+
+def test_quarantined_trust_record_never_reaches_raw_accessors():
+    # remember(trust=TrustTier.QUARANTINED) with CLEAN content (no injection
+    # marker) minted trust=QUARANTINED + status=ACTIVE. hybrid_search filtered
+    # on STATUS alone while build_envelope also drops trust<=QUARANTINED — so
+    # the hit reached RecallResult.hits, and .texts()/.ids()/.records() leaked
+    # exactly what .context()/.envelope() withheld. Both layers must agree.
+    mem = _mem()
+    r = mem.remember("radioactive but clean fact", trust=TrustTier.QUARANTINED)
+    assert r.status is Status.QUARANTINED, "quarantine-trust must force status"
+    hits = mem.recall("radioactive clean fact", k=5)
+    assert hits.records() == [] and hits.ids() == [] and hits.texts() == []
+    assert "radioactive" not in hits.context()
+    # Forensics still sees it, flagged (quarantine-not-drop).
+    result = hybrid_search(
+        mem.adapter, scope=mem.scope, query="radioactive clean fact",
+        embedder=mem.embedder, k=5, include_quarantined=True,
+    )
+    assert any(h.record.id == r.id for h in result.hits)
+    mem.close()
+
+
+def test_quarantine_trust_forces_quarantined_status_at_construction():
+    # The two read-path filters can only stay in agreement if the divergent
+    # state (trust<=QUARANTINED yet status ACTIVE) is unrepresentable: any
+    # construction — public API, adapter row reconstruction — normalizes it.
+    from rekoll import MemoryRecord, Provenance, Scope
+
+    record = MemoryRecord.create(
+        scope=Scope(), kind=Kind.RAW_FACT, content="clean but untrusted",
+        provenance=Provenance(source_uri="t://x"), trust_tier=TrustTier.QUARANTINED,
+    )
+    assert record.status is Status.QUARANTINED
+    # Non-ACTIVE lifecycle states are preserved (only ACTIVE is rewritten).
+    superseded = MemoryRecord.create(
+        scope=Scope(), kind=Kind.RAW_FACT, content="old quarantined",
+        provenance=Provenance(source_uri="t://x"), trust_tier=TrustTier.QUARANTINED,
+        status=Status.SUPERSEDED,
+    )
+    assert superseded.status is Status.SUPERSEDED
+
+
 # ---- L-chunk-split: a marker the chunker splits across a boundary ----------
 
 def _split_marker_doc() -> str:
