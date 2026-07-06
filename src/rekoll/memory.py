@@ -252,6 +252,14 @@ class Memory:
         caps one ingested file/document (ADR-0018). Both overridable, never
         disable-able to zero.
         """
+        if not str(path).strip():
+            # An empty path used to fall through to the ':memory:' branch: the
+            # store LOOKED fine but was ephemeral, and every write evaporated
+            # on close. Ephemeral must be an explicit opt-in, never a typo.
+            raise ValueError(
+                "path is empty; pass a real database file path, or ':memory:' "
+                "to explicitly opt into an ephemeral in-memory store"
+            )
         if max_content_chars <= 0 or max_file_bytes <= 0:
             raise ValueError("max_content_chars and max_file_bytes must be positive")
         self.scope = Scope(tenant=tenant, project=project, agent=agent)

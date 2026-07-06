@@ -241,6 +241,19 @@ def test_non_utf8_file_is_skipped_and_counted(tmp_path):
     mem.close()
 
 
+def test_empty_path_is_rejected_not_aliased_to_memory():
+    # #8.1: Memory(path="") used to fall through to the ':memory:' branch, so a
+    # typo'd/empty path silently opened an EPHEMERAL store and every write
+    # evaporated on close. An empty path is a config error and must fail loudly.
+    for bad in ("", "   ", "\t"):
+        with pytest.raises(ValueError, match="path"):
+            Memory(path=bad, embedder=StubEmbedder(), reranker=None)
+    # The explicit ephemeral spelling keeps working.
+    mem = _mem()
+    mem.remember("ephemeral opt-in still works")
+    mem.close()
+
+
 def test_batching_flushes_all_chunks(tmp_path):
     # 5 files x 1 chunk with batch=2 exercises both the mid-loop flush and the
     # final partial flush.
