@@ -314,11 +314,15 @@ def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
     Returns ``{piece_index: overlapping_marker_count}`` — empty for a clean
     document. Deterministic, zero-LLM (ADR-0013). Document and pieces are both
     projected into detection coordinates (``sanitize_unicode`` + casefold +
-    confusable fold) before matching, so offsets line up; pieces are located in
-    order with a forward cursor (chunkers emit document-ordered, possibly
-    overlapping substrings). A piece that cannot be located at all — reachable
-    only for exotic normalization boundary effects, and only when the document
-    DOES contain a marker — is counted as affected: fail closed.
+    confusable fold) before matching, so offsets line up; pieces are located
+    with a strictly-forward cursor — every chunker emits document-ordered
+    substrings with strictly increasing start offsets (overlap trims the END,
+    never reorders starts), so a piece that does not appear at/after the
+    cursor cannot be located at all. Such a piece — reachable only for exotic
+    normalization boundary effects, and only when the document DOES contain a
+    marker — is counted as affected: fail closed. (No rescan-from-zero
+    fallback on purpose: it would let a crafted marker-bearing document buy an
+    O(document x pieces) scan; the forward-only cursor keeps this linear.)
     """
     scan = _detection_text(document)
     spans = [m.span() for p in _INJECTION_MARKERS for m in p.finditer(scan)]
@@ -332,15 +336,13 @@ def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
             continue  # nothing of this piece survives sanitization/storage
         start = scan.find(target, cursor)
         if start < 0:
-            start = scan.find(target)  # overlap can step back past the cursor
-        if start < 0:
             affected[i] = 1  # unlocatable in a marker-bearing doc: fail closed
             continue
         end = start + len(target)
         overlapping = sum(1 for a, b in spans if a < end and start < b)
         if overlapping:
             affected[i] = overlapping
-        cursor = max(cursor, start + 1)
+        cursor = start + 1
     return affected
 
 
