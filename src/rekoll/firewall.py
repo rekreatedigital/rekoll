@@ -71,8 +71,11 @@ _SECRET_PATTERNS = [
     # scans forward to end-of-string each time — O(n^2) (measured ~1.8s at the
     # 100k cap). A bounded body caps the forward scan per anchor at a constant,
     # so total work is linear. 8 KiB comfortably holds any real private-key PEM
-    # body (RSA-4096 ~3.3KB, encrypted PKCS#8 a touch more); a longer block still
-    # has its header flagged by the fallback pattern below, so no header slips.
+    # body: RSA-4096 ~3.3KB, encrypted PKCS#8 a touch more, and even the largest
+    # NIST post-quantum key, ML-DSA-87 (~4.9KB raw → ~6.6KB base64), fits. So do
+    # NOT raise this bound to "cover bigger keys" — nothing standardized needs it,
+    # and a larger constant only slows the ReDoS gate; a genuinely longer block
+    # still has its header flagged by the fallback pattern below, so none slips.
     # Bounded quantifier is also Python-3.10-safe (no atomic/possessive groups).
     ("private_key", re.compile(
         r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----[\s\S]{0,8192}?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----"

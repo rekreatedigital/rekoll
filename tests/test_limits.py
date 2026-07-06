@@ -171,6 +171,14 @@ _STRESS_BUILDERS = [
     # "\s*" under (?m) rescans across every newline (O(n^2) per recall). Ingest
     # patterns are linear on it; the read-path gate below is where it bites.
     ("newline-flood", lambda n: "\n" * n),
+    # Markdown-markup + unclosed-tag floods: these specifically stress the READ-
+    # path delimiter regexes (_ENVELOPE_HEADER_RE's leading [ \t>#*=_~-]* class,
+    # and _ROLE_TAG_RE's tag alternation) — the header/tag neutralizers that the
+    # ingest per-pattern gate never touches. A future edit that makes either
+    # backtrack on forged-header / forged-tag input is caught here.
+    ("markup-mix-flood", lambda n: "#>*=_~- " * n),
+    ("angle-open-flood", lambda n: "<system" * n),
+    ("bracket-tag-flood", lambda n: "[inst" * n),
 ]
 
 
