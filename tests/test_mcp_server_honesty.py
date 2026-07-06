@@ -18,8 +18,12 @@ kept in their own file):
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +34,11 @@ from rekoll.mcp_server import (
     _assert_no_symlink_escape,
     _contained_path,
     _ingest_path,
+)
+
+_HAS_MCP = importlib.util.find_spec("mcp") is not None
+requires_mcp = pytest.mark.skipif(
+    not _HAS_MCP, reason="optional extra not installed: pip install 'rekoll[mcp]'"
 )
 
 
@@ -119,3 +128,90 @@ def test_ingest_path_surfaces_the_cores_skipped_count(tmp_path):
     assert set(out) == {"files", "chunks", "skipped", "total"}
     assert out["files"] == 1 and out["chunks"] >= 1
     assert out["skipped"] == 1  # the model is told, not left to infer from silence
+
+
+# -- 3. the same two properties over the REAL stdio wire -------------------------
+#
+# The unit tests above exercise the tool bodies; these spawn the actual server
+# subprocess and drive it with the official client, so a FastMCP serialization
+# change (dropping dict keys, rewrapping error text) can't silently void the
+# boundary properties. Mirrors test_mcp_server.py's e2e harness, kept local so
+# the two files stay independently runnable.
+
+def _payload(result) -> dict:
+    assert not result.isError, f"tool errored: {result.content}"
+    sc = getattr(result, "structuredContent", None)
+    if isinstance(sc, dict):
+        return sc.get("result", sc) if set(sc) == {"result"} else sc
+    text = next(c.text for c in result.content if getattr(c, "type", "") == "text")
+    return json.loads(text)
+
+
+def _error_text(result) -> str:
+    assert result.isError, "expected a tool error"
+    return " ".join(getattr(c, "text", "") for c in result.content)
+
+
+def _run_server_session(tmp: Path, fn):
+    """Spawn ``python -m rekoll.mcp_server`` rooted at ``tmp`` and drive it
+    (same errlog handling as test_mcp_server.py — the SDK's default stderr can
+    be a capsys stream without an OS handle)."""
+
+    async def _inner():
+        import inspect
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=[
+                "-m", "rekoll.mcp_server",
+                "--path", str(tmp / "mem.db"),
+                "--project", "e2e",
+                "--root", str(tmp),
+            ],
+            cwd=str(tmp),
+        )
+        with (tmp / "server-stderr.log").open("w", encoding="utf-8") as errlog:
+            kwargs = (
+                {"errlog": errlog}
+                if "errlog" in inspect.signature(stdio_client).parameters
+                else {}
+            )
+            async with stdio_client(params, **kwargs) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return await fn(session)
+
+    return asyncio.run(_inner())
+
+
+@requires_mcp
+def test_e2e_ingest_path_reports_skipped_over_the_wire(tmp_path):
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    (docs / "bad.md").write_bytes(b"\xff\xfe\xfa not utf-8 \xff")  # undecodable -> skipped
+
+    async def fn(session):
+        return _payload(await session.call_tool("ingest_path", {"path": "docs"}))
+
+    out = _run_server_session(tmp_path, fn)
+    assert out["files"] == 1 and out["skipped"] == 1
+
+
+@requires_mcp
+def test_e2e_tool_error_text_carries_no_absolute_paths(tmp_path):
+    async def fn(session):
+        escape = await session.call_tool("ingest_path", {"path": "../"})
+        missing = await session.call_tool("ingest_path", {"path": "no-such-dir"})
+        return _error_text(escape), _error_text(missing)
+
+    escape_text, missing_text = _run_server_session(tmp_path, fn)
+    assert "outside the project root" in escape_text
+    assert "does not exist" in missing_text and "no-such-dir" in missing_text
+    for text in (escape_text, missing_text):
+        # Neither spelling of the server's root may reach the model.
+        assert str(tmp_path) not in text
+        assert str(tmp_path.resolve()) not in text

@@ -960,6 +960,9 @@ class Memory:
         degraded) rather than identity-clean over half-stale vectors — the write
         is re-runnable and idempotent (same content-addressed ids, unchanged
         trust, so the trust-monotonic upsert updates each row in place, ADR-0023).
+        Re-running IS the only resume mechanism: there is no checkpoint, so an
+        interrupted reindex re-embeds from the first record again — fine for
+        recovery, but budget for a full pass on very large scopes.
 
         Re-embedding is only skipped when the embedder is already a match AND no
         record is missing a vector (a genuine no-op); otherwise every in-scope
