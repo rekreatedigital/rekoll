@@ -145,6 +145,47 @@ def assert_upsert_is_trust_monotonic(make: AdapterFactory, embedder: Embedder) -
     adapter.close()
 
 
+def assert_proof_count_monotonic_on_upsert(make: AdapterFactory, embedder: Embedder) -> None:
+    """The was-it-used signal must survive idempotent re-ingest, mirroring the
+    trust-monotonic rule (ADR-0023): a same-content upsert keeps
+    MAX(stored, incoming) proof_count. A freshly-built incoming record carries
+    proof_count=0, and writing that over a promoted value silently erased the
+    usage evidence ``mark_used`` had accumulated."""
+    adapter = make()
+    first = _rec(_SCOPE_A, "credited then re-ingested", embedder=embedder)
+    adapter.upsert(records=[first])
+    adapter.bump_proof_count(scope=_SCOPE_A, ids=[first.id])
+    again = _rec(_SCOPE_A, "credited then re-ingested", embedder=embedder)
+    assert again.proof_count == 0  # a fresh record starts uncredited
+    adapter.upsert(records=[again])
+    back = adapter.get(scope=_SCOPE_A, ids=[first.id]).records[0]
+    assert back.proof_count == 1, "idempotent re-ingest zeroed the was-it-used signal"
+    # An incoming HIGHER count (an import/restore carrying usage) may raise it.
+    richer = _rec(_SCOPE_A, "credited then re-ingested", embedder=embedder, proof_count=5)
+    adapter.upsert(records=[richer])
+    back = adapter.get(scope=_SCOPE_A, ids=[first.id]).records[0]
+    assert back.proof_count == 5, "a higher incoming proof_count must win (MAX)"
+    adapter.close()
+
+
+def assert_k_nonpositive_returns_empty(make: AdapterFactory, embedder: Embedder) -> None:
+    """``k <= 0`` asks for nothing and must return nothing — from BOTH query
+    legs. The reference lexical implementation returned ONE hit for k<=0 (its
+    bound was checked after an append) while the vector leg returned zero; a
+    caller iterating "top k" would see phantom results."""
+    adapter = make()
+    record = _rec(_SCOPE_A, "phantom results for k zero", embedder=embedder)
+    adapter.add(records=[record])
+    qvec = embedder.embed(["phantom results"])[0]
+    for k in (0, -1):
+        assert len(adapter.vector_query(scope=_SCOPE_A, embedding=qvec, k=k)) == 0, \
+            f"vector_query(k={k}) must return no hits"
+        if adapter.supports(CAP_LEXICAL):
+            assert len(adapter.lexical_query(scope=_SCOPE_A, text="phantom results", k=k)) == 0, \
+                f"lexical_query(k={k}) must return no hits"
+    adapter.close()
+
+
 def assert_add_strict_on_duplicate(make: AdapterFactory, embedder: Embedder) -> None:
     adapter = make()
     record = _rec(_SCOPE_A, "unique once", embedder=embedder)
@@ -299,6 +340,8 @@ ALL_CHECKS = (
     assert_add_and_get_roundtrip,
     assert_content_addressed_idempotent,
     assert_upsert_is_trust_monotonic,
+    assert_proof_count_monotonic_on_upsert,
+    assert_k_nonpositive_returns_empty,
     assert_add_strict_on_duplicate,
     assert_scope_isolation,
     assert_trust_roundtrip,

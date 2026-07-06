@@ -1,6 +1,9 @@
 # ADR-0006 — Content-addressed IDs make ingestion idempotent
 
-**Status:** Accepted · **Date:** 2026-06-23
+**Status:** Accepted · **Date:** 2026-06-23 · **Amended by:**
+[ADR-0026](0026-kind-in-content-address.md) (2026-07-07: `kind` joined the id
+payload — identical content stored as two kinds is two records, fixing a
+cross-kind id collision that cross-wired metadata/FTS/deletion)
 
 ## Context
 Non-technical users *will* run an import twice. If that duplicates their memories,
@@ -10,6 +13,9 @@ caller behavior (2RD enforced uniqueness only by prose convention, which drifted
 ## Decision
 - A record's primary `id` is **content-addressed**:
   `rk_` + sha256(scope_key | source_uri | content_hash)[:24].
+  (*Amended by ADR-0026:* the payload is now
+  `scope_key | source_uri | kind | content_hash` — kinds live in separate
+  physical tables, so identical content under two kinds must be two ids.)
 - A `UNIQUE(scope_key, content_hash)` constraint backs it at the storage layer.
 - `upsert` is therefore idempotent by construction; re-ingesting identical content
   into the same scope updates in place rather than duplicating. `add` is strict

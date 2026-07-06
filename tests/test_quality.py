@@ -335,6 +335,24 @@ def test_mark_used_is_promotion_only_and_ignores_junk():
     mem.close()
 
 
+def test_non_active_lifecycle_rows_never_surface_in_recall():
+    # NIT-status-count: recall excluded only QUARANTINED, so a superseded row
+    # (no public API mints one today — simulated the way a future supersede
+    # loop would write it) surfaced as live memory. "Recallable" is defined
+    # ONCE (model.RECALLABLE_STATUSES == {ACTIVE}) and recall filters by it,
+    # so lifecycle states can't leak back in.
+    from rekoll.model import RECALLABLE_STATUSES
+
+    assert RECALLABLE_STATUSES == frozenset({Status.ACTIVE})
+    mem = _mem()
+    rec = mem.remember("the retention window is ninety days")
+    stored = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    stored.status = Status.SUPERSEDED
+    mem.adapter.upsert(records=[stored])
+    assert mem.recall("retention window ninety days", k=5).ids() == []
+    mem.close()
+
+
 def test_mark_used_is_a_targeted_bump_and_never_reverts_concurrent_changes():
     # mark_used is a targeted, atomic proof_count += 1 (bump_proof_count), NOT a
     # read-modify-write of the whole row. A full-row upsert would revert any
@@ -355,6 +373,20 @@ def test_mark_used_is_a_targeted_bump_and_never_reverts_concurrent_changes():
     after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
     assert after.proof_count == 1               # the credit landed
     assert after.status is Status.SUPERSEDED    # the concurrent change was NOT reverted
+    mem.close()
+
+
+def test_idempotent_reingest_preserves_proof_count():
+    # L-proofcount-reset: remember -> mark_used -> remember identical ZEROED
+    # the promoted proof_count (the same-id in-place upsert wrote the fresh
+    # record's 0 over it). proof_count is monotonic on the same-content upsert
+    # (MAX(stored, incoming)), mirroring the trust-monotonic rule (ADR-0023).
+    mem = _mem()
+    rec = mem.remember("the failover runbook lives in the wiki")
+    assert mem.mark_used(rec.id) == 1
+    mem.remember("the failover runbook lives in the wiki")  # idempotent re-ingest
+    after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert after.proof_count == 1, "re-ingest zeroed the was-it-used signal"
     mem.close()
 
 

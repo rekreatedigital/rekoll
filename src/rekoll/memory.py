@@ -30,7 +30,13 @@ from .adapters.registry import get_adapter
 from .chunking import chunk_file
 from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder, compare_identity
-from .firewall import ContextEnvelope, build_envelope, sanitize_unicode, screened_record
+from .firewall import (
+    ContextEnvelope,
+    build_envelope,
+    sanitize_unicode,
+    screen_pieces,
+    screened_record,
+)
 from .ledger import LedgerEntry, RecallLedger
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .retrieval import hybrid_search
@@ -42,6 +48,7 @@ __all__ = [
     "DEFAULT_INGEST_TRUST",
     "DEFAULT_MAX_CONTENT_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
+    "DEFAULT_MAX_CHUNKS_PER_DOC",
 ]
 
 # Files and bulk documents are third-party by nature: ingestion defaults to
@@ -55,8 +62,15 @@ DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
 # a document, not a fact — chunk it via ingest_text/ingest_path instead. A single
 # ingested file/document: 10 MiB of TEXT (~2 500 pages) — bigger inputs are
 # almost never prose and reading them unbounded is a memory-exhaustion vector.
+# The byte cap bounds BYTES, not WORK: a heading-per-line markdown document
+# chunks at ~0.25 chunks/byte (~2.6M chunks at the byte cap), so one document's
+# CHUNK COUNT is capped too. 25k clears the largest legitimate yield (a 10 MiB
+# plain-text file at the default stride is ~15k chunks) with headroom; past it
+# the ingest is REJECTED (ingest_text raises; ingest_path skips + counts the
+# file) — never silently truncated.
 DEFAULT_MAX_CONTENT_CHARS = 100_000
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_CHUNKS_PER_DOC = 25_000
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -126,6 +140,21 @@ def _redirects_out(path) -> bool:
         return os.path.normcase(os.path.realpath(p)) != os.path.normcase(here)
     except OSError:  # pragma: no cover - unresolvable: treat as a redirect (skip)
         return True
+
+
+def _quarantine_split_marker(record: MemoryRecord, marker_count: int) -> None:
+    """Quarantine a chunk flagged by the whole-document marker scan
+    (``firewall.screen_pieces``): a marker the chunker SPLIT across a boundary
+    trips no per-chunk screen, so the document-level decision is propagated
+    here — mirroring exactly what ``screened_record`` does when a chunk trips
+    its own screen (status + trust to QUARANTINED, ``injection_flags`` noted).
+    Runs at the ingestion boundary, deterministic and LLM-free (ADR-0002/0013).
+    """
+    record.status = Status.QUARANTINED
+    record.trust_tier = TrustTier.QUARANTINED
+    md = dict(record.metadata)
+    md["injection_flags"] = max(int(md.get("injection_flags") or 0), marker_count)
+    record.metadata = md
 
 
 def _auto_embedder() -> Embedder:
@@ -240,6 +269,7 @@ class Memory:
         redact_pii: bool = False,
         max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        max_chunks_per_doc: int = DEFAULT_MAX_CHUNKS_PER_DOC,
     ) -> None:
         """``default_trust`` applies to first-person ``remember()`` calls ONLY.
 
@@ -249,17 +279,31 @@ class Memory:
         firewall's quarantine (ADR-0016).
 
         ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
-        caps one ingested file/document (ADR-0018). Both overridable, never
-        disable-able to zero.
+        caps one ingested file/document's bytes; ``max_chunks_per_doc`` caps how
+        many chunks one document may yield (bytes alone don't bound work — a
+        heading-per-line document chunks at ~0.25 chunks/byte). All ADR-0018:
+        overridable, never disable-able to zero.
         """
-        if max_content_chars <= 0 or max_file_bytes <= 0:
-            raise ValueError("max_content_chars and max_file_bytes must be positive")
+        if path is None or not str(path).strip():
+            # An empty (or None — e.g. an unset env var passed straight in)
+            # path used to fall through to the ':memory:' branch: the store
+            # LOOKED fine but was ephemeral, and every write evaporated on
+            # close. Ephemeral must be an explicit opt-in, never a typo.
+            raise ValueError(
+                "path is empty; pass a real database file path, or ':memory:' "
+                "to explicitly opt into an ephemeral in-memory store"
+            )
+        if max_content_chars <= 0 or max_file_bytes <= 0 or max_chunks_per_doc <= 0:
+            raise ValueError(
+                "max_content_chars, max_file_bytes and max_chunks_per_doc must be positive"
+            )
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
         self._default_trust = default_trust
         self._redact_pii = redact_pii
         self._max_content_chars = max_content_chars
         self._max_file_bytes = max_file_bytes
+        self._max_chunks_per_doc = max_chunks_per_doc
 
         if backend == "sqlite" and path and path != ":memory:":
             Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -354,6 +398,19 @@ class Memory:
             trust=self._default_trust if trust is None else trust,
             metadata=metadata,
         )
+        # The cap governs what is STORED. The raw-length check above is only a
+        # fast fail: firewall sanitization NFKC-normalizes, and compatibility
+        # codepoints can EXPAND (U+FDFA becomes 18 chars — an 18x amplifier), so
+        # in-cap input can produce over-cap stored content. Enforce on the
+        # post-sanitization record before it reaches storage (ADR-0018).
+        if len(record.content) > self._max_content_chars:
+            raise ValueError(
+                f"content is {len(record.content):,} chars after firewall "
+                f"sanitization (NFKC normalization expands some codepoints), over "
+                f"the max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a document belongs in ingest_text()/ingest_path() "
+                "(which chunk it), or raise max_content_chars (ADR-0018)."
+            )
         self._embed_and_store([record])
         return record
 
@@ -365,6 +422,7 @@ class Memory:
         source: Optional[str] = None,
         kind: Kind = Kind.RAW_FACT,
         trust: Optional[TrustTier] = None,
+        batch: int = 256,
     ) -> int:
         """Chunk a document and store it. Returns the number of chunks stored.
 
@@ -372,6 +430,12 @@ class Memory:
         ``DEFAULT_INGEST_TRUST`` (UNVERIFIED) — injection markers quarantine the
         chunk — NOT to the constructor's ``default_trust`` (ADR-0016). Pass
         ``trust=`` explicitly to vouch for a source you control.
+
+        A document over ``max_file_bytes`` OR chunking into more than
+        ``max_chunks_per_doc`` pieces raises (ADR-0018): bytes alone don't
+        bound work — a heading-per-line document yields ~0.25 chunks/byte.
+        Chunks are embedded + stored in bounded batches of ``batch``, so peak
+        memory tracks the batch, never the document.
         """
         n_bytes = len(text.encode("utf-8"))  # a BYTES limit — measure bytes, not chars
         if n_bytes > self._max_file_bytes:
@@ -380,25 +444,49 @@ class Memory:
                 f"max_file_bytes={self._max_file_bytes:,} ingestion limit; "
                 "split it or raise max_file_bytes (ADR-0018)."
             )
+        pieces = chunk_file(name, text)
+        if len(pieces) > self._max_chunks_per_doc:
+            raise ValueError(
+                f"document chunked into {len(pieces):,} pieces, over the "
+                f"max_chunks_per_doc={self._max_chunks_per_doc:,} ingestion "
+                "limit — rejected rather than silently truncated; split the "
+                "document or raise max_chunks_per_doc (ADR-0018)."
+            )
         src = source or f"text://{name}"
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
-        records = []
-        for i, piece in enumerate(chunk_file(name, text)):
+        # Boundary-split markers (L-chunk-split): a marker the chunker split in
+        # two trips NEITHER per-chunk screen. Screen the WHOLE document once and
+        # quarantine the affected pieces — under the same trust rule as the
+        # per-chunk screen (markers quarantine only untrusted input, ADR-0016).
+        split_hits = (
+            screen_pieces(text, pieces)
+            if self._screen and trust <= TrustTier.UNVERIFIED
+            else {}
+        )
+        stored = 0
+        pending: list[MemoryRecord] = []
+        for i, piece in enumerate(pieces):
             if self._screen and not sanitize_unicode(piece):
                 continue  # nothing survives screening (e.g. only zero-width chars)
-            records.append(
-                self._make_record(
-                    content=piece,
-                    kind=kind,
-                    provenance=Provenance(
-                        source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
-                    ),
-                    trust=trust,
-                    metadata={"path": name},
-                )
+            record = self._make_record(
+                content=piece,
+                kind=kind,
+                provenance=Provenance(
+                    source_uri=src, adapter_name="memory", source_file=name, chunk_index=i
+                ),
+                trust=trust,
+                metadata={"path": name},
             )
-        self._embed_and_store(records)
-        return len(records)
+            if i in split_hits and record.status is not Status.QUARANTINED:
+                _quarantine_split_marker(record, split_hits[i])
+            pending.append(record)
+            stored += 1
+            if len(pending) >= batch:
+                self._embed_and_store(pending)
+                pending = []
+        if pending:
+            self._embed_and_store(pending)
+        return stored
 
     def ingest_path(
         self,
@@ -413,8 +501,8 @@ class Memory:
         """Index a file or directory (code + docs).
 
         Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
-        passed over (symlink, over ``max_file_bytes``, undecodable, or
-        unreadable).
+        passed over (symlink, over ``max_file_bytes``, over
+        ``max_chunks_per_doc``, undecodable, or unreadable).
 
         Linked files are skipped unless ``follow_symlinks=True``: a planted link
         in a third-party tree can point anywhere on disk (e.g. ``~/.ssh/id_rsa``),
@@ -481,24 +569,38 @@ class Memory:
                 continue
             rel = fp.name if root.is_file() else fp.relative_to(root).as_posix()
             pieces = chunk_file(rel, text)
+            if len(pieces) > self._max_chunks_per_doc:
+                # Chunk-count explosion (bytes don't bound work, ADR-0018):
+                # reject THIS document — whole, never truncated — and keep
+                # walking, mirroring the max_file_bytes skip above.
+                skipped += 1
+                continue
             if not pieces:
                 continue
             files += 1
+            # Same whole-document screen as ingest_text: a boundary-split
+            # marker trips no per-chunk screen (L-chunk-split).
+            split_hits = (
+                screen_pieces(text, pieces)
+                if self._screen and trust <= TrustTier.UNVERIFIED
+                else {}
+            )
             for i, piece in enumerate(pieces):
                 if self._screen and not sanitize_unicode(piece):
                     continue  # nothing survives screening (e.g. only zero-width chars)
-                pending.append(
-                    self._make_record(
-                        content=piece,
-                        kind=Kind.RAW_FACT,
-                        provenance=Provenance(
-                            source_uri=f"file://{rel}", adapter_name="memory",
-                            source_file=rel, chunk_index=i,
-                        ),
-                        trust=trust,
-                        metadata={"path": rel},
-                    )
+                record = self._make_record(
+                    content=piece,
+                    kind=Kind.RAW_FACT,
+                    provenance=Provenance(
+                        source_uri=f"file://{rel}", adapter_name="memory",
+                        source_file=rel, chunk_index=i,
+                    ),
+                    trust=trust,
+                    metadata={"path": rel},
                 )
+                if i in split_hits and record.status is not Status.QUARANTINED:
+                    _quarantine_split_marker(record, split_hits[i])
+                pending.append(record)
                 chunks += 1
                 if len(pending) >= batch:
                     self._embed_and_store(pending)
@@ -528,7 +630,9 @@ class Memory:
         consolidator (reads stay LLM-free, ADR-0007), and ``Memory`` holds no
         ambient consolidator — you pass one per call. Select sources with
         ``ids=[...]`` or ``query="..."`` (top-``k``). The consolidator's text
-        flows through the ingest firewall and is stored with:
+        flows through the ingest firewall — ALWAYS, even for a store built
+        with ``screen=False``: a host may vouch for its own writes, never for
+        what a model emits (#7.5, ADR-0015) — and is stored with:
 
          - ``kind=OBSERVATION``,
          - ``provenance.derived_from`` = the source record ids,
@@ -593,7 +697,22 @@ class Memory:
             trust=min(r.trust_tier for r in sources),
             metadata={**(metadata or {}), "consolidator": name, "source_count": len(sources)},
             declared_transformations=("llm_summary",),
+            # LLM output is never exempt from the firewall (#7.5): screening is
+            # forced even when the store was built with screen=False, keeping
+            # ADR-0015's "flows through the ingest firewall" true by
+            # construction. The trust rule is unchanged — markers quarantine
+            # only when the summary's (source-derived) trust is <= UNVERIFIED.
+            force_screen=True,
         )
+        # Same post-sanitization cap rule as remember(): NFKC can EXPAND, so
+        # re-check what would actually be stored (ADR-0018).
+        if len(record.content) > self._max_content_chars:
+            raise ValueError(
+                f"consolidator output is {len(record.content):,} chars after "
+                f"firewall sanitization, over the "
+                f"max_content_chars={self._max_content_chars:,} limit for one "
+                "memory (ADR-0018)."
+            )
         self._embed_and_store([record])
         return record
 
@@ -909,8 +1028,13 @@ class Memory:
             mode += " (stub-embedder)"  # deterministic hash vectors, no semantics
         return mode
 
-    def _make_record(self, *, content, kind, provenance, trust, metadata, **kwargs):
-        if self._screen:
+    def _make_record(
+        self, *, content, kind, provenance, trust, metadata, force_screen=False, **kwargs
+    ):
+        # force_screen: LLM output (consolidate) is screened even when the
+        # store was built with screen=False — a host may vouch for its OWN
+        # writes; it cannot vouch for what a model emits (#7.5, ADR-0015).
+        if self._screen or force_screen:
             return screened_record(
                 scope=self.scope, kind=kind, content=content,
                 provenance=provenance, trust_tier=trust, metadata=metadata,
@@ -973,13 +1097,31 @@ class Memory:
         # recurses into it — catching junctions, reparse points, and dir symlinks
         # alike. This is unconditional (like "dir symlinks are never descended"):
         # an out-of-tree directory is never walked, even under follow_symlinks.
+        #
+        # CYCLE GUARD (issue #15): an IN-ROOT junction cycle (root/loop -> root)
+        # PASSES that containment — it never leaves the tree — yet os.walk still
+        # descends it, re-walking the same real directories until the OS
+        # path-length limit: an availability blow-up with every file re-read at
+        # every level. So also track the REAL path of every directory we agree
+        # to descend and prune one we've already seen — a directory reachable
+        # twice (a cycle, or a junction to an in-root sibling) is walked
+        # exactly once. Real paths are compared normcased (Windows-caseless).
         root_real = _real_path(root)
+        seen: set[str] = {os.path.normcase(str(root_real))}
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [
-                d for d in dirnames
-                if d not in skip and not d.endswith(".egg-info")
-                and _within(root_real, os.path.join(dirpath, d))
-            ]
+            kept = []
+            for d in dirnames:
+                if d in skip or d.endswith(".egg-info"):
+                    continue
+                full = os.path.join(dirpath, d)
+                if not _within(root_real, full):
+                    continue
+                real = os.path.normcase(os.path.realpath(full))
+                if real in seen:
+                    continue  # already walked via another route: cycle/duplicate
+                seen.add(real)
+                kept.append(d)
+            dirnames[:] = kept
             for name in filenames:
                 fp = Path(dirpath) / name
                 if fp.suffix.lower() in include:

@@ -241,6 +241,60 @@ def test_non_utf8_file_is_skipped_and_counted(tmp_path):
     mem.close()
 
 
+def test_same_content_under_two_kinds_is_two_independent_records():
+    # M3: record_id omitted `kind`, so identical content saved as two kinds
+    # shared ONE id across two physical tables (ADR-0001): get() returned two
+    # records for one id, the first record's metadata was clobbered (keyed by
+    # record id alone), its FTS row was replaced (lexically invisible), and
+    # forget(one id) deleted BOTH rows. All reachable via plain remember().
+    mem = _mem()
+    text = "the deploy freeze starts friday"
+    fact = mem.remember(text, kind=Kind.RAW_FACT, metadata={"m": "fact"})
+    obs = mem.remember(text, kind=Kind.OBSERVATION, metadata={"m": "obs"})
+    assert fact.id != obs.id, "kind must be part of the content address (ADR-0026)"
+
+    got_fact = mem.adapter.get(scope=mem.scope, ids=[fact.id]).records
+    got_obs = mem.adapter.get(scope=mem.scope, ids=[obs.id]).records
+    assert len(got_fact) == 1 and len(got_obs) == 1, "one id must resolve to one record"
+    assert got_fact[0].kind is Kind.RAW_FACT and got_obs[0].kind is Kind.OBSERVATION
+    assert got_fact[0].metadata["m"] == "fact", "second kind's write clobbered metadata"
+    assert got_obs[0].metadata["m"] == "obs"
+
+    # Deleting one kind removes exactly that record; the other stays recallable.
+    assert mem.forget(fact.id) == 1
+    assert mem.count() == 1
+    survivors = _all_records(mem, "deploy freeze friday")
+    assert [r.id for r in survivors] == [obs.id]
+    assert survivors[0].kind is Kind.OBSERVATION
+    mem.close()
+
+
+def test_kind_in_id_preserves_content_addressed_idempotency():
+    # The invariant the M3 fix must NOT regress: same content+kind+source is
+    # the SAME id, and re-remembering it does not duplicate.
+    mem = _mem()
+    a = mem.remember("idempotent fact", kind=Kind.RAW_FACT)
+    b = mem.remember("idempotent fact", kind=Kind.RAW_FACT)
+    assert a.id == b.id
+    assert mem.count() == 1
+    mem.close()
+
+
+def test_empty_path_is_rejected_not_aliased_to_memory():
+    # #8.1: Memory(path="") used to fall through to the ':memory:' branch, so a
+    # typo'd/empty path silently opened an EPHEMERAL store and every write
+    # evaporated on close. An empty path is a config error and must fail loudly.
+    # None is the same bug in its most realistic costume — an unset env var
+    # (os.environ.get("REKOLL_PATH")) passed straight in.
+    for bad in (None, "", "   ", "\t"):
+        with pytest.raises(ValueError, match="path"):
+            Memory(path=bad, embedder=StubEmbedder(), reranker=None)
+    # The explicit ephemeral spelling keeps working.
+    mem = _mem()
+    mem.remember("ephemeral opt-in still works")
+    mem.close()
+
+
 def test_batching_flushes_all_chunks(tmp_path):
     # 5 files x 1 chunk with batch=2 exercises both the mid-loop flush and the
     # final partial flush.

@@ -1,6 +1,8 @@
 # ADR-0018 — Bounded inputs everywhere: content, file, query, FTS expression
 
-**Status:** Accepted · **Date:** 2026-07-02
+**Status:** Accepted · **Date:** 2026-07-02 · **Amended:** 2026-07-07 (M7:
+per-document chunk-count cap + batched `ingest_text`; the original "chunks
+need no separate cap" claim below was wrong — see the amendment in Decision)
 
 ## Context
 
@@ -42,9 +44,23 @@ the underlying pure functions stay composable:
   means the consolidator failed to condense, not that we should store an
   unbounded model output.
 
-Chunk sizes are already bounded by the chunkers (≤ ~2 000 chars), so ingest
-chunks need no separate cap. Limits are overridable (power users, tests) but
-not disable-able to zero/negative.
+~~Chunk sizes are already bounded by the chunkers (≤ ~2 000 chars), so ingest
+chunks need no separate cap.~~ **Amended 2026-07-07 (M7):** chunk SIZE being
+bounded does not bound chunk COUNT — a heading-per-line markdown document
+chunks at ~0.25 chunks/byte (measured), i.e. ~2.6M chunks at the 10 MiB byte
+cap, and `ingest_text` embedded ALL of them in ONE call (a multi-GB spike). So:
+
+- `Memory(max_chunks_per_doc=25_000)` — one document's chunk COUNT. 25k clears
+  the largest legitimate yield (a 10 MiB plain-text file at the default
+  size-800/overlap-100 stride is ~15k chunks) with headroom. Past the bound the
+  document is **rejected whole, never silently truncated**: `ingest_text`
+  **raises**; `ingest_path` **skips and counts** the file (same split as the
+  byte cap).
+- `ingest_text` now embeds + stores in bounded batches (`batch=256`, matching
+  `ingest_path`), so peak memory tracks the batch size, never the document.
+
+Limits are overridable (power users, tests) but not disable-able to
+zero/negative.
 
 ## Consequences
 

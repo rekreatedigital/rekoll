@@ -127,6 +127,49 @@ def test_legit_same_name_subdir_is_still_ingested(tmp_path):
     mem.close()
 
 
+# -- issue #15: an IN-ROOT link CYCLE must not make the walk recurse ----------
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_in_root_junction_cycle_terminates_and_ingests_once(tmp_path):
+    # Lane 1 (PR #14) closed the ESCAPE; this is the availability half (issue
+    # #15): an in-root junction cycle (root/loop -> root) PASSES real-path
+    # containment — it never leaves the tree — yet os.walk descends it (a
+    # junction is not is_symlink()), re-walking the same real directories until
+    # the OS path-length limit: dozens-to-thousands of spurious directories,
+    # with every file re-read (and re-embedded) at every level. The walk now
+    # tracks visited REAL directories and prunes a repeat, so a cycle is
+    # walked exactly once.
+    root = tmp_path / "tree"
+    (root / "sub").mkdir(parents=True)
+    (root / "sub" / "a.md").write_text(f"# A\n\n{SAFE} gamma\n", encoding="utf-8")
+    _make_junction_or_skip(root / "loop", root)
+
+    mem = _mem()
+    stats = mem.ingest_path(str(root))
+    assert stats["files"] == 1, (
+        f"cycle recursion: the one real file was read {stats['files']} times"
+    )
+    assert "safe-marker" in _all_text(mem)
+    mem.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_in_root_junction_to_sibling_is_not_double_walked(tmp_path):
+    # A junction to an in-root SIBLING also passes containment; the visited-
+    # real-dirs guard walks the target once (via whichever route os.walk
+    # reaches first), so its files are read once, not twice.
+    root = tmp_path / "tree"
+    (root / "docs").mkdir(parents=True)
+    (root / "docs" / "d.md").write_text(f"# D\n\n{SAFE} delta\n", encoding="utf-8")
+    _make_junction_or_skip(root / "alias", root / "docs")
+
+    mem = _mem()
+    stats = mem.ingest_path(str(root))
+    assert stats["files"] == 1, "the same real directory was walked twice"
+    assert "safe-marker" in _all_text(mem)
+    mem.close()
+
+
 # -- MCP guard: fail-closed real-path containment -----------------------------
 
 @pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")

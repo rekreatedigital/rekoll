@@ -20,8 +20,10 @@ def test_content_hash_deterministic_and_distinct():
 
 
 def test_record_id_is_deterministic_and_scope_sensitive():
-    assert record_id("s1", "src", "h") == record_id("s1", "src", "h")
-    assert record_id("s1", "src", "h") != record_id("s2", "src", "h")
+    # (record_id takes kind since ADR-0026; kind-sensitivity itself is asserted
+    # where the collision was reachable, in test_ingest.py.)
+    assert record_id("s1", "src", "raw_fact", "h") == record_id("s1", "src", "raw_fact", "h")
+    assert record_id("s1", "src", "raw_fact", "h") != record_id("s2", "src", "raw_fact", "h")
 
 
 def test_human_id_format():

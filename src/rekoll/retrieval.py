@@ -13,7 +13,7 @@ from typing import Iterable, Optional
 from .adapters.base import CAP_LEXICAL, QueryHit, QueryResult, StorageAdapter
 from .embedding import Embedder
 from .firewall import sanitize_unicode
-from .model import Kind, Scope, Status
+from .model import RECALLABLE_STATUSES, Kind, Scope, Status, TrustTier
 from .reranking import Reranker
 
 __all__ = ["rrf_fuse", "hybrid_search", "DEFAULT_RRF_K", "MAX_QUERY_CHARS"]
@@ -125,7 +125,21 @@ def hybrid_search(
         return QueryResult(hits=())
     fused = _verify_hits(rrf_fuse(lists, k=rrf_k, top=pool))
     if not include_quarantined:
-        fused = [h for h in fused if h.record.status is not Status.QUARANTINED]
+        # The surfacing filter must AGREE with the envelope (build_envelope
+        # drops status==QUARANTINED AND trust<=QUARANTINED): RecallResult's raw
+        # accessors (.texts()/.ids()/.records()) expose exactly these hits, so
+        # anything the envelope would withhold must be withheld here too.
+        # Construction already forces status=QUARANTINED at quarantine-level
+        # trust (model.MemoryRecord); the trust clause keeps the agreement
+        # explicit for any adapter/legacy row that slips one through.
+        # "Recallable" itself (status==ACTIVE) is defined ONCE in
+        # model.RECALLABLE_STATUSES — the same predicate the MCP status count
+        # uses — so a future supersede/propose loop can't surface here either.
+        fused = [
+            h for h in fused
+            if h.record.status in RECALLABLE_STATUSES
+            and h.record.trust_tier > TrustTier.QUARANTINED
+        ]
     if reranker is not None:
         fused = reranker.rerank(query, fused, top=k)
     else:

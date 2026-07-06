@@ -204,6 +204,7 @@ class SQLiteAdapter(StorageAdapter):
 
     def _write_one(self, r: MemoryRecord, *, replace: bool) -> None:
         table = _KIND_TABLE[r.kind]
+        proof_count = r.proof_count
         if replace:
             # The PK id includes source_uri but UNIQUE() is on (scope_key,
             # content_hash). So the SAME content from a DIFFERENT source yields a
@@ -211,7 +212,8 @@ class SQLiteAdapter(StorageAdapter):
             # via the UNIQUE conflict — orphaning its fts/metadata/link rows, which
             # are keyed by the *old* id. Purge the displaced id's child rows first.
             prior = self._conn.execute(
-                f"SELECT id, trust_tier FROM {table} WHERE scope_key=? AND content_hash=?",
+                f"SELECT id, trust_tier, proof_count FROM {table} "
+                f"WHERE scope_key=? AND content_hash=?",
                 (r.scope.key(), r.content_hash),
             ).fetchone()
             if prior is not None:
@@ -238,6 +240,15 @@ class SQLiteAdapter(StorageAdapter):
                     self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
                 # else same_id: fall through to update in place (idempotent
                 # re-ingest / re-embed) — trust is equal or higher, never lower.
+                #
+                # PROOF-COUNT MONOTONIC (same rule as trust): the surviving row
+                # keeps MAX(stored, incoming). A freshly-built re-ingest of
+                # identical content carries proof_count=0 and used to ZERO the
+                # promoted value mark_used had accumulated (L-proofcount-reset);
+                # usage credit belongs to the content, so a takeover by a
+                # higher-trust source keeps it too. An incoming HIGHER count
+                # (an import/restore carrying usage) may still raise it.
+                proof_count = max(int(prior["proof_count"]), proof_count)
         verb = "INSERT OR REPLACE" if replace else "INSERT"
         embedding = json.dumps(list(r.embedding)) if r.embedding is not None else None
         placeholders = ",".join("?" * 25)
@@ -265,7 +276,7 @@ class SQLiteAdapter(StorageAdapter):
                 _dt(r.seen_at),
                 _dt(r.valid_from),
                 _dt(r.valid_until),
-                r.proof_count,
+                proof_count,
                 ",".join(r.declared_transformations),
                 r.privacy_class,
                 r.status.value,
@@ -464,6 +475,11 @@ class SQLiteAdapter(StorageAdapter):
                     f"unsupported where keys {sorted(bad)}; "
                     f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
                 )
+        if k <= 0:
+            # Asking for nothing returns nothing. The bound below is checked
+            # AFTER an append, which returned one phantom hit for k<=0 while
+            # vector_query returned zero (conformance-gated: both legs agree).
+            return QueryResult(hits=())
         match = _fts_query(text)
         if match is None:
             return QueryResult(hits=())

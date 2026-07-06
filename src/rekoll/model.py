@@ -23,6 +23,7 @@ __all__ = [
     "Kind",
     "TrustTier",
     "Status",
+    "RECALLABLE_STATUSES",
     "Scope",
     "Provenance",
     "MemoryRecord",
@@ -57,6 +58,14 @@ class Status(str, Enum):
     QUARANTINED = "quarantined"
     SUPERSEDED = "superseded"
     INVALIDATED = "invalidated"
+
+
+#: The ONE definition of "recallable", shared by every read surface (the
+#: hybrid_search surfacing filter and the MCP status count): only ACTIVE
+#: records are memories a read may return. Proposed/superseded/invalidated are
+#: lifecycle states, and quarantined never surfaces anywhere. Kept in one place
+#: so a future supersede/propose loop cannot make the surfaces disagree.
+RECALLABLE_STATUSES: frozenset = frozenset({Status.ACTIVE})
 
 
 def _utcnow() -> datetime:
@@ -134,6 +143,16 @@ class MemoryRecord:
             self.trust_tier = TrustTier(int(self.trust_tier))
         if not isinstance(self.status, Status):
             self.status = Status(self.status)
+        if self.trust_tier <= TrustTier.QUARANTINED and self.status is Status.ACTIVE:
+            # Quarantine-level trust must never surface. An ACTIVE status at
+            # QUARANTINED trust made the read-path filters diverge: the
+            # envelope's trust floor dropped the record while the surfacing
+            # filter (status-only) let it reach the raw accessors
+            # (.texts()/.ids()/.records()). Rewriting at construction makes
+            # the divergent state unrepresentable — for records minted via the
+            # public API AND rows reconstructed by adapters. Other lifecycle
+            # states (superseded/invalidated/...) are preserved.
+            self.status = Status.QUARANTINED
         if not self.content:
             raise ValueError("content must be non-empty")
         if self.embedding is not None:
@@ -151,8 +170,9 @@ class MemoryRecord:
         trust_tier: TrustTier,
         **kwargs: object,
     ) -> "MemoryRecord":
+        kind = Kind(kind)  # coerce BEFORE addressing: kind is part of the id (ADR-0026)
         chash = _content_hash(content)
-        rid = record_id(scope.key(), provenance.source_uri, chash)
+        rid = record_id(scope.key(), provenance.source_uri, kind.value, chash)
         return cls(
             id=rid,
             scope=scope,

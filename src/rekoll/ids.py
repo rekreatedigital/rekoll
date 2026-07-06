@@ -1,10 +1,12 @@
 """Content addressing and stable identifiers.
 
 Rekoll IDs are *content-addressed*: a record's primary id is derived from its
-scope + source + a hash of its (normalized) content. Re-ingesting the same
-content into the same scope yields the same id, which makes imports idempotent
-by construction (ADR-0006). A separate human-facing ``MEM-NNNN`` id keeps the
-git-auditable views legible.
+scope + source + kind + a hash of its (normalized) content. Re-ingesting the
+same content into the same scope yields the same id, which makes imports
+idempotent by construction (ADR-0006); ``kind`` is part of the address
+(ADR-0026) because each kind lives in its own physical table — one id shared
+across two tables cross-wired metadata, the lexical index, and deletion. A
+separate human-facing ``MEM-NNNN`` id keeps the git-auditable views legible.
 """
 
 from __future__ import annotations
@@ -32,12 +34,20 @@ def content_hash(content: str) -> str:
     return hashlib.sha256(normalize_content(content).encode("utf-8")).hexdigest()
 
 
-def record_id(scope_key: str, source_uri: str, chash: str) -> str:
+def record_id(scope_key: str, source_uri: str, kind: str, chash: str) -> str:
     """Deterministic, content-addressed record id.
 
-    ``rk_`` + first 24 hex chars of sha256(scope_key | source_uri | content_hash).
+    ``rk_`` + first 24 hex chars of
+    sha256(scope_key | source_uri | kind | content_hash).
+
+    ``kind`` (the ``Kind`` value string, e.g. ``"raw_fact"``) is part of the
+    address (ADR-0026): kinds live in SEPARATE physical tables (ADR-0001), so
+    identical content stored as two kinds must be two records with two ids —
+    one shared id cross-wired metadata/FTS (keyed by record id) and made
+    ``forget(one_id)`` delete both. Idempotency is unchanged where it matters:
+    same content + kind + source (in the same scope) is the same id.
     """
-    payload = f"{scope_key}\x00{source_uri}\x00{chash}".encode("utf-8")
+    payload = f"{scope_key}\x00{source_uri}\x00{kind}\x00{chash}".encode("utf-8")
     return "rk_" + hashlib.sha256(payload).hexdigest()[:24]
 
 
