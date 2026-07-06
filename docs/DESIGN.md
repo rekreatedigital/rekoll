@@ -131,7 +131,7 @@ The load-bearing security idea: because the firewall sets trust at the boundary 
 **One logical record shape, physically split across THREE tables** — because raw facts, observations, and directives have genuinely different lifecycles, cardinalities, and trust dynamics. (Hindsight's hardest-won lesson: it shipped one `memory_units` table + a `fact_type` discriminator and paid with 20+ migrations of churn, a literal `observations↔mental_models` rename migration, and a **256 MB in-row JSONB brick / SQLSTATE 54000**.)
 
 **Logical record fields:**
-- `id` — content-addressed: `sha256(scope ‖ source_uri ‖ content_hash)`, truncated → free idempotent re-ingestion.
+- `id` — content-addressed: `sha256(scope ‖ source_uri ‖ kind ‖ content_hash)`, truncated → free idempotent re-ingestion (kind joined the payload in ADR-0026: kinds live in separate tables, so identical content under two kinds is two records).
 - `human_id` — stable legible `MEM-NNNN` (the 2RD `AG-NNN` pattern), for the git-auditable view.
 - `scope` — composite tenant/project/agent isolation key, on **every row and every query**.
 - `kind` — `raw_fact | observation | directive | episode` (**logical discriminator only**).

@@ -151,8 +151,9 @@ class MemoryRecord:
         trust_tier: TrustTier,
         **kwargs: object,
     ) -> "MemoryRecord":
+        kind = Kind(kind)  # coerce BEFORE addressing: kind is part of the id (ADR-0026)
         chash = _content_hash(content)
-        rid = record_id(scope.key(), provenance.source_uri, chash)
+        rid = record_id(scope.key(), provenance.source_uri, kind.value, chash)
         return cls(
             id=rid,
             scope=scope,
