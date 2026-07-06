@@ -189,6 +189,12 @@ class RecallResult:
     result list as equally trustworthy. ``mode`` is deliberately NOT rendered
     into :meth:`context` — the envelope stays a pure function of the hits so
     agent prompt caches aren't busted (see ``ContextEnvelope.render``).
+
+    ``mode`` reports the pipeline that RAN, not a completeness guarantee:
+    read-time tamper verification (``retrieval._verify_hits``, ADR-0019)
+    withholds any hit whose stored hash no longer matches its content, so even
+    a full-hybrid mode can arrive with fewer hits than ``k`` — or none (see
+    :meth:`Memory.recall`: ``k`` is an upper bound, not a promise).
     """
 
     hits: tuple[QueryHit, ...]
@@ -954,6 +960,9 @@ class Memory:
         degraded) rather than identity-clean over half-stale vectors — the write
         is re-runnable and idempotent (same content-addressed ids, unchanged
         trust, so the trust-monotonic upsert updates each row in place, ADR-0023).
+        Re-running IS the only resume mechanism: there is no checkpoint, so an
+        interrupted reindex re-embeds from the first record again — fine for
+        recovery, but budget for a full pass on very large scopes.
 
         Re-embedding is only skipped when the embedder is already a match AND no
         record is missing a vector (a genuine no-op); otherwise every in-scope
@@ -968,6 +977,12 @@ class Memory:
             self._identity_state = "match"
             return 0
         try:
+            # Records MUST be the adapter's stored rows (newest()), never
+            # rebuilt via create(): reindex deliberately refreshes quarantined/
+            # superseded rows too, and a create()-built record defaults
+            # status=ACTIVE, which the same-id upsert would write through —
+            # resurrecting quarantined rows. Status (unlike proof_count, which
+            # the adapter keeps monotonic) has no adapter-side guard.
             records = list(self.adapter.newest(scope=self.scope, n=total).records)
         except UnsupportedCapabilityError as exc:
             raise UnsupportedCapabilityError(
@@ -1074,7 +1089,14 @@ class Memory:
         """Copy any already-stored vector onto an embedding-less incoming record
         so an in-place upsert never nulls a good vector (ADR-0024, the recovery
         trap). Only touches records that would otherwise write NULL; genuinely
-        new content stays vector-free under the mismatch."""
+        new content stays vector-free under the mismatch.
+
+        Facade-enforced ONLY — this invariant is deliberately NOT part of the
+        StorageAdapter contract (no conformance check): an adapter stores what
+        it is handed, and ``SQLiteAdapter._write_one`` writes ``embedding=NULL``
+        for a record carrying none. A new write path that can hand ``upsert``
+        already-stored content without a vector must either embed first (as
+        ``_embed_and_store`` does) or route through here."""
         needing = [r for r in records if r.embedding is None]
         if not needing:
             return
