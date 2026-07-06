@@ -355,6 +355,73 @@ def test_error_detail_strips_controls_from_non_json_bodies():
     assert "oops" in detail and "wiped" in detail
 
 
+# The full set of bidi / zero-width format chars the transport must neutralize.
+# Built from integer code points (this source embeds no literal invisibles) and
+# hardcoded here rather than imported from the module, so dropping one from the
+# module's own list is caught by a failing test, not silently masked. U+202E is
+# the "Trojan Source" right-to-left override; U+2066/U+2069 are bidi isolates;
+# U+200B and U+FEFF are zero-width.
+_EXPECTED_FORMAT_CODEPOINTS = (
+    0x061C,                                  # ARABIC LETTER MARK
+    0x200B, 0x200C, 0x200D,                  # ZERO WIDTH SPACE / NON-JOINER / JOINER
+    0x200E, 0x200F,                          # LEFT-TO-RIGHT / RIGHT-TO-LEFT MARK
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings / overrides
+    0x2060,                                  # WORD JOINER
+    0x2066, 0x2067, 0x2068, 0x2069,          # bidi isolates (LRI/RLI/FSI/PDI)
+    0xFEFF,                                  # BOM / zero-width no-break space
+)
+_LOG_UNSAFE_SAMPLES = "".join(chr(c) for c in _EXPECTED_FORMAT_CODEPOINTS)
+
+
+def test_error_detail_strips_bidi_and_zero_width_from_json_message():
+    # A server reordering its error text to impersonate a trusted host: the
+    # "key" + <RLO> + "gnp.evil" body renders right-to-left as "key live.png".
+    rlo = chr(0x202E)  # RIGHT-TO-LEFT OVERRIDE
+    fake = _RecordingErrorBody(('{"error":{"message":"key' + rlo + 'gnp.evil"}}').encode("utf-8"))
+    detail = _http._error_detail(fake)
+    assert rlo not in detail
+    assert "key" in detail and "gnp.evil" in detail  # the real text is preserved
+
+
+def test_error_detail_strips_every_bidi_and_zero_width_char():
+    """None of the known bidi/zero-width vectors may survive, from either the
+    parsed-message path or the raw-body fallback."""
+    for body in (
+        ('{"error":{"message":"a' + _LOG_UNSAFE_SAMPLES + 'b"}}').encode("utf-8"),
+        ("plain " + _LOG_UNSAFE_SAMPLES + " body").encode("utf-8"),  # non-JSON fallback
+    ):
+        detail = _http._error_detail(_RecordingErrorBody(body))
+        leaked = [f"U+{ord(c):04X}" for c in detail if c in _LOG_UNSAFE_SAMPLES]
+        assert not leaked, f"format chars leaked into error detail: {leaked}"
+
+
+def test_bidi_body_over_the_wire_yields_clean_provider_error(endpoint_factory):
+    """End-to-end: a real 400 whose body carries bidi/zero-width chars produces
+    a ProviderError message with none of them."""
+    origin = endpoint_factory()
+    origin.respond(
+        400,
+        body=('{"error":{"message":"bad ' + _LOG_UNSAFE_SAMPLES + ' key"}}').encode("utf-8"),
+    )
+    with pytest.raises(ProviderError) as excinfo:
+        post_json(f"{origin.url}/v1/embeddings", {"input": ["x"]}, timeout=5.0)
+    message = str(excinfo.value)
+    assert not any(c in message for c in _LOG_UNSAFE_SAMPLES)
+    assert "bad" in message and "key" in message
+
+
+def test_control_translation_covers_the_documented_ranges():
+    """Guard the table itself so a future trim can't silently reopen a vector:
+    every C0, DEL, C1, and expected bidi/zero-width code point maps to a space,
+    and ordinary printable text is left alone."""
+    table = _http._CONTROL_TRANSLATION
+    expected = [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), *_EXPECTED_FORMAT_CODEPOINTS]
+    for codepoint in expected:
+        assert table.get(codepoint) == " ", f"U+{codepoint:04X} not neutralized"
+    for keep in ("A", "z", chr(0xC0), chr(0x4F60), chr(0x1F642), " "):  # ascii/accent/CJK/emoji/space
+        assert ord(keep) not in table
+
+
 # -- NIT: hostile Retry-After values --------------------------------------------
 
 

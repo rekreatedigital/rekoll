@@ -20,8 +20,9 @@ Egress hardening (issue #7). The transport treats the remote as untrusted:
   local servers (ollama/LM Studio) working while never putting a real key on
   the wire in the clear.
 * **Error text is log-safe.** Server-controlled error strings are stripped of
-  C0/C1 control characters before they reach a :class:`ProviderError`, so an
-  endpoint cannot inject ANSI escapes / NUL / BEL into logs.
+  C0/C1 control characters *and* bidi/zero-width format characters before they
+  reach a :class:`ProviderError`, so an endpoint cannot inject ANSI escapes /
+  NUL / BEL, nor "Trojan Source" bidi overrides, into logs.
 """
 
 from __future__ import annotations
@@ -50,12 +51,32 @@ _ERROR_BODY_LIMIT = 64 * 1024
 #: that would otherwise stream until the process runs out of memory.
 _MAX_RESPONSE_BYTES = 128 * 1024 * 1024
 
-#: Neutralize C0 controls, DEL, and the C1 range to a space. Printable text
-#: (incl. all non-ASCII >= U+00A0) is untouched; the whitespace collapse that
-#: follows a ``translate`` merges the runs these leave behind.
+#: Bidi/format characters that are NOT "whitespace" (so the ``split()`` collapse
+#: below can't catch them) yet forge or deceive in a log or terminal: the bidi
+#: controls drive "Trojan Source"-style visual reordering (a server could make
+#: ``key<RLO>gnp.evil`` render as a trusted host), and the zero-width set hides
+#: or fragments text. Neutralize them alongside the C0/C1 controls. (Line and
+#: paragraph separators U+2028/U+2029 ARE Unicode whitespace, so ``split()``
+#: already collapses those — no need to list them here.)
+_LOG_UNSAFE_FORMAT_CHARS = (
+    0x061C,  # ARABIC LETTER MARK
+    0x200B, 0x200C, 0x200D,  # ZERO WIDTH SPACE / NON-JOINER / JOINER
+    0x200E, 0x200F,  # LEFT-TO-RIGHT / RIGHT-TO-LEFT MARK
+    0x202A, 0x202B, 0x202C, 0x202D, 0x202E,  # bidi embeddings / overrides
+    0x2060,  # WORD JOINER
+    0x2066, 0x2067, 0x2068, 0x2069,  # bidi isolates (LRI/RLI/FSI/PDI)
+    0xFEFF,  # ZERO WIDTH NO-BREAK SPACE (BOM)
+)
+
+#: Neutralize C0 controls, DEL, the C1 range, and the bidi/zero-width format
+#: characters above — all to a space. Printable text (any non-ASCII >= U+00A0
+#: that isn't one of the format chars listed) is untouched; the whitespace
+#: collapse that follows a ``translate`` merges the runs these leave behind.
 _CONTROL_TRANSLATION = {
     codepoint: " "
-    for codepoint in (*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0))
+    for codepoint in (
+        *range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), *_LOG_UNSAFE_FORMAT_CHARS
+    )
 }
 
 T = TypeVar("T")
@@ -124,9 +145,10 @@ def _error_detail(exc: urllib.error.HTTPError) -> str:
     """Extract a short, log-safe message from an error body.
 
     The body is read BOUNDED — a hostile endpoint can't make us slurp gigabytes
-    out of an error path — and every C0/C1 control character is neutralized
-    before truncation, so a server-chosen error string can't smuggle ANSI
-    escapes / NUL / BEL into logs or tracebacks.
+    out of an error path — and every C0/C1 control plus bidi/zero-width format
+    character is neutralized before truncation, so a server-chosen error string
+    can't smuggle ANSI escapes / NUL / BEL, nor "Trojan Source" bidi overrides,
+    into logs or tracebacks.
     """
     try:
         raw = exc.read(_ERROR_BODY_LIMIT).decode("utf-8", errors="replace")
@@ -214,6 +236,9 @@ def post_json(
             status = exc.code
             if 300 <= status < 400:
                 # Fail closed: never chase a redirect with the key attached.
+                # We read nothing from the 3xx, so release its socket now
+                # rather than leaving it for the garbage collector.
+                exc.close()
                 raise ProviderError(
                     f"{label}: refused to follow HTTP {status} redirect "
                     f"(a provider endpoint must not redirect a keyed POST)",
