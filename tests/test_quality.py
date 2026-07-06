@@ -376,6 +376,20 @@ def test_mark_used_is_a_targeted_bump_and_never_reverts_concurrent_changes():
     mem.close()
 
 
+def test_idempotent_reingest_preserves_proof_count():
+    # L-proofcount-reset: remember -> mark_used -> remember identical ZEROED
+    # the promoted proof_count (the same-id in-place upsert wrote the fresh
+    # record's 0 over it). proof_count is monotonic on the same-content upsert
+    # (MAX(stored, incoming)), mirroring the trust-monotonic rule (ADR-0023).
+    mem = _mem()
+    rec = mem.remember("the failover runbook lives in the wiki")
+    assert mem.mark_used(rec.id) == 1
+    mem.remember("the failover runbook lives in the wiki")  # idempotent re-ingest
+    after = mem.adapter.get(scope=mem.scope, ids=[rec.id]).records[0]
+    assert after.proof_count == 1, "re-ingest zeroed the was-it-used signal"
+    mem.close()
+
+
 def test_mark_used_increments_reflect_on_disk_not_a_stale_read():
     # Two sequential credits must reach proof_count == 2 by reading the CURRENT
     # on-disk value each time (proof_count = proof_count + 1), not by writing
