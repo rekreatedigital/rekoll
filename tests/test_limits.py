@@ -34,6 +34,19 @@ def test_remember_at_content_cap_is_accepted():
     mem.close()
 
 
+def test_remember_content_cap_is_enforced_post_sanitization():
+    # L-nfkc-cap-bypass: the cap was checked on RAW length, but the firewall
+    # NFKC-normalizes before storing and some codepoints expand (U+FDFA becomes
+    # 18 chars), so 99 "in-cap" chars stored ~1,782. The cap governs what is
+    # STORED, so it must hold on the post-sanitization content.
+    mem = _mem(max_content_chars=100)
+    ligature = "ﷺ"  # ARABIC LIGATURE SALLALLAHOU ALAYHE WASALLAM, x18 under NFKC
+    with pytest.raises(ValueError, match="max_content_chars"):
+        mem.remember(ligature * 99)
+    assert mem.count() == 0, "the oversized expansion must not be stored"
+    mem.close()
+
+
 def test_limit_knobs_must_be_positive():
     with pytest.raises(ValueError, match="positive"):
         _mem(max_content_chars=0)

@@ -362,6 +362,19 @@ class Memory:
             trust=self._default_trust if trust is None else trust,
             metadata=metadata,
         )
+        # The cap governs what is STORED. The raw-length check above is only a
+        # fast fail: firewall sanitization NFKC-normalizes, and compatibility
+        # codepoints can EXPAND (U+FDFA becomes 18 chars — an 18x amplifier), so
+        # in-cap input can produce over-cap stored content. Enforce on the
+        # post-sanitization record before it reaches storage (ADR-0018).
+        if len(record.content) > self._max_content_chars:
+            raise ValueError(
+                f"content is {len(record.content):,} chars after firewall "
+                f"sanitization (NFKC normalization expands some codepoints), over "
+                f"the max_content_chars={self._max_content_chars:,} limit for one "
+                "memory; a document belongs in ingest_text()/ingest_path() "
+                "(which chunk it), or raise max_content_chars (ADR-0018)."
+            )
         self._embed_and_store([record])
         return record
 
