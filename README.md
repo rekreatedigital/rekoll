@@ -24,7 +24,7 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 ## How you'll use it (three doors, one engine)
 
-1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(Working today via `pip install "rekoll[mcp]"` — see [docs/MCP.md](docs/MCP.md); the Node/`npx` wrapper that hides Python entirely is still coming.)*
+1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(Working today via a git install — see [docs/MCP.md](docs/MCP.md); `pip install "rekoll[mcp]"` lands with the PyPI release, and the Node/`npx` wrapper that hides Python entirely is still coming.)*
 2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. Installable from git today; `pip install rekoll` lands with the PyPI release.
 3. **Self-host service** — one container pointed at your own database.
 
@@ -111,7 +111,7 @@ Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
 memory — no Python code to write:
 
 ```bash
-pip install "rekoll[mcp]"                # or: pip install -e "/path/to/rekoll[mcp]"
+pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll"   # or -e from a clone; bare "rekoll[mcp]" once on PyPI
 claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
 ```
 

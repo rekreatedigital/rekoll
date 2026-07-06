@@ -86,13 +86,22 @@ knobs you'll actually use: `path=` (where the SQLite file lives),
 `project=`/`tenant=`/`agent=` (separate memory spaces; pair with the CLI's
 `--project` etc. if you use both), `trust=`/`kind=` per call on `remember`.
 
-## Door 3: AI agents via MCP — coming
+## Door 3: AI agents via MCP
 
-An MCP server (one command in Claude Code / Cursor / Windsurf, no Python
-required) is planned but **not shipped yet** — see the roadmap in
-[DESIGN.md](DESIGN.md). Until then, agents can shell out to the CLI: give your
-agent a tool that runs `rekoll recall "<question>" --context` and paste the
-output into its context.
+Rekoll ships an MCP server — any MCP-capable agent (Claude Code, Cursor,
+Windsurf, …) can use this project's memory, no Python code to write:
+
+```bash
+pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll"   # or: pip install -e "/path/to/rekoll[mcp]"
+claude mcp add rekoll -- rekoll-mcp   # Claude Code; other clients: see MCP.md
+```
+
+The agent gets five tools (`remember`, `recall`, `ingest_path`, `forget`,
+`status`) over this project's store, with scope and trust pinned server-side.
+Setup for Cursor + generic clients, the trust model, and all knobs:
+**[MCP.md](MCP.md)**. Only the no-Python Node/`npx` wrapper is still planned —
+today the server needs a Python environment. (An agent without MCP support can
+still shell out to the CLI: `rekoll recall "<question>" --context`.)
 
 ---
 
