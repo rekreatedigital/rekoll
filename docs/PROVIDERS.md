@@ -137,6 +137,20 @@ What you get back is a first-class, auditable record — not an opaque blob:
 By default only `TRUSTED_SOURCE`-and-above records are eligible; loosen
 deliberately with `min_source_trust=TrustTier.UNVERIFIED`.
 
+> **Why `MIN(sources)` and not a fixed cap (e.g. `CURATED`)?** Trust is a
+> statement about *provenance*, not about who typed the words. A derived
+> observation can be no more trustworthy than the weakest memory it was built
+> from, so `MIN` is the honest ceiling — and when every source is genuinely
+> `OWNER`, the derived record faithfully stays `OWNER` rather than being
+> arbitrarily knocked down. That is not the LLM "earning" trust: the tier is
+> computed deterministically from the sources' provenance, and the derivation
+> stays fully legible via `declared_transformations=("llm_summary",)` +
+> `derived_from`, so any consumer that wants to weight machine-summarized
+> `OWNER` content differently from hand-authored `OWNER` content can, without
+> Rekoll pretending the provenance is weaker than it is. A capped-at-`CURATED`
+> rule was considered and rejected: it would understate real provenance while
+> adding no security (the transformation is already declared and auditable).
+
 ## Registering your own embedder
 
 In code:
@@ -156,6 +170,11 @@ change (resolution order: explicit registration > entry point > built-ins):
 acme = "acme_rekoll:AcmeEmbedder"     # called as AcmeEmbedder(model_or_None, **kwargs)
 ```
 
+> Resolving an entry-point embedder **imports and runs the registering
+> package's code** — the same trust posture as the `rekoll.adapters` registry
+> and, indeed, as any dependency you `pip install`. Rekoll only discovers what
+> is already installed in your environment; install embedder packages you trust.
+
 Your class just implements the `Embedder` protocol: `dim`, `identity()`
 (truthful `EmbedderIdentity` — real name, real dim, config hash, never the
 key), and `embed(texts)`.
@@ -168,6 +187,15 @@ key), and `embed(texts)`.
   explanation but never your key.
 - **`HTTP 404 ... may not offer an embeddings endpoint`** — that provider is
   chat-only (see the table); pick Voyage/Gemini/local for embeddings.
+- **`refusing to send a credential header over cleartext http://`** — you gave
+  a keyed provider an `http://` (not `https://`) `base_url` for a remote host.
+  Rekoll won't put an API key on the wire in the clear. Use `https://`, or —
+  for a genuinely local, keyless server — a loopback URL (`localhost` /
+  `127.0.0.1`), which is exempt.
+- **`refused to follow HTTP 3xx redirect`** — a provider endpoint answered a
+  POST with a redirect. Rekoll never follows one (it would re-send your key to
+  the new host), so point `base_url` straight at the real API host instead of a
+  redirector.
 - **"this scope was embedded with X, but the current embedder is Y"** — you
   switched models mid-scope; re-ingest or use a fresh `project=`.
 - **Testing without spending money** — the offline suite fakes every provider
