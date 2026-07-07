@@ -1,0 +1,4851 @@
+{
+ "name": "semantic_v1",
+ "version": "1.0.0",
+ "description": "Honest semantic fixture for Rekoll retrieval quality: paraphrase positives, synonym/hypernym swaps, hard negatives, negative controls, over dev-memory-shaped synthetic content (fictitious company Nimbus Labs). Meaning != keywords by authorship; lexical overlap measured, never targeted.",
+ "license": "MIT (original synthetic work, AI-authored: Claude Fable 5, Rekoll efficacy Lane 1b)",
+ "metadata": {
+  "overlap": {
+   "tokenizer": "lowercase [a-z0-9]+ runs, min token length 2",
+   "stopwords": [
+    "a",
+    "about",
+    "after",
+    "all",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "before",
+    "being",
+    "but",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "doing",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "our",
+    "out",
+    "over",
+    "should",
+    "so",
+    "some",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "to",
+    "under",
+    "up",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+    "would",
+    "you",
+    "your"
+   ],
+   "measure": "max over gold docs of |T(q) & T(g)| / |T(q)|",
+   "buckets": {
+    "low": [
+     0.0,
+     0.25
+    ],
+    "med": [
+     0.25,
+     0.5
+    ],
+    "high": [
+     0.5,
+     1.0
+    ]
+   }
+  },
+  "hard_negatives": {
+   "miner": "okapi-bm25-stdlib (verify_semantic_v1.py; NOT the embedder under test, NOT SQLite FTS5)",
+   "k1": 1.5,
+   "b": 0.75,
+   "count": 20,
+   "tiebreak_seed": 20260707
+  },
+  "adjudication": {
+   "file": "adjudication_semantic_v1.json",
+   "annotators": "two independent AI passes (honestly labeled: AI, not human)"
+  },
+  "generator": {
+   "file": "gen_distractors.py",
+   "seed": 20260707,
+   "corpus_sizes": [
+    100,
+    1000,
+    10000
+   ]
+  },
+  "content_sha256": "8580fe4bcce5415a7cdfcbbe534b08ffbcbd07b13d266317620d8442591a1a58"
+ },
+ "documents": [
+  {
+   "key": "g-atlas-redis-incident",
+   "project": "atlas",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Atlas incident 2025-11-03: the Redis session store hit maxmemory and started evicting live checkout sessions, so users were logged out mid-payment. Fix: dedicated Redis instance with noeviction and alerts at 80% memory."
+  },
+  {
+   "key": "g-ember-redis-incident",
+   "project": "ember",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Ember incident 2026-01-19: a cache stampede after a Redis flush took the support portal down for 40 minutes; thousands of concurrent misses hammered Postgres. Fix: request coalescing plus jittered TTLs."
+  },
+  {
+   "key": "g-beacon-redis-incident",
+   "project": "beacon",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Beacon incident 2025-08-27: a Redis cluster failover dropped the push-notification dedupe set, so users received duplicate pushes for two hours. Fix: persist dedupe keys with AOF and a replay guard."
+  },
+  {
+   "key": "g-atlas-datastore-decision",
+   "project": "atlas",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Atlas decision: we chose PostgreSQL over DynamoDB for the ledger because double-entry bookkeeping needs multi-row ACID transactions; the audit table lives in the same database."
+  },
+  {
+   "key": "g-cinder-datastore-decision",
+   "project": "cinder",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Cinder decision: feature values are stored as Parquet on S3 with DuckDB for ad-hoc analysis; we rejected a dedicated feature-store SaaS on cost grounds."
+  },
+  {
+   "key": "g-ember-datastore-decision",
+   "project": "ember",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Ember decision: support tickets are indexed in Elasticsearch for full-text search while Postgres remains the source of truth; the indexer tails the WAL via Debezium."
+  },
+  {
+   "key": "g-atlas-ratelimit",
+   "project": "atlas",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Atlas constraint: the public payments API is rate limited to 100 requests per minute per merchant key using a token bucket in the gateway; 429 responses include a Retry-After header."
+  },
+  {
+   "key": "g-beacon-ratelimit",
+   "project": "beacon",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Beacon constraint: push notification sends are throttled to 500 per second per app to stay under the APNs and FCM quotas; overflow is queued, never dropped."
+  },
+  {
+   "key": "g-ember-ratelimit",
+   "project": "ember",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Ember constraint: the ticket search endpoint allows 30 queries per minute per agent seat; the limiter lives in the Node middleware, keyed by session id."
+  },
+  {
+   "key": "g-atlas-cert-incident",
+   "project": "atlas",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Atlas incident 2025-12-14: the TLS certificate for the merchant webhook sender expired, so signed webhook deliveries failed for six hours. Fix: cert-manager auto-renewal plus expiry alerts 21 days out."
+  },
+  {
+   "key": "g-drift-cert-incident",
+   "project": "drift",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Drift incident 2026-02-02: an expired internal CA certificate broke mTLS between services in the staging mesh; deploys were blocked all morning. Fix: rotate the CA yearly and alert 30 days before expiry."
+  },
+  {
+   "key": "g-beacon-cert-incident",
+   "project": "beacon",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Beacon incident 2025-09-30: the APNs push certificate lapsed and iOS notifications silently stopped for a day. Fix: switched to token-based APNs auth, which does not expire."
+  },
+  {
+   "key": "g-cinder-cost",
+   "project": "cinder",
+   "kind": "note",
+   "role": "gold",
+   "text": "Cinder cost note: moving Spark shuffle data from gp3 EBS volumes to instance-store NVMe cut the nightly pipeline bill by 38%; spot instances now cover all non-critical jobs."
+  },
+  {
+   "key": "g-drift-cost",
+   "project": "drift",
+   "kind": "note",
+   "role": "gold",
+   "text": "Drift cost note: right-sizing Kubernetes requests using VPA recommendations reduced the cluster node count from 60 to 41, saving about $11k per month."
+  },
+  {
+   "key": "g-ember-cost",
+   "project": "ember",
+   "kind": "note",
+   "role": "gold",
+   "text": "Ember cost note: shrinking the Elasticsearch cluster to three data nodes and moving cold indices to searchable snapshots halved the search infrastructure spend."
+  },
+  {
+   "key": "g-atlas-idempotency",
+   "project": "atlas",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Atlas decision: every payment mutation endpoint requires an idempotency key header; a retry with the same key returns the original response instead of charging the card twice."
+  },
+  {
+   "key": "g-atlas-refunds",
+   "project": "atlas",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Atlas how-to: to reissue a failed refund, requeue the refund intent from the dead-letter topic with the original charge id; never create a new refund object by hand."
+  },
+  {
+   "key": "g-atlas-kafka-ordering",
+   "project": "atlas",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Atlas constraint: ledger events must be published to Kafka partitioned by account id, so per-account ordering is guaranteed; cross-account ordering is explicitly not promised."
+  },
+  {
+   "key": "g-atlas-stripe-webhooks",
+   "project": "atlas",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Atlas how-to: verify Stripe webhook signatures with the endpoint secret and reject anything older than five minutes to block replay; unverified events go to quarantine, never the ledger."
+  },
+  {
+   "key": "g-atlas-currency",
+   "project": "atlas",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Atlas convention: all monetary amounts are stored as integer minor units (cents) with an ISO 4217 currency code; floating point money is banned in code review."
+  },
+  {
+   "key": "g-atlas-reconciliation",
+   "project": "atlas",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Atlas how-to: the nightly reconciliation job diffs Stripe payouts against ledger balances; discrepancies over one dollar page the payments on-call, smaller ones open a ticket."
+  },
+  {
+   "key": "g-atlas-pci",
+   "project": "atlas",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Atlas constraint: raw card numbers never touch our servers; the frontend tokenizes with Stripe Elements, and PCI scope is limited to the token vault boundary."
+  },
+  {
+   "key": "g-beacon-offline",
+   "project": "beacon",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Beacon decision: the mobile app queues user actions in a local SQLite outbox while offline and syncs with exponential backoff once connectivity returns; conflicts resolve last-write-wins per field."
+  },
+  {
+   "key": "g-beacon-deeplinks",
+   "project": "beacon",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Beacon how-to: register new deep link routes in the shared routes.yaml; both the Kotlin and Swift routers are generated from it at build time, so never hand-edit the native route tables."
+  },
+  {
+   "key": "g-beacon-quiet-hours",
+   "project": "beacon",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Beacon constraint: marketing pushes must respect user-local quiet hours from 22:00 to 08:00; transactional notifications such as delivery updates are exempt."
+  },
+  {
+   "key": "g-beacon-ab",
+   "project": "beacon",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Beacon decision: feature flags and A/B experiments run through our own flag service with deterministic bucketing by user id hash; we dropped Firebase Remote Config over stale-cache issues."
+  },
+  {
+   "key": "g-beacon-crash",
+   "project": "beacon",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Beacon convention: a release is blocked if crash-free sessions fall below 99.5% in the first 24 hours of staged rollout; rollback is one click in the release dashboard."
+  },
+  {
+   "key": "g-beacon-images",
+   "project": "beacon",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Beacon how-to: profile photos are resized client-side to 512px and uploaded as WebP to the media bucket; originals are discarded to save storage and bandwidth."
+  },
+  {
+   "key": "g-cinder-backfill",
+   "project": "cinder",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Cinder how-to: to backfill a feature, run the Airflow dag with a bounded date range and the backfill pool, which caps parallelism at 4 so production tables are not starved."
+  },
+  {
+   "key": "g-cinder-schema",
+   "project": "cinder",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Cinder convention: every feature table schema change goes through a versioned migration reviewed by two data engineers; breaking changes require a 30 day deprecation window."
+  },
+  {
+   "key": "g-cinder-freshness",
+   "project": "cinder",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Cinder constraint: features used by the fraud model must be fresher than 15 minutes; the pipeline emits a freshness metric per feature and alerts when the SLA is breached."
+  },
+  {
+   "key": "g-cinder-pii",
+   "project": "cinder",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Cinder decision: raw event data containing personal information is dropped after 30 days; only aggregated or pseudonymized features are retained long term."
+  },
+  {
+   "key": "g-cinder-airflow-retry",
+   "project": "cinder",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Cinder convention: Airflow tasks are written to be idempotent so retries are safe; any task that cannot be made idempotent must set retries to zero and page on failure."
+  },
+  {
+   "key": "g-cinder-training-skew",
+   "project": "cinder",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Cinder incident 2025-10-08: the fraud model was trained on features computed with a different timezone than serving, causing offline/online skew and a spike in false declines. Fix: one shared feature computation library."
+  },
+  {
+   "key": "g-drift-deploy",
+   "project": "drift",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Drift how-to: production deploys go through ArgoCD sync from the release branch; direct kubectl apply against production is blocked by admission policy."
+  },
+  {
+   "key": "g-drift-secrets",
+   "project": "drift",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Drift decision: application secrets live in Vault and are injected at pod start via the agent sidecar; Kubernetes Secrets objects are used only for the Vault bootstrap token."
+  },
+  {
+   "key": "g-drift-rollback",
+   "project": "drift",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Drift how-to: to roll back a bad release, revert the release-branch commit and let ArgoCD converge; never delete pods by hand, the controller will fight you."
+  },
+  {
+   "key": "g-drift-terraform",
+   "project": "drift",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Drift convention: all cloud resources are managed by Terraform in the infra monorepo; console changes are reverted automatically by drift detection every hour."
+  },
+  {
+   "key": "g-drift-nodepools",
+   "project": "drift",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Drift constraint: GPU node pools autoscale from zero and carry taints so only ML workloads schedule there; everything else runs on the general spot pool with a small on-demand floor."
+  },
+  {
+   "key": "g-drift-dns-incident",
+   "project": "drift",
+   "kind": "incident",
+   "role": "gold",
+   "text": "Drift incident 2025-07-22: a wildcard DNS record deleted during cleanup took every preview environment offline for three hours. Fix: DNS zone changes require a second reviewer and a 24 hour deletion grace period."
+  },
+  {
+   "key": "g-ember-sla",
+   "project": "ember",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Ember constraint: first response SLA is 4 business hours for standard tickets and 30 minutes for sev-1s from enterprise accounts; the SLA clock pauses while waiting on the customer."
+  },
+  {
+   "key": "g-ember-macros",
+   "project": "ember",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Ember how-to: canned reply macros are versioned in the repo under support/macros and reviewed like code; editing them directly in the admin UI is disabled in production."
+  },
+  {
+   "key": "g-ember-sso",
+   "project": "ember",
+   "kind": "decision",
+   "role": "gold",
+   "text": "Ember decision: agent login uses Okta SAML single sign-on with a 12-hour session; password login is disabled except for two break-glass admin accounts stored in the vault."
+  },
+  {
+   "key": "g-ember-search-syn",
+   "project": "ember",
+   "kind": "howto",
+   "role": "gold",
+   "text": "Ember how-to: to improve ticket search, add domain synonyms to the Elasticsearch synonyms file (for example 'invoice' matching 'bill'); reindexing is not needed because synonyms apply at query time."
+  },
+  {
+   "key": "g-ember-csat",
+   "project": "ember",
+   "kind": "convention",
+   "role": "gold",
+   "text": "Ember convention: the CSAT survey is sent 24 hours after a ticket is solved, not immediately, because immediate surveys skewed scores negative; results feed the weekly quality review."
+  },
+  {
+   "key": "g-ember-attachment",
+   "project": "ember",
+   "kind": "constraint",
+   "role": "gold",
+   "text": "Ember constraint: ticket attachments are capped at 25 MB and scanned by ClamAV before agents can download them; executable file types are always blocked."
+  },
+  {
+   "key": "d-atlas-latency",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: p99 latency for the charge endpoint is 340 ms, dominated by the external card network round trip; internal processing stays under 20 ms."
+  },
+  {
+   "key": "d-atlas-kafka-lag",
+   "project": "atlas",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Atlas runbook: if Kafka consumer lag on the ledger topic exceeds 100k messages, scale the consumer group before investigating; the ledger writer is horizontally scalable."
+  },
+  {
+   "key": "d-atlas-oncall",
+   "project": "atlas",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Atlas convention: the payments on-call rotation is weekly, hands off on Mondays at 10:00, and always has a secondary in a different timezone."
+  },
+  {
+   "key": "d-atlas-sandbox",
+   "project": "atlas",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Atlas how-to: the Stripe sandbox environment resets every Sunday night; seed merchant accounts are recreated by the fixtures job at 02:00 UTC."
+  },
+  {
+   "key": "d-atlas-chargeback",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: chargeback disputes are handled in the Stripe dashboard by the finance team; engineering gets involved only when evidence upload automation fails."
+  },
+  {
+   "key": "d-atlas-migration",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: the ledger table migration to partitioned storage completed in 2025 Q3; queries older than 18 months hit the archive partition and run slower."
+  },
+  {
+   "key": "d-atlas-vat",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: VAT calculation for EU merchants is delegated to the tax microservice; Atlas stores the resulting tax lines and never computes rates itself."
+  },
+  {
+   "key": "d-atlas-retry-budget",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: outbound calls to the card network use a retry budget of 10%; when more than one call in ten is a retry, the circuit opens and sheds load."
+  },
+  {
+   "key": "d-atlas-postgres-version",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: the ledger runs on PostgreSQL 16 with synchronous replication to a standby in a second availability zone; failover is manual by design."
+  },
+  {
+   "key": "d-atlas-webhook-retry",
+   "project": "atlas",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Atlas note: outgoing merchant webhooks retry with exponential backoff for up to 24 hours; after that, deliveries land in the merchant's dead-event feed for manual replay."
+  },
+  {
+   "key": "d-beacon-build",
+   "project": "beacon",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Beacon note: the iOS build takes about 14 minutes on CI, mostly Swift compilation; the module cache cuts warm builds to 5 minutes."
+  },
+  {
+   "key": "d-beacon-push-metrics",
+   "project": "beacon",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Beacon note: push delivery rate is tracked per platform; Android sits around 94% and iOS around 97%, the gap explained by background restrictions."
+  },
+  {
+   "key": "d-beacon-store-review",
+   "project": "beacon",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Beacon convention: App Store and Play Store releases are staggered by one day so a bad release never hits both platforms at once."
+  },
+  {
+   "key": "d-beacon-analytics",
+   "project": "beacon",
+   "kind": "decision",
+   "role": "distractor",
+   "text": "Beacon decision: in-app analytics events are batched and flushed every 30 seconds or 50 events, whichever comes first, to save battery."
+  },
+  {
+   "key": "d-beacon-localization",
+   "project": "beacon",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Beacon how-to: new user-facing strings go in strings_en.xml and are sent automatically to the translation vendor; screenshots for context are attached by the l10n bot."
+  },
+  {
+   "key": "d-beacon-min-os",
+   "project": "beacon",
+   "kind": "constraint",
+   "role": "distractor",
+   "text": "Beacon constraint: minimum supported OS versions are iOS 16 and Android 10; dropping a version requires a deprecation banner for 90 days first."
+  },
+  {
+   "key": "d-beacon-badge",
+   "project": "beacon",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Beacon note: app icon badge counts are computed server-side and included in the push payload, because client-side counting drifted after force quits."
+  },
+  {
+   "key": "d-beacon-sqlite-size",
+   "project": "beacon",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Beacon note: the local SQLite database is vacuumed once it exceeds 50 MB; heavy users were hitting 200 MB before vacuuming was added."
+  },
+  {
+   "key": "d-cinder-spark-version",
+   "project": "cinder",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Cinder note: the pipeline runs Spark 3.5 on EMR; the upgrade from 3.3 required rewriting two UDFs that relied on deprecated APIs."
+  },
+  {
+   "key": "d-cinder-catalog",
+   "project": "cinder",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Cinder how-to: new datasets must be registered in the data catalog with an owner, a description, and a sensitivity tag before the first production run."
+  },
+  {
+   "key": "d-cinder-dq",
+   "project": "cinder",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Cinder convention: every feature table carries data-quality checks for null rate and value ranges; a failing check quarantines the partition instead of publishing it."
+  },
+  {
+   "key": "d-cinder-s3-layout",
+   "project": "cinder",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Cinder convention: S3 paths follow s3://cinder-features/{table}/dt={date}/ with hive-style partitioning; ad-hoc buckets are forbidden."
+  },
+  {
+   "key": "d-cinder-notebooks",
+   "project": "cinder",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Cinder note: exploration notebooks run on a shared JupyterHub with 32 GB memory limits; anything heavier should be a proper Spark job."
+  },
+  {
+   "key": "d-cinder-model-registry",
+   "project": "cinder",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Cinder note: trained models are versioned in the MLflow registry; promotion to production requires an offline evaluation report attached to the version."
+  },
+  {
+   "key": "d-cinder-late-data",
+   "project": "cinder",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Cinder note: events arriving more than 48 hours late are written to a late-arrivals table and folded in by the weekly compaction job, not the hourly pipeline."
+  },
+  {
+   "key": "d-cinder-embeddings",
+   "project": "cinder",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Cinder note: the recommendation embeddings are 128-dimensional and retrained weekly; nearest-neighbor lookups use an HNSW index in the serving layer."
+  },
+  {
+   "key": "d-drift-cluster-version",
+   "project": "drift",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Drift note: production Kubernetes is upgraded one minor version at a time, staging first, with a two-week soak before production."
+  },
+  {
+   "key": "d-drift-registry",
+   "project": "drift",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Drift note: container images are stored in the internal registry with 90-day retention for untagged images; release images are kept forever."
+  },
+  {
+   "key": "d-drift-preview",
+   "project": "drift",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Drift how-to: preview environments spin up per pull request under *.preview.nimbus.dev and are torn down when the PR merges or after 7 idle days."
+  },
+  {
+   "key": "d-drift-quota",
+   "project": "drift",
+   "kind": "constraint",
+   "role": "distractor",
+   "text": "Drift constraint: each team namespace has CPU and memory quotas; requests beyond quota need a capacity review, not just a bigger limit in the manifest."
+  },
+  {
+   "key": "d-drift-mesh",
+   "project": "drift",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Drift note: the service mesh sidecar adds roughly 2 ms p50 per hop; teams that need lower latency can request mesh exemption for specific routes."
+  },
+  {
+   "key": "d-drift-backup",
+   "project": "drift",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Drift how-to: cluster state is backed up with Velero every six hours to the disaster-recovery bucket; restores are rehearsed quarterly in the DR game day."
+  },
+  {
+   "key": "d-drift-argocd-version",
+   "project": "drift",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Drift note: ArgoCD is pinned two releases behind latest after an upstream regression broke sync waves; the pin is revisited monthly."
+  },
+  {
+   "key": "d-drift-vault-audit",
+   "project": "drift",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Drift note: Vault audit logs stream to the SIEM; any root-token use pages security immediately, no exceptions."
+  },
+  {
+   "key": "d-ember-tags",
+   "project": "ember",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Ember convention: ticket tags are lowercase kebab-case from a controlled vocabulary; free-form tags were removed after the taxonomy audit found 4,000 duplicates."
+  },
+  {
+   "key": "d-ember-es-version",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: Elasticsearch runs version 8.13 with security enabled; the upgrade from 7.x required reindexing all ticket indices over a weekend."
+  },
+  {
+   "key": "d-ember-oncall",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: the support engineering on-call covers the portal itself; agent workflow questions route to support operations, not engineering."
+  },
+  {
+   "key": "d-ember-widget",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: the embeddable help widget is served from a separate CDN origin so a portal outage cannot take customer sites down with it."
+  },
+  {
+   "key": "d-ember-translations",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: the portal UI ships in 9 languages; missing translation keys fall back to English and are reported to the l10n dashboard weekly."
+  },
+  {
+   "key": "d-ember-export",
+   "project": "ember",
+   "kind": "howto",
+   "role": "distractor",
+   "text": "Ember how-to: bulk ticket exports run as async jobs and deliver a signed download link by email; synchronous export was removed after it kept timing out."
+  },
+  {
+   "key": "d-ember-audit-log",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: every agent action on a ticket is written to an append-only audit log retained for two years for compliance."
+  },
+  {
+   "key": "d-ember-node-version",
+   "project": "ember",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Ember note: the portal backend runs Node 20 LTS; the upgrade to 22 is blocked on a native dependency in the PDF renderer."
+  },
+  {
+   "key": "d-nimbus-redis-usage",
+   "project": "platform",
+   "kind": "constraint",
+   "role": "distractor",
+   "text": "Nimbus note: Redis is approved for caching and ephemeral state only; using it as a primary datastore requires an architecture review exception."
+  },
+  {
+   "key": "d-nimbus-postmortem",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: every sev-1 incident gets a blameless postmortem within five working days, with action items tracked on the reliability board."
+  },
+  {
+   "key": "d-nimbus-tls-policy",
+   "project": "platform",
+   "kind": "constraint",
+   "role": "distractor",
+   "text": "Nimbus constraint: all public endpoints must use TLS 1.2 or higher; TLS 1.0 and 1.1 were disabled fleet-wide in 2024."
+  },
+  {
+   "key": "d-nimbus-cost-review",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: the monthly cloud cost review happens on the first Tuesday; any service growing spend more than 15% month over month must present a plan."
+  },
+  {
+   "key": "d-nimbus-ratelimit-lib",
+   "project": "platform",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Nimbus note: the shared rate-limiting library implements sliding window and token bucket strategies; teams should not roll their own limiter."
+  },
+  {
+   "key": "d-nimbus-secrets-scan",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: CI scans every commit for leaked secrets; a hit blocks the merge and auto-rotates the credential where rotation is supported."
+  },
+  {
+   "key": "d-nimbus-datastore-catalog",
+   "project": "platform",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Nimbus note: the approved datastore list is Postgres, Redis, Elasticsearch, S3, and DynamoDB; anything else needs a formal exception from architecture."
+  },
+  {
+   "key": "d-nimbus-cert-manager",
+   "project": "platform",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Nimbus note: cert-manager issues certificates from Let's Encrypt for public domains and from the internal CA for mesh traffic; manual certificate uploads are deprecated."
+  },
+  {
+   "key": "d-nimbus-kafka-policy",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: Kafka topics are provisioned through the self-service portal with mandatory retention and ownership metadata; ad-hoc topic creation is disabled."
+  },
+  {
+   "key": "d-nimbus-idempotency-lib",
+   "project": "platform",
+   "kind": "note",
+   "role": "distractor",
+   "text": "Nimbus note: the platform team ships a shared idempotency middleware for HTTP handlers; adopting teams get replay protection without touching business logic."
+  },
+  {
+   "key": "d-nimbus-quiet-deploy",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: no production deploys on Fridays after 14:00 or during the December change freeze, except approved security fixes."
+  },
+  {
+   "key": "d-nimbus-backfill-window",
+   "project": "platform",
+   "kind": "convention",
+   "role": "distractor",
+   "text": "Nimbus convention: heavy backfills and bulk exports must run between 01:00 and 06:00 UTC to keep daytime latency stable across shared databases."
+  }
+ ],
+ "queries": [
+  {
+   "qid": "q001",
+   "query": "why did shoppers get kicked out of checkout during the november atlas outage?",
+   "relevant": [
+    "g-atlas-redis-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-ember-widget",
+    "d-nimbus-idempotency-lib",
+    "d-nimbus-quiet-deploy",
+    "g-drift-dns-incident",
+    "d-atlas-vat",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "d-atlas-webhook-retry",
+    "g-atlas-pci",
+    "d-atlas-latency",
+    "g-atlas-refunds",
+    "g-atlas-currency",
+    "g-atlas-kafka-ordering",
+    "g-atlas-reconciliation",
+    "g-atlas-datastore-decision",
+    "g-atlas-idempotency",
+    "d-atlas-migration"
+   ]
+  },
+  {
+   "qid": "q002",
+   "query": "atlas redis maxmemory eviction checkout sessions incident",
+   "relevant": [
+    "g-atlas-redis-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.8571428571,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident",
+    "g-beacon-crash",
+    "g-atlas-cert-incident",
+    "d-nimbus-redis-usage",
+    "d-nimbus-datastore-catalog",
+    "d-nimbus-postmortem",
+    "d-atlas-vat",
+    "g-beacon-cert-incident",
+    "g-drift-cert-incident",
+    "g-cinder-training-skew",
+    "g-drift-dns-incident",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "d-atlas-webhook-retry",
+    "g-atlas-pci",
+    "d-atlas-latency"
+   ]
+  },
+  {
+   "qid": "q003",
+   "query": "what knocked the support site offline for about forty minutes?",
+   "relevant": [
+    "g-ember-redis-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-ember-oncall",
+    "d-beacon-build",
+    "d-cinder-model-registry",
+    "g-ember-macros",
+    "g-ember-datastore-decision",
+    "g-cinder-freshness",
+    "g-ember-sla",
+    "g-atlas-stripe-webhooks",
+    "g-beacon-offline",
+    "g-cinder-training-skew",
+    "g-drift-dns-incident",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib"
+   ]
+  },
+  {
+   "qid": "q004",
+   "query": "ember cache stampede after redis flush postmortem",
+   "relevant": [
+    "g-ember-redis-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.8333333333,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-nimbus-postmortem",
+    "g-atlas-redis-incident",
+    "d-beacon-build",
+    "d-nimbus-redis-usage",
+    "g-beacon-ab",
+    "d-nimbus-datastore-catalog",
+    "g-beacon-redis-incident",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "g-ember-ratelimit"
+   ]
+  },
+  {
+   "qid": "q005",
+   "query": "why did people get the same notification twice back in august?",
+   "relevant": [
+    "g-beacon-redis-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-atlas-idempotency",
+    "d-nimbus-idempotency-lib",
+    "d-ember-translations",
+    "g-drift-rollback",
+    "g-beacon-ratelimit",
+    "g-atlas-datastore-decision",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup"
+   ]
+  },
+  {
+   "qid": "q006",
+   "query": "beacon redis failover duplicate push dedupe incident",
+   "relevant": [
+    "g-beacon-redis-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-beacon-cert-incident",
+    "g-atlas-redis-incident",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-ember-redis-incident",
+    "d-atlas-postgres-version",
+    "d-nimbus-redis-usage",
+    "d-nimbus-datastore-catalog",
+    "d-nimbus-postmortem",
+    "g-drift-cert-incident",
+    "g-cinder-training-skew",
+    "g-atlas-cert-incident",
+    "g-beacon-images",
+    "g-drift-dns-incident",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "d-beacon-localization"
+   ]
+  },
+  {
+   "qid": "q007",
+   "query": "why does the money ledger sit on a relational database rather than nosql?",
+   "relevant": [
+    "g-atlas-datastore-decision"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-atlas-migration",
+    "g-atlas-stripe-webhooks",
+    "g-atlas-currency",
+    "d-beacon-sqlite-size",
+    "d-atlas-kafka-lag",
+    "d-atlas-postgres-version",
+    "g-atlas-kafka-ordering",
+    "g-atlas-reconciliation",
+    "d-nimbus-cost-review",
+    "g-cinder-freshness",
+    "d-cinder-late-data",
+    "d-atlas-retry-budget",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q008",
+   "query": "atlas postgresql over dynamodb ledger acid transactions decision",
+   "relevant": [
+    "g-atlas-datastore-decision"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-atlas-postgres-version",
+    "d-atlas-kafka-lag",
+    "g-atlas-kafka-ordering",
+    "g-atlas-reconciliation",
+    "d-atlas-migration",
+    "d-nimbus-datastore-catalog",
+    "g-atlas-stripe-webhooks",
+    "g-atlas-idempotency",
+    "d-beacon-analytics",
+    "g-cinder-pii",
+    "g-cinder-datastore-decision",
+    "g-ember-datastore-decision",
+    "d-atlas-vat",
+    "g-drift-secrets",
+    "g-beacon-ab",
+    "g-ember-sso",
+    "g-beacon-offline",
+    "d-atlas-oncall",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox"
+   ]
+  },
+  {
+   "qid": "q009",
+   "query": "where do we keep feature values and what do we query them with for one-off analysis?",
+   "relevant": [
+    "g-cinder-datastore-decision"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4285714286,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-atlas-oncall",
+    "g-cinder-training-skew",
+    "d-nimbus-backfill-window",
+    "g-ember-search-syn",
+    "d-drift-cluster-version",
+    "d-beacon-store-review",
+    "g-cinder-backfill",
+    "g-atlas-reconciliation",
+    "g-beacon-crash",
+    "d-atlas-retry-budget",
+    "d-cinder-dq",
+    "g-cinder-freshness",
+    "g-cinder-schema",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "g-drift-rollback",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q010",
+   "query": "cinder parquet s3 duckdb feature store decision",
+   "relevant": [
+    "g-cinder-datastore-decision"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-cinder-s3-layout",
+    "g-cinder-backfill",
+    "d-beacon-store-review",
+    "g-beacon-ab",
+    "d-cinder-dq",
+    "g-cinder-freshness",
+    "g-cinder-cost",
+    "g-cinder-pii",
+    "g-cinder-schema",
+    "g-cinder-training-skew",
+    "d-nimbus-datastore-catalog",
+    "g-atlas-redis-incident",
+    "d-beacon-analytics",
+    "g-ember-datastore-decision",
+    "g-drift-secrets",
+    "g-atlas-datastore-decision",
+    "g-atlas-idempotency",
+    "g-ember-sso",
+    "d-cinder-catalog",
+    "d-cinder-spark-version"
+   ]
+  },
+  {
+   "qid": "q011",
+   "query": "how do support tickets become searchable and which system stays authoritative?",
+   "relevant": [
+    "g-ember-datastore-decision"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-ember-oncall",
+    "g-ember-cost",
+    "d-atlas-latency",
+    "g-ember-sla",
+    "g-ember-macros",
+    "g-ember-redis-incident",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-drift-secrets",
+    "d-drift-backup"
+   ]
+  },
+  {
+   "qid": "q012",
+   "query": "ember elasticsearch ticket indexing debezium wal source of truth",
+   "relevant": [
+    "g-ember-datastore-decision"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.75,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-ember-es-version",
+    "g-ember-search-syn",
+    "g-ember-cost",
+    "d-ember-audit-log",
+    "g-ember-attachment",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-ratelimit",
+    "g-ember-csat",
+    "d-nimbus-datastore-catalog",
+    "g-atlas-reconciliation",
+    "d-ember-node-version",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros",
+    "g-ember-sla",
+    "g-ember-sso",
+    "g-ember-redis-incident",
+    "g-cinder-pii"
+   ]
+  },
+  {
+   "qid": "q013",
+   "query": "how many calls can a merchant make to the payments api before getting throttled?",
+   "relevant": [
+    "g-atlas-ratelimit"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.375,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-atlas-webhook-retry",
+    "g-beacon-ratelimit",
+    "d-atlas-retry-budget",
+    "d-atlas-oncall",
+    "g-atlas-reconciliation",
+    "d-atlas-sandbox",
+    "g-atlas-cert-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "g-drift-rollback",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q014",
+   "query": "atlas payments api rate limit 100 requests per minute token bucket",
+   "relevant": [
+    "g-atlas-ratelimit"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.9090909091,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-nimbus-ratelimit-lib",
+    "d-drift-quota",
+    "g-ember-ratelimit",
+    "g-drift-cost",
+    "d-atlas-oncall",
+    "d-beacon-push-metrics",
+    "g-atlas-reconciliation",
+    "g-atlas-pci",
+    "g-atlas-kafka-ordering",
+    "g-beacon-images",
+    "d-drift-backup",
+    "g-beacon-ratelimit",
+    "d-cinder-dq",
+    "d-drift-vault-audit",
+    "g-drift-secrets",
+    "g-beacon-cert-incident",
+    "d-drift-preview",
+    "d-atlas-vat",
+    "g-cinder-freshness",
+    "d-drift-mesh"
+   ]
+  },
+  {
+   "qid": "q015",
+   "query": "how fast can beacon blast out pushes before hitting platform quotas?",
+   "relevant": [
+    "g-beacon-ratelimit"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-beacon-sqlite-size",
+    "d-beacon-push-metrics",
+    "g-beacon-quiet-hours",
+    "g-beacon-redis-incident",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-beacon-images",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "d-beacon-badge",
+    "g-beacon-crash",
+    "g-beacon-cert-incident",
+    "g-beacon-deeplinks",
+    "g-beacon-ab",
+    "g-beacon-offline",
+    "g-ember-datastore-decision",
+    "g-cinder-pii"
+   ]
+  },
+  {
+   "qid": "q016",
+   "query": "beacon push send throttle 500 per second apns fcm quota",
+   "relevant": [
+    "g-beacon-ratelimit"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.7,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-beacon-cert-incident",
+    "d-beacon-push-metrics",
+    "d-beacon-badge",
+    "d-drift-quota",
+    "g-beacon-redis-incident",
+    "d-atlas-postgres-version",
+    "g-beacon-offline",
+    "g-ember-ratelimit",
+    "g-atlas-ratelimit",
+    "g-drift-dns-incident",
+    "d-drift-preview",
+    "g-atlas-kafka-ordering",
+    "g-drift-cost",
+    "g-cinder-freshness",
+    "d-drift-mesh",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review"
+   ]
+  },
+  {
+   "qid": "q017",
+   "query": "how often can an agent hit search before the limiter kicks in?",
+   "relevant": [
+    "g-ember-ratelimit"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.5,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-nimbus-ratelimit-lib",
+    "d-nimbus-secrets-scan",
+    "d-atlas-migration",
+    "d-ember-audit-log",
+    "g-ember-cost",
+    "d-ember-oncall",
+    "g-ember-datastore-decision",
+    "g-ember-search-syn",
+    "g-drift-secrets",
+    "g-atlas-redis-incident",
+    "g-ember-sso",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib"
+   ]
+  },
+  {
+   "qid": "q018",
+   "query": "ember ticket search 30 queries per minute per seat limit",
+   "relevant": [
+    "g-ember-ratelimit"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.8888888889,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-atlas-ratelimit",
+    "g-ember-search-syn",
+    "g-beacon-ratelimit",
+    "g-ember-cost",
+    "d-drift-preview",
+    "g-ember-datastore-decision",
+    "d-ember-es-version",
+    "d-beacon-push-metrics",
+    "d-ember-audit-log",
+    "g-atlas-kafka-ordering",
+    "g-drift-cost",
+    "g-cinder-freshness",
+    "d-drift-mesh",
+    "g-ember-attachment",
+    "d-ember-export",
+    "d-drift-quota",
+    "d-ember-tags",
+    "g-ember-sla",
+    "g-beacon-offline",
+    "g-ember-csat"
+   ]
+  },
+  {
+   "qid": "q019",
+   "query": "why did merchants stop receiving signed callbacks in december?",
+   "relevant": [
+    "g-atlas-cert-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1666666667,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-quiet-deploy",
+    "d-atlas-vat",
+    "d-ember-export",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks"
+   ]
+  },
+  {
+   "qid": "q020",
+   "query": "atlas merchant webhook tls certificate expired incident",
+   "relevant": [
+    "g-atlas-cert-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-cert-incident",
+    "d-atlas-webhook-retry",
+    "d-nimbus-tls-policy",
+    "g-beacon-cert-incident",
+    "g-atlas-stripe-webhooks",
+    "d-atlas-sandbox",
+    "g-atlas-ratelimit",
+    "g-atlas-redis-incident",
+    "d-nimbus-cert-manager",
+    "d-nimbus-postmortem",
+    "d-atlas-vat",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident",
+    "g-cinder-training-skew",
+    "g-drift-dns-incident",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-kafka-lag",
+    "g-atlas-pci"
+   ]
+  },
+  {
+   "qid": "q021",
+   "query": "why couldn't anything ship to the staging environment one february morning?",
+   "relevant": [
+    "g-drift-cert-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-drift-cluster-version",
+    "d-atlas-sandbox",
+    "d-cinder-notebooks",
+    "d-nimbus-datastore-catalog",
+    "g-atlas-stripe-webhooks",
+    "g-drift-dns-incident",
+    "d-beacon-store-review",
+    "g-atlas-reconciliation",
+    "g-beacon-crash",
+    "d-atlas-retry-budget",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags"
+   ]
+  },
+  {
+   "qid": "q022",
+   "query": "drift expired internal ca certificate mtls staging mesh incident",
+   "relevant": [
+    "g-drift-cert-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-nimbus-cert-manager",
+    "g-atlas-cert-incident",
+    "d-drift-mesh",
+    "d-drift-cluster-version",
+    "d-drift-registry",
+    "g-beacon-cert-incident",
+    "g-drift-dns-incident",
+    "d-atlas-latency",
+    "g-drift-terraform",
+    "d-nimbus-postmortem",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident",
+    "d-drift-vault-audit",
+    "g-cinder-training-skew",
+    "g-atlas-redis-incident",
+    "d-drift-preview",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy",
+    "g-drift-rollback"
+   ]
+  },
+  {
+   "qid": "q023",
+   "query": "why did iphone users silently miss alerts for a whole day last fall?",
+   "relevant": [
+    "g-beacon-cert-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2222222222,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-atlas-redis-incident",
+    "d-ember-translations",
+    "g-beacon-offline",
+    "g-beacon-crash",
+    "d-beacon-sqlite-size",
+    "g-cinder-freshness",
+    "d-drift-registry",
+    "d-drift-backup",
+    "d-beacon-store-review",
+    "g-beacon-redis-incident",
+    "g-atlas-cert-incident",
+    "g-cinder-schema",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q024",
+   "query": "beacon apns certificate lapsed ios notifications token auth",
+   "relevant": [
+    "g-beacon-cert-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-beacon-ratelimit",
+    "g-beacon-quiet-hours",
+    "d-beacon-build",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "d-nimbus-cert-manager",
+    "d-drift-vault-audit",
+    "d-nimbus-ratelimit-lib",
+    "g-atlas-pci",
+    "g-drift-secrets",
+    "g-drift-cert-incident",
+    "g-atlas-cert-incident",
+    "g-atlas-ratelimit",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-store-review",
+    "d-beacon-localization",
+    "d-beacon-badge",
+    "g-beacon-crash"
+   ]
+  },
+  {
+   "qid": "q025",
+   "query": "how did the data team make the overnight batch runs cheaper?",
+   "relevant": [
+    "g-cinder-cost"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-atlas-chargeback",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "d-ember-es-version",
+    "d-cinder-spark-version",
+    "d-atlas-postgres-version",
+    "d-ember-node-version",
+    "d-cinder-catalog",
+    "g-cinder-pii",
+    "g-ember-cost",
+    "d-cinder-dq",
+    "g-drift-nodepools",
+    "g-cinder-schema",
+    "g-ember-datastore-decision",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q026",
+   "query": "cinder spark shuffle ebs nvme nightly pipeline cost",
+   "relevant": [
+    "g-cinder-cost"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-cinder-spark-version",
+    "d-cinder-notebooks",
+    "g-cinder-datastore-decision",
+    "g-cinder-freshness",
+    "d-cinder-late-data",
+    "g-atlas-reconciliation",
+    "g-ember-cost",
+    "d-nimbus-cost-review",
+    "g-drift-cost",
+    "d-cinder-s3-layout",
+    "d-cinder-catalog",
+    "d-cinder-model-registry",
+    "d-cinder-embeddings",
+    "g-cinder-backfill",
+    "g-cinder-pii",
+    "g-cinder-airflow-retry",
+    "d-cinder-dq",
+    "g-cinder-schema",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision"
+   ]
+  },
+  {
+   "qid": "q027",
+   "query": "how much money did shrinking the cluster save each month?",
+   "relevant": [
+    "g-drift-cost"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-ember-cost",
+    "d-nimbus-cost-review",
+    "d-drift-quota",
+    "g-atlas-currency",
+    "g-beacon-images",
+    "d-beacon-analytics",
+    "d-drift-backup",
+    "g-beacon-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q028",
+   "query": "drift kubernetes vpa right-sizing node count saving per month",
+   "relevant": [
+    "g-drift-cost"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-ratelimit",
+    "d-drift-cluster-version",
+    "d-nimbus-cost-review",
+    "g-drift-secrets",
+    "g-drift-nodepools",
+    "d-drift-preview",
+    "d-drift-mesh",
+    "d-ember-node-version",
+    "g-beacon-ratelimit",
+    "g-atlas-ratelimit",
+    "g-drift-terraform",
+    "d-beacon-push-metrics",
+    "g-atlas-kafka-ordering",
+    "g-cinder-freshness",
+    "d-drift-vault-audit",
+    "g-beacon-offline",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy"
+   ]
+  },
+  {
+   "qid": "q029",
+   "query": "how did the support team cut what they pay for search?",
+   "relevant": [
+    "g-ember-cost"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-ember-datastore-decision",
+    "d-ember-oncall",
+    "g-cinder-cost",
+    "d-atlas-chargeback",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-ember-macros",
+    "g-ember-ratelimit",
+    "g-ember-search-syn",
+    "g-ember-redis-incident",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q030",
+   "query": "ember elasticsearch three data nodes searchable snapshots cost",
+   "relevant": [
+    "g-ember-cost"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-ember-es-version",
+    "g-cinder-cost",
+    "g-ember-datastore-decision",
+    "g-ember-search-syn",
+    "d-nimbus-datastore-catalog",
+    "d-cinder-catalog",
+    "g-cinder-datastore-decision",
+    "g-drift-dns-incident",
+    "d-nimbus-cost-review",
+    "g-drift-cost",
+    "g-cinder-pii",
+    "d-cinder-dq",
+    "g-cinder-schema",
+    "d-ember-audit-log",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros"
+   ]
+  },
+  {
+   "qid": "q031",
+   "query": "how does atlas avoid billing a card two times when a client retries?",
+   "relevant": [
+    "g-atlas-idempotency"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-cinder-airflow-retry",
+    "g-atlas-pci",
+    "d-atlas-latency",
+    "d-atlas-retry-budget",
+    "g-beacon-images",
+    "d-beacon-badge",
+    "d-cinder-spark-version",
+    "d-ember-audit-log",
+    "d-drift-cluster-version",
+    "d-drift-argocd-version",
+    "g-cinder-schema",
+    "g-ember-sso",
+    "d-atlas-vat",
+    "g-beacon-redis-incident",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "d-atlas-webhook-retry"
+   ]
+  },
+  {
+   "qid": "q032",
+   "query": "atlas idempotency key header payment retry",
+   "relevant": [
+    "g-atlas-idempotency"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-atlas-ratelimit",
+    "d-atlas-retry-budget",
+    "d-atlas-webhook-retry",
+    "g-atlas-redis-incident",
+    "d-nimbus-idempotency-lib",
+    "d-atlas-vat",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "g-atlas-pci",
+    "d-atlas-latency",
+    "g-atlas-refunds",
+    "g-atlas-currency",
+    "g-atlas-kafka-ordering",
+    "g-atlas-reconciliation",
+    "g-atlas-datastore-decision",
+    "d-atlas-migration",
+    "g-atlas-stripe-webhooks"
+   ]
+  },
+  {
+   "qid": "q033",
+   "query": "a customer's money-back attempt failed — what's the right way to try it again?",
+   "relevant": [
+    "g-atlas-refunds"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1111111111,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-atlas-currency",
+    "g-drift-cost",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-drift-rollback",
+    "g-ember-sla",
+    "g-atlas-cert-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q034",
+   "query": "atlas reissue failed refund requeue dead-letter original charge id",
+   "relevant": [
+    "g-atlas-refunds"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-atlas-webhook-retry",
+    "d-atlas-latency",
+    "g-atlas-idempotency",
+    "g-atlas-kafka-ordering",
+    "g-atlas-cert-incident",
+    "g-ember-ratelimit",
+    "g-beacon-ab",
+    "d-atlas-vat",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "g-atlas-pci",
+    "g-atlas-currency",
+    "g-atlas-reconciliation",
+    "g-atlas-datastore-decision",
+    "d-atlas-migration",
+    "d-atlas-retry-budget",
+    "g-atlas-stripe-webhooks"
+   ]
+  },
+  {
+   "qid": "q035",
+   "query": "can we rely on events for different accounts arriving in order?",
+   "relevant": [
+    "g-atlas-kafka-ordering"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1666666667,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-cinder-late-data",
+    "d-beacon-analytics",
+    "d-atlas-oncall",
+    "d-atlas-sandbox",
+    "g-ember-sla",
+    "g-cinder-training-skew",
+    "g-ember-sso",
+    "g-atlas-stripe-webhooks",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup"
+   ]
+  },
+  {
+   "qid": "q036",
+   "query": "atlas kafka ledger events partitioned by account id ordering",
+   "relevant": [
+    "g-atlas-kafka-ordering"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-atlas-kafka-lag",
+    "d-atlas-migration",
+    "g-atlas-stripe-webhooks",
+    "g-atlas-refunds",
+    "d-beacon-analytics",
+    "d-atlas-postgres-version",
+    "g-atlas-reconciliation",
+    "g-atlas-datastore-decision",
+    "d-nimbus-kafka-policy",
+    "g-ember-ratelimit",
+    "d-cinder-late-data",
+    "g-beacon-ab",
+    "d-atlas-vat",
+    "d-atlas-oncall",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-webhook-retry",
+    "g-atlas-pci",
+    "d-atlas-latency",
+    "g-atlas-currency"
+   ]
+  },
+  {
+   "qid": "q037",
+   "query": "how do we make sure incoming payment provider callbacks are genuine and not replayed?",
+   "relevant": [
+    "g-atlas-stripe-webhooks"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-atlas-idempotency",
+    "g-atlas-redis-incident",
+    "d-ember-oncall",
+    "d-nimbus-ratelimit-lib",
+    "g-cinder-backfill",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "d-cinder-late-data",
+    "g-beacon-cert-incident",
+    "g-ember-search-syn",
+    "g-ember-csat",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q038",
+   "query": "verify stripe webhook signatures endpoint secret replay five minutes",
+   "relevant": [
+    "g-atlas-stripe-webhooks"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-atlas-cert-incident",
+    "d-beacon-build",
+    "d-nimbus-postmortem",
+    "d-atlas-webhook-retry",
+    "d-nimbus-idempotency-lib",
+    "d-atlas-latency",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "g-ember-ratelimit",
+    "g-atlas-idempotency",
+    "g-atlas-pci",
+    "g-atlas-reconciliation",
+    "g-cinder-freshness",
+    "g-ember-sla",
+    "g-beacon-redis-incident",
+    "g-ember-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings"
+   ]
+  },
+  {
+   "qid": "q039",
+   "query": "why can't we use floats for prices in the codebase?",
+   "relevant": [
+    "g-atlas-currency"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-tls-policy",
+    "d-drift-vault-audit",
+    "d-cinder-embeddings",
+    "d-atlas-retry-budget",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q040",
+   "query": "monetary amounts integer minor units cents iso 4217",
+   "relevant": [
+    "g-atlas-currency"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-drift-cluster-version",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q041",
+   "query": "who gets woken up when stripe payouts don't match our books?",
+   "relevant": [
+    "g-atlas-reconciliation"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-atlas-chargeback",
+    "d-nimbus-postmortem",
+    "d-atlas-sandbox",
+    "g-atlas-pci",
+    "g-atlas-stripe-webhooks",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q042",
+   "query": "nightly reconciliation stripe payouts ledger discrepancies page on-call",
+   "relevant": [
+    "g-atlas-reconciliation"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-atlas-stripe-webhooks",
+    "g-cinder-airflow-retry",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "d-ember-oncall",
+    "g-cinder-cost",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-retry-budget",
+    "g-atlas-pci",
+    "d-atlas-postgres-version",
+    "g-atlas-kafka-ordering",
+    "g-atlas-datastore-decision",
+    "d-atlas-migration",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "g-drift-rollback",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q043",
+   "query": "do card details ever land on our own servers?",
+   "relevant": [
+    "g-atlas-pci"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-atlas-webhook-retry",
+    "d-nimbus-ratelimit-lib",
+    "g-beacon-ab",
+    "d-atlas-latency",
+    "g-atlas-idempotency",
+    "d-atlas-retry-budget",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros"
+   ]
+  },
+  {
+   "qid": "q044",
+   "query": "atlas pci scope stripe elements card numbers token vault",
+   "relevant": [
+    "g-atlas-pci"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-secrets",
+    "d-drift-vault-audit",
+    "d-atlas-chargeback",
+    "d-atlas-sandbox",
+    "d-atlas-latency",
+    "g-atlas-idempotency",
+    "d-atlas-retry-budget",
+    "g-atlas-reconciliation",
+    "g-atlas-stripe-webhooks",
+    "g-atlas-ratelimit",
+    "d-nimbus-ratelimit-lib",
+    "g-ember-sso",
+    "g-beacon-cert-incident",
+    "d-atlas-vat",
+    "d-atlas-oncall",
+    "d-atlas-postgres-version",
+    "d-atlas-kafka-lag",
+    "d-atlas-webhook-retry",
+    "g-atlas-refunds",
+    "g-atlas-currency"
+   ]
+  },
+  {
+   "qid": "q045",
+   "query": "what happens to a user's edits when the phone has no signal?",
+   "relevant": [
+    "g-beacon-offline"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1666666667,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-cost-review",
+    "d-drift-vault-audit",
+    "d-nimbus-quiet-deploy",
+    "d-beacon-localization",
+    "g-beacon-quiet-hours",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros"
+   ]
+  },
+  {
+   "qid": "q046",
+   "query": "beacon offline outbox sqlite exponential backoff conflicts last-write-wins",
+   "relevant": [
+    "g-beacon-offline"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-atlas-webhook-retry",
+    "d-beacon-sqlite-size",
+    "d-cinder-model-registry",
+    "g-cinder-training-skew",
+    "g-drift-dns-incident",
+    "g-beacon-images",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-quiet-hours",
+    "g-beacon-crash",
+    "g-beacon-cert-incident",
+    "g-beacon-deeplinks",
+    "g-beacon-ab",
+    "g-beacon-redis-incident"
+   ]
+  },
+  {
+   "qid": "q047",
+   "query": "where do i add a new in-app link so both platforms pick it up?",
+   "relevant": [
+    "g-beacon-deeplinks"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4285714286,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-beacon-store-review",
+    "g-ember-search-syn",
+    "d-ember-export",
+    "d-cinder-catalog",
+    "d-beacon-localization",
+    "g-atlas-refunds",
+    "d-beacon-analytics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-offline",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags"
+   ]
+  },
+  {
+   "qid": "q048",
+   "query": "beacon deep link routes routes.yaml kotlin swift generated",
+   "relevant": [
+    "g-beacon-deeplinks"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-drift-mesh",
+    "d-beacon-build",
+    "d-ember-export",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-store-review",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-quiet-hours",
+    "g-beacon-crash",
+    "g-beacon-cert-incident",
+    "g-beacon-ab",
+    "g-beacon-offline",
+    "g-beacon-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii"
+   ]
+  },
+  {
+   "qid": "q049",
+   "query": "are we allowed to send promo messages at night?",
+   "relevant": [
+    "g-beacon-quiet-hours"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-atlas-sandbox",
+    "d-atlas-kafka-lag",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q050",
+   "query": "beacon marketing pushes quiet hours 22:00 08:00 transactional exempt",
+   "relevant": [
+    "g-beacon-quiet-hours"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-beacon-redis-incident",
+    "d-nimbus-backfill-window",
+    "d-atlas-oncall",
+    "d-nimbus-quiet-deploy",
+    "d-atlas-sandbox",
+    "g-drift-dns-incident",
+    "g-beacon-crash",
+    "d-ember-node-version",
+    "g-cinder-training-skew",
+    "d-drift-backup",
+    "d-atlas-webhook-retry",
+    "d-cinder-late-data",
+    "g-ember-sla",
+    "g-ember-csat",
+    "g-atlas-cert-incident",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review"
+   ]
+  },
+  {
+   "qid": "q051",
+   "query": "how do we bucket a user into an a/b test variant?",
+   "relevant": [
+    "g-beacon-ab"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-beacon-images",
+    "d-drift-backup",
+    "d-nimbus-ratelimit-lib",
+    "d-beacon-localization",
+    "g-beacon-quiet-hours",
+    "g-atlas-ratelimit",
+    "g-beacon-offline",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q052",
+   "query": "beacon feature flags deterministic bucketing user id hash firebase",
+   "relevant": [
+    "g-beacon-ab"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-beacon-localization",
+    "g-beacon-quiet-hours",
+    "g-beacon-offline",
+    "g-cinder-datastore-decision",
+    "g-atlas-refunds",
+    "g-atlas-kafka-ordering",
+    "g-ember-ratelimit",
+    "g-cinder-backfill",
+    "d-cinder-dq",
+    "g-cinder-freshness",
+    "g-cinder-schema",
+    "g-cinder-training-skew",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit"
+   ]
+  },
+  {
+   "qid": "q053",
+   "query": "what stability bar must a new app version clear during rollout?",
+   "relevant": [
+    "g-beacon-crash"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1111111111,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-cinder-catalog",
+    "d-nimbus-quiet-deploy",
+    "d-ember-es-version",
+    "d-drift-cluster-version",
+    "d-cinder-model-registry",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "g-atlas-refunds",
+    "d-beacon-analytics",
+    "d-beacon-store-review",
+    "g-drift-dns-incident",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-deeplinks",
+    "d-nimbus-tls-policy",
+    "g-beacon-offline",
+    "g-cinder-airflow-retry",
+    "g-atlas-kafka-ordering",
+    "d-nimbus-cost-review",
+    "g-cinder-freshness"
+   ]
+  },
+  {
+   "qid": "q054",
+   "query": "beacon release blocked crash-free sessions 99.5 staged rollout",
+   "relevant": [
+    "g-beacon-crash"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-deploy",
+    "d-beacon-store-review",
+    "g-drift-rollback",
+    "d-ember-tags",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-drift-registry",
+    "g-atlas-redis-incident",
+    "g-drift-cert-incident",
+    "g-beacon-images",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-quiet-hours",
+    "g-beacon-cert-incident"
+   ]
+  },
+  {
+   "qid": "q055",
+   "query": "what happens to avatars people upload from the app?",
+   "relevant": [
+    "g-beacon-images"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-atlas-chargeback",
+    "d-nimbus-cost-review",
+    "d-beacon-analytics",
+    "d-beacon-store-review",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-offline",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q056",
+   "query": "beacon profile photos resized 512px webp originals discarded",
+   "relevant": [
+    "g-beacon-images"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "d-beacon-localization",
+    "d-beacon-min-os",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-quiet-hours",
+    "g-beacon-crash",
+    "g-beacon-cert-incident",
+    "g-beacon-deeplinks",
+    "g-beacon-ab",
+    "g-beacon-offline",
+    "g-beacon-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings"
+   ]
+  },
+  {
+   "qid": "q057",
+   "query": "how do i recompute historical values for a feature without hurting prod?",
+   "relevant": [
+    "g-cinder-backfill"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-cinder-datastore-decision",
+    "d-nimbus-idempotency-lib",
+    "d-cinder-dq",
+    "g-cinder-freshness",
+    "g-cinder-schema",
+    "g-beacon-ab",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q058",
+   "query": "cinder airflow backfill dag bounded date range pool parallelism",
+   "relevant": [
+    "g-cinder-backfill"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-cinder-s3-layout",
+    "g-cinder-airflow-retry",
+    "g-drift-nodepools",
+    "d-cinder-catalog",
+    "d-cinder-spark-version",
+    "d-cinder-model-registry",
+    "d-cinder-embeddings",
+    "d-cinder-notebooks",
+    "g-cinder-pii",
+    "g-cinder-datastore-decision",
+    "d-cinder-dq",
+    "g-cinder-freshness",
+    "d-cinder-late-data",
+    "g-cinder-schema",
+    "g-cinder-cost",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback"
+   ]
+  },
+  {
+   "qid": "q059",
+   "query": "what's the process for changing the shape of a feature table?",
+   "relevant": [
+    "g-cinder-schema"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-cinder-dq",
+    "g-cinder-datastore-decision",
+    "d-cinder-s3-layout",
+    "g-cinder-backfill",
+    "d-cinder-late-data",
+    "g-atlas-datastore-decision",
+    "d-atlas-migration",
+    "g-cinder-freshness",
+    "g-beacon-ab",
+    "g-cinder-training-skew",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib"
+   ]
+  },
+  {
+   "qid": "q060",
+   "query": "cinder feature table schema migration two data engineers deprecation window",
+   "relevant": [
+    "g-cinder-schema"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-cinder-dq",
+    "d-atlas-migration",
+    "g-cinder-datastore-decision",
+    "d-cinder-s3-layout",
+    "d-cinder-catalog",
+    "d-cinder-spark-version",
+    "g-cinder-pii",
+    "g-cinder-backfill",
+    "d-cinder-late-data",
+    "g-cinder-freshness",
+    "g-cinder-cost",
+    "d-nimbus-ratelimit-lib",
+    "d-beacon-min-os",
+    "g-cinder-training-skew",
+    "d-ember-audit-log",
+    "d-drift-cluster-version",
+    "g-ember-cost",
+    "d-drift-argocd-version",
+    "g-atlas-datastore-decision",
+    "g-beacon-ab"
+   ]
+  },
+  {
+   "qid": "q061",
+   "query": "how stale can the fraud model's inputs get before somebody is alerted?",
+   "relevant": [
+    "g-cinder-freshness"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-cinder-training-skew",
+    "d-nimbus-idempotency-lib",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q062",
+   "query": "cinder fraud features freshness sla 15 minutes",
+   "relevant": [
+    "g-cinder-freshness"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-sla",
+    "g-cinder-training-skew",
+    "d-cinder-s3-layout",
+    "g-cinder-pii",
+    "d-beacon-build",
+    "d-nimbus-cost-review",
+    "g-atlas-stripe-webhooks",
+    "g-ember-redis-incident",
+    "d-cinder-catalog",
+    "d-cinder-spark-version",
+    "d-cinder-model-registry",
+    "d-cinder-embeddings",
+    "d-cinder-notebooks",
+    "g-cinder-backfill",
+    "g-cinder-airflow-retry",
+    "g-cinder-datastore-decision",
+    "d-cinder-dq",
+    "d-cinder-late-data",
+    "g-cinder-schema",
+    "g-cinder-cost"
+   ]
+  },
+  {
+   "qid": "q063",
+   "query": "how long do we hang on to raw events containing personal details?",
+   "relevant": [
+    "g-cinder-pii"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.5714285714,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-beacon-analytics",
+    "g-atlas-pci",
+    "g-atlas-kafka-ordering",
+    "d-cinder-late-data",
+    "g-atlas-stripe-webhooks",
+    "g-ember-datastore-decision",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q064",
+   "query": "cinder raw event data personal information dropped 30 days",
+   "relevant": [
+    "g-cinder-pii"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-cinder-schema",
+    "d-cinder-catalog",
+    "g-drift-cert-incident",
+    "d-cinder-dq",
+    "g-cinder-cost",
+    "d-atlas-webhook-retry",
+    "g-atlas-pci",
+    "g-beacon-ratelimit",
+    "d-drift-preview",
+    "g-beacon-ab",
+    "d-nimbus-postmortem",
+    "d-beacon-min-os",
+    "g-ember-cost",
+    "d-beacon-analytics",
+    "g-beacon-redis-incident",
+    "d-cinder-s3-layout",
+    "g-ember-ratelimit",
+    "g-ember-sla",
+    "g-beacon-cert-incident",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q065",
+   "query": "is it safe for pipeline tasks to run twice?",
+   "relevant": [
+    "g-cinder-airflow-retry"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-atlas-idempotency",
+    "d-cinder-spark-version",
+    "g-cinder-freshness",
+    "d-cinder-late-data",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "d-ember-export",
+    "g-cinder-backfill",
+    "g-cinder-cost",
+    "d-atlas-migration",
+    "d-nimbus-backfill-window",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q066",
+   "query": "airflow tasks idempotent retries safe zero page",
+   "relevant": [
+    "g-cinder-airflow-retry"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-cinder-backfill",
+    "g-atlas-reconciliation",
+    "g-drift-nodepools",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q067",
+   "query": "why did the anti-fraud system suddenly start declining good customers in october?",
+   "relevant": [
+    "g-cinder-training-skew"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1111111111,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-drift-secrets",
+    "g-cinder-freshness",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla",
+    "g-cinder-cost"
+   ]
+  },
+  {
+   "qid": "q068",
+   "query": "cinder fraud model offline online skew timezone false declines",
+   "relevant": [
+    "g-cinder-training-skew"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-cinder-freshness",
+    "d-cinder-model-registry",
+    "d-atlas-oncall",
+    "g-beacon-offline",
+    "d-cinder-s3-layout",
+    "g-drift-dns-incident",
+    "d-cinder-catalog",
+    "d-cinder-spark-version",
+    "d-cinder-embeddings",
+    "d-cinder-notebooks",
+    "g-cinder-backfill",
+    "g-cinder-pii",
+    "g-cinder-airflow-retry",
+    "g-cinder-datastore-decision",
+    "d-cinder-dq",
+    "d-cinder-late-data",
+    "g-cinder-schema",
+    "g-cinder-cost",
+    "g-ember-datastore-decision",
+    "d-atlas-kafka-lag"
+   ]
+  },
+  {
+   "qid": "q069",
+   "query": "can i just kubectl apply straight to prod?",
+   "relevant": [
+    "g-drift-deploy"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-drift-quota",
+    "g-ember-search-syn",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q070",
+   "query": "drift production deploys argocd sync release branch kubectl blocked",
+   "relevant": [
+    "g-drift-deploy"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-rollback",
+    "d-drift-argocd-version",
+    "g-beacon-crash",
+    "g-drift-cert-incident",
+    "d-nimbus-quiet-deploy",
+    "d-drift-cluster-version",
+    "d-drift-registry",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-beacon-store-review",
+    "d-cinder-catalog",
+    "d-cinder-model-registry",
+    "g-drift-terraform",
+    "g-ember-macros",
+    "g-cinder-backfill",
+    "d-drift-vault-audit",
+    "d-drift-preview",
+    "d-drift-backup",
+    "d-drift-quota",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q071",
+   "query": "where do application credentials come from at runtime?",
+   "relevant": [
+    "g-drift-secrets"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla",
+    "g-cinder-cost",
+    "d-cinder-s3-layout"
+   ]
+  },
+  {
+   "qid": "q072",
+   "query": "drift vault agent sidecar secrets injected pod start",
+   "relevant": [
+    "g-drift-secrets"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-sso",
+    "d-drift-vault-audit",
+    "d-drift-mesh",
+    "d-nimbus-secrets-scan",
+    "d-ember-audit-log",
+    "g-atlas-pci",
+    "d-ember-oncall",
+    "g-ember-ratelimit",
+    "g-drift-terraform",
+    "d-drift-cluster-version",
+    "d-drift-preview",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy",
+    "g-drift-rollback",
+    "d-drift-quota",
+    "g-drift-cost",
+    "g-drift-nodepools",
+    "g-drift-cert-incident"
+   ]
+  },
+  {
+   "qid": "q073",
+   "query": "what's the correct way to undo a bad production release?",
+   "relevant": [
+    "g-drift-rollback"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-beacon-store-review",
+    "g-drift-deploy",
+    "g-beacon-crash",
+    "d-drift-cluster-version",
+    "d-drift-registry",
+    "d-cinder-catalog",
+    "d-cinder-model-registry",
+    "d-nimbus-quiet-deploy",
+    "g-ember-macros",
+    "g-cinder-backfill",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib"
+   ]
+  },
+  {
+   "qid": "q074",
+   "query": "drift roll back release revert commit argocd converge",
+   "relevant": [
+    "g-drift-rollback"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-deploy",
+    "d-drift-argocd-version",
+    "d-drift-registry",
+    "g-beacon-crash",
+    "d-ember-translations",
+    "d-nimbus-secrets-scan",
+    "d-nimbus-ratelimit-lib",
+    "d-beacon-store-review",
+    "g-drift-terraform",
+    "d-drift-cluster-version",
+    "d-drift-vault-audit",
+    "d-drift-preview",
+    "d-drift-backup",
+    "d-drift-quota",
+    "g-drift-secrets",
+    "g-drift-cost",
+    "d-drift-mesh",
+    "g-drift-nodepools",
+    "g-drift-cert-incident",
+    "g-drift-dns-incident"
+   ]
+  },
+  {
+   "qid": "q075",
+   "query": "what happens when somebody edits resources by hand in the web console?",
+   "relevant": [
+    "g-drift-terraform"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-nimbus-cost-review",
+    "g-drift-rollback",
+    "g-atlas-refunds",
+    "g-beacon-deeplinks",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q076",
+   "query": "terraform infra monorepo console changes drift detection reverted",
+   "relevant": [
+    "g-drift-terraform"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-dns-incident",
+    "g-cinder-schema",
+    "d-drift-cluster-version",
+    "d-drift-vault-audit",
+    "d-drift-preview",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy",
+    "g-drift-rollback",
+    "d-drift-quota",
+    "g-drift-secrets",
+    "g-drift-cost",
+    "d-drift-mesh",
+    "g-drift-nodepools",
+    "g-drift-cert-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings"
+   ]
+  },
+  {
+   "qid": "q077",
+   "query": "where do machine learning jobs run in the cluster, and can anything else land on those machines?",
+   "relevant": [
+    "g-drift-nodepools"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-datastore-catalog",
+    "d-ember-export",
+    "d-cinder-notebooks",
+    "d-atlas-webhook-retry",
+    "d-drift-backup",
+    "g-cinder-cost",
+    "g-atlas-stripe-webhooks",
+    "g-ember-cost",
+    "g-drift-cost",
+    "d-cinder-catalog",
+    "g-cinder-backfill",
+    "g-beacon-redis-incident",
+    "d-atlas-migration",
+    "d-nimbus-backfill-window",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag"
+   ]
+  },
+  {
+   "qid": "q078",
+   "query": "drift gpu node pools taints ml workloads autoscale zero spot",
+   "relevant": [
+    "g-drift-nodepools"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-drift-cost",
+    "g-cinder-airflow-retry",
+    "d-ember-node-version",
+    "g-cinder-cost",
+    "g-ember-ratelimit",
+    "g-drift-terraform",
+    "d-drift-cluster-version",
+    "d-drift-vault-audit",
+    "d-drift-preview",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy",
+    "g-drift-rollback",
+    "d-drift-quota",
+    "g-drift-secrets",
+    "d-drift-mesh",
+    "g-drift-cert-incident",
+    "g-drift-dns-incident",
+    "g-ember-datastore-decision"
+   ]
+  },
+  {
+   "qid": "q079",
+   "query": "how did every preview site vanish for a few hours last july?",
+   "relevant": [
+    "g-drift-dns-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.375,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-drift-preview",
+    "d-drift-backup",
+    "g-beacon-offline",
+    "d-ember-audit-log",
+    "g-drift-terraform",
+    "d-nimbus-secrets-scan",
+    "d-atlas-webhook-retry",
+    "d-beacon-analytics",
+    "d-nimbus-postmortem",
+    "d-atlas-sandbox",
+    "g-beacon-quiet-hours",
+    "d-cinder-late-data",
+    "g-beacon-crash",
+    "d-cinder-dq",
+    "g-ember-sla",
+    "g-atlas-idempotency",
+    "g-ember-csat",
+    "g-cinder-schema",
+    "g-beacon-redis-incident",
+    "g-atlas-cert-incident"
+   ]
+  },
+  {
+   "qid": "q080",
+   "query": "drift wildcard dns record deleted preview environments incident",
+   "relevant": [
+    "g-drift-dns-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.875,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-drift-preview",
+    "g-drift-cert-incident",
+    "g-drift-terraform",
+    "d-nimbus-postmortem",
+    "g-beacon-cert-incident",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident",
+    "d-drift-cluster-version",
+    "d-drift-vault-audit",
+    "g-cinder-training-skew",
+    "g-atlas-cert-incident",
+    "g-atlas-redis-incident",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-deploy",
+    "g-drift-rollback",
+    "d-drift-quota",
+    "g-drift-secrets",
+    "g-drift-cost"
+   ]
+  },
+  {
+   "qid": "q081",
+   "query": "how quickly must an agent first reply to a normal ticket versus an urgent enterprise case?",
+   "relevant": [
+    "g-ember-sla"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1818181818,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-ember-tags",
+    "d-ember-audit-log",
+    "d-cinder-catalog",
+    "g-ember-ratelimit",
+    "d-nimbus-cost-review",
+    "g-ember-macros",
+    "d-ember-oncall",
+    "d-nimbus-tls-policy",
+    "d-drift-cluster-version",
+    "g-drift-secrets",
+    "d-beacon-analytics",
+    "d-ember-es-version",
+    "d-beacon-min-os",
+    "g-ember-sso",
+    "g-ember-attachment",
+    "g-beacon-crash",
+    "g-cinder-airflow-retry",
+    "d-ember-export",
+    "g-atlas-kafka-ordering",
+    "g-cinder-freshness"
+   ]
+  },
+  {
+   "qid": "q082",
+   "query": "ember first response sla 4 business hours sev-1 enterprise 30 minutes",
+   "relevant": [
+    "g-ember-sla"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-cinder-freshness",
+    "d-beacon-analytics",
+    "g-beacon-crash",
+    "d-beacon-build",
+    "g-ember-ratelimit",
+    "g-ember-redis-incident",
+    "d-nimbus-postmortem",
+    "d-nimbus-idempotency-lib",
+    "g-ember-csat",
+    "g-atlas-idempotency",
+    "d-cinder-catalog",
+    "d-drift-cluster-version",
+    "g-atlas-stripe-webhooks",
+    "g-cinder-pii",
+    "d-beacon-min-os",
+    "d-nimbus-cost-review",
+    "g-beacon-cert-incident",
+    "g-cinder-schema",
+    "d-drift-backup",
+    "d-atlas-webhook-retry"
+   ]
+  },
+  {
+   "qid": "q083",
+   "query": "why can't i edit canned responses in the admin panel anymore?",
+   "relevant": [
+    "g-ember-macros"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-beacon-deeplinks",
+    "g-atlas-ratelimit",
+    "g-ember-sso",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q084",
+   "query": "ember canned reply macros versioned repo reviewed like code",
+   "relevant": [
+    "g-ember-macros"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-cinder-schema",
+    "g-atlas-currency",
+    "d-cinder-model-registry",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "g-ember-ratelimit",
+    "g-ember-sla",
+    "g-ember-search-syn",
+    "g-ember-csat",
+    "g-ember-sso",
+    "g-ember-redis-incident"
+   ]
+  },
+  {
+   "qid": "q085",
+   "query": "how do support staff sign in to the portal?",
+   "relevant": [
+    "g-ember-sso"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.25,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-ember-oncall",
+    "g-ember-redis-incident",
+    "g-ember-macros",
+    "g-ember-datastore-decision",
+    "d-ember-node-version",
+    "d-ember-translations",
+    "d-ember-widget",
+    "d-nimbus-kafka-policy",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q086",
+   "query": "ember agent login okta saml 12-hour session break-glass",
+   "relevant": [
+    "g-ember-sso"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-ratelimit",
+    "d-ember-audit-log",
+    "d-ember-oncall",
+    "g-drift-terraform",
+    "g-atlas-cert-incident",
+    "g-drift-secrets",
+    "g-atlas-redis-incident",
+    "g-drift-dns-incident",
+    "d-ember-es-version",
+    "d-ember-node-version",
+    "g-ember-attachment",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "g-ember-sla",
+    "g-ember-search-syn"
+   ]
+  },
+  {
+   "qid": "q087",
+   "query": "search doesn't find tickets that say 'bill' when someone types 'invoice' — how do we fix that?",
+   "relevant": [
+    "g-ember-search-syn"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-ember-datastore-decision",
+    "g-ember-attachment",
+    "g-ember-sla",
+    "g-cinder-cost",
+    "g-ember-cost",
+    "g-ember-ratelimit",
+    "g-beacon-cert-incident",
+    "g-ember-redis-incident",
+    "g-drift-cert-incident",
+    "g-beacon-redis-incident",
+    "g-cinder-training-skew",
+    "g-atlas-cert-incident",
+    "g-atlas-redis-incident",
+    "g-drift-dns-incident",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q088",
+   "query": "ember elasticsearch synonyms file invoice bill query time reindexing",
+   "relevant": [
+    "g-ember-search-syn"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-ember-es-version",
+    "g-ember-attachment",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "d-drift-cluster-version",
+    "g-cinder-cost",
+    "g-beacon-deeplinks",
+    "d-nimbus-datastore-catalog",
+    "d-ember-audit-log",
+    "d-ember-node-version",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-ratelimit",
+    "g-ember-sla",
+    "g-ember-csat",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q089",
+   "query": "when do customers get asked to rate their support experience?",
+   "relevant": [
+    "g-ember-csat"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-ember-oncall",
+    "d-nimbus-idempotency-lib",
+    "g-ember-macros",
+    "d-nimbus-ratelimit-lib",
+    "g-ember-datastore-decision",
+    "d-beacon-push-metrics",
+    "d-cinder-dq",
+    "g-atlas-ratelimit",
+    "g-ember-redis-incident",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q090",
+   "query": "ember csat survey 24 hours after ticket solved immediate skew",
+   "relevant": [
+    "g-ember-csat"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.8888888889,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-atlas-webhook-retry",
+    "g-beacon-crash",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "g-ember-attachment",
+    "d-ember-export",
+    "g-drift-dns-incident",
+    "d-ember-tags",
+    "g-ember-ratelimit",
+    "g-ember-search-syn",
+    "g-ember-sla",
+    "g-cinder-training-skew",
+    "d-drift-backup",
+    "g-atlas-reconciliation",
+    "g-beacon-quiet-hours",
+    "d-cinder-late-data",
+    "g-beacon-redis-incident",
+    "g-atlas-cert-incident",
+    "d-ember-node-version",
+    "d-ember-oncall"
+   ]
+  },
+  {
+   "qid": "q091",
+   "query": "what's the biggest file a customer can attach, and is it checked for malware?",
+   "relevant": [
+    "g-ember-attachment"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1666666667,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-ember-widget",
+    "g-ember-sla",
+    "g-ember-search-syn",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q092",
+   "query": "ember ticket attachments 25 mb clamav executable blocked",
+   "relevant": [
+    "g-ember-attachment"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 1.0,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-beacon-sqlite-size",
+    "d-ember-node-version",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-ratelimit",
+    "g-ember-search-syn",
+    "g-ember-csat",
+    "g-drift-deploy",
+    "g-beacon-crash",
+    "g-drift-cert-incident",
+    "g-atlas-reconciliation",
+    "d-ember-oncall",
+    "d-ember-translations",
+    "d-ember-widget",
+    "g-ember-macros",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q093",
+   "query": "what header must clients supply so retried payments stay safe?",
+   "relevant": [
+    "g-atlas-idempotency"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.125,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-cinder-airflow-retry",
+    "g-atlas-ratelimit",
+    "g-beacon-ratelimit",
+    "d-atlas-oncall",
+    "g-atlas-reconciliation",
+    "d-nimbus-tls-policy",
+    "d-cinder-catalog",
+    "g-atlas-kafka-ordering",
+    "d-nimbus-cost-review",
+    "g-cinder-freshness",
+    "g-beacon-quiet-hours",
+    "d-nimbus-backfill-window",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q094",
+   "query": "how does code actually reach production in drift?",
+   "relevant": [
+    "g-drift-deploy"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-ember-macros",
+    "d-drift-cluster-version",
+    "g-atlas-currency",
+    "d-cinder-catalog",
+    "d-cinder-model-registry",
+    "d-nimbus-quiet-deploy",
+    "g-drift-terraform",
+    "g-cinder-backfill",
+    "d-drift-vault-audit",
+    "d-drift-preview",
+    "d-drift-registry",
+    "d-drift-argocd-version",
+    "d-drift-backup",
+    "g-drift-rollback",
+    "d-drift-quota",
+    "g-drift-secrets",
+    "g-drift-cost",
+    "d-drift-mesh",
+    "g-drift-nodepools",
+    "g-drift-cert-incident"
+   ]
+  },
+  {
+   "qid": "q095",
+   "query": "sla response times for support tickets",
+   "relevant": [
+    "g-ember-sla"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.6,
+   "bucket": "high",
+   "hard_negatives": [
+    "g-ember-datastore-decision",
+    "d-ember-oncall",
+    "g-cinder-freshness",
+    "g-atlas-idempotency",
+    "g-ember-macros",
+    "g-ember-redis-incident",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-drift-secrets",
+    "d-drift-backup"
+   ]
+  },
+  {
+   "qid": "q096",
+   "query": "feature staleness limits for the fraud detector",
+   "relevant": [
+    "g-cinder-freshness"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-cinder-training-skew",
+    "d-cinder-notebooks",
+    "g-cinder-datastore-decision",
+    "g-cinder-backfill",
+    "d-cinder-dq",
+    "g-cinder-schema",
+    "g-beacon-ab",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros"
+   ]
+  },
+  {
+   "qid": "q112",
+   "query": "what numeric type do we use for storing prices?",
+   "relevant": [
+    "g-atlas-currency"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-tls-policy",
+    "d-drift-vault-audit",
+    "d-cinder-embeddings",
+    "d-atlas-retry-budget",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q113",
+   "query": "will a promotion ping wake somebody up at 3 am?",
+   "relevant": [
+    "g-beacon-quiet-hours"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-cinder-model-registry",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q114",
+   "query": "how do passwords and api keys get into a running container?",
+   "relevant": [
+    "g-drift-secrets"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-drift-registry",
+    "d-nimbus-idempotency-lib",
+    "d-ember-translations",
+    "g-atlas-ratelimit",
+    "g-beacon-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q115",
+   "query": "can a user send us a 100 megabyte video with their ticket?",
+   "relevant": [
+    "g-ember-attachment"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "g-atlas-ratelimit",
+    "d-beacon-localization",
+    "g-beacon-quiet-hours",
+    "g-beacon-ab",
+    "g-beacon-offline",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-atlas-reconciliation",
+    "g-ember-ratelimit",
+    "g-ember-search-syn",
+    "g-ember-csat",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback"
+   ]
+  },
+  {
+   "qid": "q116",
+   "query": "how long until user-identifying records are purged from the lake?",
+   "relevant": [
+    "g-cinder-pii"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-beacon-localization",
+    "g-beacon-quiet-hours",
+    "g-beacon-ab",
+    "g-beacon-offline",
+    "g-ember-datastore-decision",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog"
+   ]
+  },
+  {
+   "qid": "q117",
+   "query": "which job makes sure the processor's numbers agree with ours every night?",
+   "relevant": [
+    "g-atlas-reconciliation"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1111111111,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-atlas-sandbox",
+    "g-atlas-pci",
+    "d-cinder-notebooks",
+    "d-cinder-late-data",
+    "d-ember-audit-log",
+    "g-drift-terraform",
+    "d-nimbus-secrets-scan",
+    "d-drift-backup",
+    "d-beacon-analytics",
+    "d-nimbus-postmortem",
+    "d-cinder-dq",
+    "g-atlas-idempotency",
+    "g-cinder-schema",
+    "g-drift-dns-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall"
+   ]
+  },
+  {
+   "qid": "q118",
+   "query": "the latest deploy broke everything — how do i get back to the previous version?",
+   "relevant": [
+    "g-drift-rollback"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.125,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-drift-argocd-version",
+    "d-nimbus-idempotency-lib",
+    "d-ember-translations",
+    "g-drift-nodepools",
+    "d-ember-es-version",
+    "d-drift-cluster-version",
+    "d-cinder-model-registry",
+    "d-beacon-min-os",
+    "g-drift-cert-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q097",
+   "query": "which past outages were traced back to our caching layer?",
+   "relevant": [
+    "g-atlas-redis-incident",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-redis-usage",
+    "d-cinder-embeddings",
+    "d-ember-translations",
+    "g-drift-rollback",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks"
+   ]
+  },
+  {
+   "qid": "q098",
+   "query": "redis incident history across atlas ember beacon",
+   "relevant": [
+    "g-atlas-redis-incident",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.4285714286,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-nimbus-backfill-window",
+    "g-beacon-cert-incident",
+    "g-atlas-cert-incident",
+    "d-nimbus-redis-usage",
+    "d-nimbus-datastore-catalog",
+    "d-nimbus-postmortem",
+    "d-atlas-vat",
+    "g-drift-cert-incident",
+    "g-cinder-training-skew",
+    "d-ember-es-version",
+    "g-beacon-images",
+    "d-ember-audit-log",
+    "d-ember-node-version",
+    "g-drift-dns-incident",
+    "d-beacon-sqlite-size",
+    "d-beacon-analytics",
+    "d-beacon-build",
+    "d-beacon-store-review",
+    "g-ember-attachment",
+    "d-ember-oncall"
+   ]
+  },
+  {
+   "qid": "q099",
+   "query": "every incident where redis was the root cause",
+   "relevant": [
+    "g-atlas-redis-incident",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-nimbus-postmortem",
+    "d-drift-vault-audit",
+    "g-drift-dns-incident",
+    "d-nimbus-redis-usage",
+    "d-nimbus-datastore-catalog",
+    "d-ember-audit-log",
+    "g-drift-terraform",
+    "d-nimbus-secrets-scan",
+    "d-drift-backup",
+    "d-beacon-analytics",
+    "d-atlas-sandbox",
+    "g-beacon-cert-incident",
+    "d-cinder-dq",
+    "g-atlas-idempotency",
+    "g-cinder-schema",
+    "g-drift-cert-incident",
+    "g-cinder-training-skew",
+    "g-atlas-cert-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii"
+   ]
+  },
+  {
+   "qid": "q100",
+   "query": "what databases did each project pick, and why?",
+   "relevant": [
+    "g-atlas-datastore-decision",
+    "g-cinder-datastore-decision",
+    "g-ember-datastore-decision"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-drift-quota",
+    "d-nimbus-backfill-window",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "d-cinder-notebooks",
+    "g-ember-sla",
+    "g-cinder-cost"
+   ]
+  },
+  {
+   "qid": "q101",
+   "query": "datastore choices for the ledger, the feature store, and ticket search",
+   "relevant": [
+    "g-atlas-datastore-decision",
+    "g-cinder-datastore-decision",
+    "g-ember-datastore-decision"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.2857142857,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-ember-ratelimit",
+    "g-ember-search-syn",
+    "g-atlas-reconciliation",
+    "d-beacon-store-review",
+    "d-nimbus-redis-usage",
+    "d-nimbus-datastore-catalog",
+    "d-atlas-kafka-lag",
+    "g-ember-cost",
+    "d-atlas-postgres-version",
+    "g-cinder-backfill",
+    "g-cinder-cost",
+    "d-ember-es-version",
+    "g-atlas-redis-incident",
+    "d-ember-audit-log",
+    "d-cinder-dq",
+    "g-ember-attachment",
+    "g-atlas-kafka-ordering",
+    "g-cinder-freshness",
+    "d-atlas-migration",
+    "g-atlas-stripe-webhooks"
+   ]
+  },
+  {
+   "qid": "q102",
+   "query": "storage engine decisions: postgresql ledger, parquet duckdb features, elasticsearch tickets",
+   "relevant": [
+    "g-atlas-datastore-decision",
+    "g-cinder-datastore-decision",
+    "g-ember-datastore-decision",
+    "d-atlas-postgres-version"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.2,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-atlas-migration",
+    "g-beacon-images",
+    "d-atlas-kafka-lag",
+    "g-ember-sla",
+    "d-ember-es-version",
+    "g-cinder-pii",
+    "d-cinder-s3-layout",
+    "d-nimbus-datastore-catalog",
+    "g-cinder-freshness",
+    "g-ember-cost",
+    "g-ember-search-syn",
+    "g-cinder-training-skew",
+    "g-atlas-kafka-ordering",
+    "g-atlas-reconciliation",
+    "g-atlas-stripe-webhooks",
+    "d-cinder-embeddings",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso"
+   ]
+  },
+  {
+   "qid": "q103",
+   "query": "where do we throttle traffic, and what are the limits?",
+   "relevant": [
+    "g-atlas-ratelimit",
+    "g-beacon-ratelimit",
+    "g-ember-ratelimit"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.0,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-cinder-notebooks",
+    "d-nimbus-cert-manager",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup",
+    "d-cinder-catalog",
+    "g-ember-sla"
+   ]
+  },
+  {
+   "qid": "q104",
+   "query": "rate limits across the payments api, push sends, and ticket search",
+   "relevant": [
+    "g-atlas-ratelimit",
+    "g-beacon-ratelimit",
+    "g-ember-ratelimit"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-beacon-push-metrics",
+    "g-atlas-reconciliation",
+    "g-ember-search-syn",
+    "d-cinder-notebooks",
+    "d-nimbus-backfill-window",
+    "d-atlas-oncall",
+    "d-nimbus-ratelimit-lib",
+    "g-ember-cost",
+    "g-ember-datastore-decision",
+    "d-cinder-dq",
+    "d-beacon-badge",
+    "g-beacon-cert-incident",
+    "d-ember-es-version",
+    "d-ember-audit-log",
+    "g-ember-attachment",
+    "g-beacon-redis-incident",
+    "d-ember-export",
+    "d-ember-tags",
+    "g-ember-csat",
+    "g-cinder-pii"
+   ]
+  },
+  {
+   "qid": "q105",
+   "query": "token bucket 100 per minute merchant, 500 per second push, 30 queries per agent",
+   "relevant": [
+    "g-atlas-ratelimit",
+    "g-beacon-ratelimit",
+    "g-ember-ratelimit"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.5,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-beacon-push-metrics",
+    "g-beacon-cert-incident",
+    "d-drift-preview",
+    "g-atlas-kafka-ordering",
+    "g-drift-cost",
+    "g-cinder-freshness",
+    "d-drift-mesh",
+    "d-nimbus-ratelimit-lib",
+    "g-beacon-offline",
+    "g-drift-secrets",
+    "d-atlas-webhook-retry",
+    "d-atlas-postgres-version",
+    "d-atlas-migration",
+    "g-beacon-images",
+    "d-drift-backup",
+    "d-atlas-sandbox",
+    "d-ember-audit-log",
+    "d-ember-oncall",
+    "d-drift-vault-audit",
+    "d-beacon-badge"
+   ]
+  },
+  {
+   "qid": "q106",
+   "query": "which outages happened because a certificate ran out?",
+   "relevant": [
+    "g-atlas-cert-incident",
+    "g-drift-cert-incident",
+    "g-beacon-cert-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.2,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-cert-manager",
+    "d-beacon-badge",
+    "g-atlas-datastore-decision",
+    "g-ember-search-syn",
+    "g-ember-csat",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets",
+    "d-drift-backup"
+   ]
+  },
+  {
+   "qid": "q107",
+   "query": "incidents caused by expired tls or push certificates",
+   "relevant": [
+    "g-atlas-cert-incident",
+    "g-drift-cert-incident",
+    "g-beacon-cert-incident"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.3333333333,
+   "bucket": "med",
+   "hard_negatives": [
+    "d-nimbus-tls-policy",
+    "d-nimbus-cert-manager",
+    "d-beacon-push-metrics",
+    "g-beacon-ratelimit",
+    "d-beacon-badge",
+    "g-beacon-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering",
+    "g-ember-macros",
+    "g-drift-secrets"
+   ]
+  },
+  {
+   "qid": "q108",
+   "query": "expired certificate incident list: merchant webhook tls, internal ca mtls, apns",
+   "relevant": [
+    "g-atlas-cert-incident",
+    "g-drift-cert-incident",
+    "g-beacon-cert-incident"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.5454545455,
+   "bucket": "high",
+   "hard_negatives": [
+    "d-nimbus-cert-manager",
+    "d-nimbus-tls-policy",
+    "d-nimbus-datastore-catalog",
+    "d-atlas-webhook-retry",
+    "g-beacon-ratelimit",
+    "g-atlas-stripe-webhooks",
+    "d-drift-registry",
+    "d-atlas-sandbox",
+    "d-atlas-latency",
+    "g-atlas-ratelimit",
+    "d-nimbus-postmortem",
+    "g-ember-redis-incident",
+    "g-beacon-redis-incident",
+    "g-cinder-training-skew",
+    "g-atlas-redis-incident",
+    "g-drift-dns-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag"
+   ]
+  },
+  {
+   "qid": "q109",
+   "query": "what have teams done recently to bring cloud spend down?",
+   "relevant": [
+    "g-cinder-cost",
+    "g-drift-cost",
+    "g-ember-cost"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.1428571429,
+   "bucket": "low",
+   "hard_negatives": [
+    "d-nimbus-cost-review",
+    "g-drift-terraform",
+    "d-drift-preview",
+    "d-ember-widget",
+    "d-nimbus-ratelimit-lib",
+    "d-nimbus-idempotency-lib",
+    "d-drift-mesh",
+    "g-ember-redis-incident",
+    "g-ember-datastore-decision",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-drift-quota",
+    "g-atlas-kafka-ordering"
+   ]
+  },
+  {
+   "qid": "q110",
+   "query": "cost savings from right-sizing, cheaper shuffle storage, and a smaller search cluster",
+   "relevant": [
+    "g-cinder-cost",
+    "g-drift-cost",
+    "g-ember-cost"
+   ],
+   "paraphrase": true,
+   "control": false,
+   "overlap": 0.4,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-atlas-reconciliation",
+    "g-beacon-images",
+    "d-atlas-migration",
+    "d-drift-backup",
+    "g-ember-datastore-decision",
+    "g-ember-ratelimit",
+    "g-cinder-datastore-decision",
+    "g-ember-search-syn",
+    "d-nimbus-cost-review",
+    "g-beacon-redis-incident",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso",
+    "d-ember-tags",
+    "d-nimbus-idempotency-lib"
+   ]
+  },
+  {
+   "qid": "q111",
+   "query": "infra cost reductions: spark nvme shuffle, vpa node count, elasticsearch snapshots",
+   "relevant": [
+    "g-cinder-cost",
+    "g-drift-cost",
+    "g-ember-cost"
+   ],
+   "paraphrase": false,
+   "control": false,
+   "overlap": 0.3636363636,
+   "bucket": "med",
+   "hard_negatives": [
+    "g-drift-terraform",
+    "d-cinder-spark-version",
+    "d-cinder-notebooks",
+    "d-ember-node-version",
+    "d-ember-es-version",
+    "d-nimbus-datastore-catalog",
+    "g-ember-ratelimit",
+    "g-cinder-datastore-decision",
+    "g-ember-datastore-decision",
+    "g-drift-nodepools",
+    "d-nimbus-cost-review",
+    "g-ember-search-syn",
+    "g-cinder-pii",
+    "g-cinder-training-skew",
+    "d-cinder-embeddings",
+    "d-atlas-kafka-lag",
+    "d-atlas-oncall",
+    "g-drift-rollback",
+    "g-atlas-cert-incident",
+    "g-ember-sso"
+   ]
+  }
+ ],
+ "controls": [
+  {
+   "qid": "c001",
+   "query": "what did we decide about rewriting the mainframe gateway in erlang?",
+   "control_terms": [
+    "erlang",
+    "mainframe"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c002",
+   "query": "who owns the blockchain settlement prototype?",
+   "control_terms": [
+    "blockchain"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c003",
+   "query": "what's our policy on storing biometric fingerprints?",
+   "control_terms": [
+    "biometric",
+    "fingerprints"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c004",
+   "query": "when is the datacenter migration to iceland happening?",
+   "control_terms": [
+    "iceland"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c005",
+   "query": "how do we integrate with the salesforce marketing cloud connector?",
+   "control_terms": [
+    "salesforce"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c006",
+   "query": "what were the results of the quantum encryption pilot?",
+   "control_terms": [
+    "quantum"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c007",
+   "query": "which team maintains the fortran numerical library?",
+   "control_terms": [
+    "fortran"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c008",
+   "query": "what's the seating plan for the zurich office?",
+   "control_terms": [
+    "zurich",
+    "seating"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c009",
+   "query": "how many licenses do we have for the oracle database?",
+   "control_terms": [
+    "oracle"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c010",
+   "query": "what discount did we negotiate with nvidia for the mars project?",
+   "control_terms": [
+    "nvidia",
+    "mars"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c011",
+   "query": "when does the cobol payroll system get decommissioned?",
+   "control_terms": [
+    "cobol",
+    "payroll"
+   ],
+   "control": true
+  },
+  {
+   "qid": "c012",
+   "query": "what's the onboarding checklist for the helsinki support hub?",
+   "control_terms": [
+    "helsinki"
+   ],
+   "control": true
+  }
+ ]
+}

@@ -1,0 +1,42 @@
+{
+ "protocol": "PREREGISTRATION_semantic_v1.md section 10",
+ "annotators": "TWO INDEPENDENT AI PASSES (Claude sessions) — honestly labeled: AI, NOT human. Different prompt framings (search-relevance rater vs answerability auditor), independently shuffled order, blinded ids, no shared notes. ~10 sample pairs are listed below and in the PR description for a human owner spot-check.",
+ "round_1": {
+  "design": "every (query, gold) pair, gold-only set (148 pairs), two passes",
+  "pass_A_search_relevance": {"yes": 148, "no": 0},
+  "pass_B_answerability": {"yes": 148, "no": 0},
+  "raw_agreement": 1.0,
+  "cohen_kappa": "UNDEFINED — both marginals degenerate (all-yes), p_expected = 1. Reported honestly: an all-positive pair set gives ceiling agreement and proves little, which motivated round 2.",
+  "verdict_files": "scratchpad adjudication_pass{1,2}_output.json (session artifacts)"
+ },
+ "round_2": {
+  "design": "calibrated: 148 gold pairs + 40 seeded BAIT pairs (query x its own top-ranked BM25 hard negative; seed 333), opaque blinded pair ids, independent shuffles (seeds 4441/4442), fresh sessions, same two framings",
+  "pass_A_search_relevance": {"gold_accepted": "148/148", "bait_rejected": "39/40"},
+  "pass_B_answerability": {"gold_accepted": "148/148", "bait_rejected": "39/40"},
+  "raw_agreement": 1.0,
+  "cohen_kappa": 1.0,
+  "note_on_kappa": "computed over the mixed 188-pair set (both verdict categories used: 149 yes / 39 no per pass, identical verdict sets)",
+  "disagreements": [],
+  "gold_pairs_rejected_by_either_pass": [],
+  "bait_pairs_accepted_by_both": [
+   {
+    "qid": "q102",
+    "doc": "d-atlas-postgres-version",
+    "resolution": "REPAIRED by relabeling: both passes independently found this note ('the ledger runs on PostgreSQL 16 ...') a correct partial answer to 'storage engine decisions: postgresql ledger, parquet duckdb features, elasticsearch tickets'. Kept as a hard negative it would have been label noise biased against the lexical arm, so it was added to q102's gold set (the pair is already dual-pass-accepted; no further re-adjudication needed). q102 overlap/bucket/hard-negatives re-derived by the builder and re-verified by verify_semantic_v1.py."
+   }
+  ],
+  "residual_noise_estimate": "1/40 sampled top-rank hard negatives (2.5%) was an unlabeled positive. The remaining ~2,340 mined hard negatives were NOT exhaustively adjudicated; residual unlabeled positives at a low rate are a known, honestly-reported weakness of this fixture."
+ },
+ "human_spot_check_sample": [
+  {"qid": "q001", "query": "why did shoppers get kicked out of checkout during the november atlas outage?", "doc": "g-atlas-redis-incident", "doc_text": "Atlas incident 2025-11-03: the Redis session store hit maxmemory and started evicting live checkout sessions, so users were logged out mid-payment. Fix: dedicated Redis instance with noeviction and alerts at 80% memory."},
+  {"qid": "q033", "query": "a customer's money-back attempt failed — what's the right way to try it again?", "doc": "g-atlas-refunds", "doc_text": "Atlas how-to: to reissue a failed refund, requeue the refund intent from the dead-letter topic with the original charge id; never create a new refund object by hand."},
+  {"qid": "q049", "query": "are we allowed to send promo messages at night?", "doc": "g-beacon-quiet-hours", "doc_text": "Beacon constraint: marketing pushes must respect user-local quiet hours from 22:00 to 08:00; transactional notifications such as delivery updates are exempt."},
+  {"qid": "q061", "query": "how stale can the fraud model's inputs get before somebody is alerted?", "doc": "g-cinder-freshness", "doc_text": "Cinder constraint: features used by the fraud model must be fresher than 15 minutes; the pipeline emits a freshness metric per feature and alerts when the SLA is breached."},
+  {"qid": "q077", "query": "where do machine learning jobs run in the cluster, and can anything else land on those machines?", "doc": "g-drift-nodepools", "doc_text": "Drift constraint: GPU node pools autoscale from zero and carry taints so only ML workloads schedule there; everything else runs on the general spot pool with a small on-demand floor."},
+  {"qid": "q087", "query": "search doesn't find tickets that say 'bill' when someone types 'invoice' — how do we fix that?", "doc": "g-ember-search-syn", "doc_text": "Ember how-to: to improve ticket search, add domain synonyms to the Elasticsearch synonyms file (for example 'invoice' matching 'bill'); reindexing is not needed because synonyms apply at query time."},
+  {"qid": "q097", "query": "which past outages were traced back to our caching layer?", "doc": "g-beacon-redis-incident", "doc_text": "Beacon incident 2025-08-27: a Redis cluster failover dropped the push-notification dedupe set, so users received duplicate pushes for two hours. Fix: persist dedupe keys with AOF and a replay guard."},
+  {"qid": "q102", "query": "storage engine decisions: postgresql ledger, parquet duckdb features, elasticsearch tickets", "doc": "d-atlas-postgres-version (REPAIRED: relabeled gold)", "doc_text": "Atlas note: the ledger runs on PostgreSQL 16 with synchronous replication to a standby in a second availability zone; failover is manual by design."},
+  {"qid": "q112", "query": "what numeric type do we use for storing prices?", "doc": "g-atlas-currency", "doc_text": "Atlas convention: all monetary amounts are stored as integer minor units (cents) with an ISO 4217 currency code; floating point money is banned in code review."},
+  {"qid": "q118", "query": "the latest deploy broke everything — how do i get back to the previous version?", "doc": "g-drift-rollback", "doc_text": "Drift how-to: to roll back a bad release, revert the release-branch commit and let ArgoCD converge; never delete pods by hand, the controller will fight you."}
+ ]
+}

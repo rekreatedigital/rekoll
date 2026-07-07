@@ -1,0 +1,3312 @@
+{
+ "protocol": "benchmarks/fixtures/PREREGISTRATION_semantic_v1.md",
+ "fixture": {
+  "name": "semantic_v1",
+  "version": "1.0.0",
+  "content_sha256": "8580fe4bcce5415a7cdfcbbe534b08ffbcbd07b13d266317620d8442591a1a58",
+  "n_scored": 118,
+  "n_controls": 12
+ },
+ "config_card": {
+  "embedder": {
+   "name": "fastembed:BAAI/bge-small-en-v1.5",
+   "dim": 384,
+   "fastembed_version": "0.8.0"
+  },
+  "stub_embedder": {
+   "name": "stub-hash",
+   "dim": 64,
+   "label": "PIPELINE-ONLY"
+  },
+  "reranker": {
+   "name": "Xenova/ms-marco-MiniLM-L-6-v2",
+   "depth": 30
+  },
+  "k": 5,
+  "similarity": "cosine",
+  "fusion": "RRF k=60",
+  "chunking": "n/a (direct records)",
+  "screen_redact": "OFF (adapter.add direct)",
+  "kind": "RAW_FACT",
+  "scope": "tenant=bench/project=bench/agent=bench",
+  "trust_tier": "OWNER",
+  "seeds": 20260707,
+  "ci": "percentile bootstrap, 10000 resamples",
+  "paired_tests": "exact sign test + sign-flip permutation (10000)",
+  "dataset": "semantic_v1 (synthetic, AI-authored, MIT)",
+  "env": "Python 3.12.6, Windows 11, CPU-only"
+ },
+ "sizes": {
+  "100": {
+   "filler_sha256": null,
+   "arms": {
+    "stub-hybrid": {
+     "label": "PIPELINE-ONLY (never quality)",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.6377118644067796,
+        "lo": 0.5529661016949152,
+        "hi": 0.7203389830508474
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.5562146892655367,
+        "lo": 0.4730225988700566,
+        "hi": 0.6384180790960453
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.6610169491525424,
+        "lo": 0.576271186440678,
+        "hi": 0.7457627118644068
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.5680889138074039,
+        "lo": 0.48740541383394886,
+        "hi": 0.6476452523788492,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.4010416666666667,
+        "lo": 0.28125,
+        "hi": 0.5208333333333333
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.25729166666666664,
+        "lo": 0.16901041666666666,
+        "hi": 0.3502604166666665
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.421875,
+        "lo": 0.296875,
+        "hi": 0.546875
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.29025680181559654,
+        "lo": 0.19878768729880522,
+        "hi": 0.3850511441658852,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.13888888888888887,
+        "lo": 0.03787878787878788,
+        "hi": 0.26010101010101006
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.09797979797979799,
+        "lo": 0.02121212121212121,
+        "hi": 0.19393939393939394
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.18181818181818182,
+        "lo": 0.06060606060606061,
+        "hi": 0.3333333333333333
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.09362740616168042,
+        "lo": 0.023659396969218285,
+        "hi": 0.17946720996504667,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.6176470588235294,
+        "lo": 0.4607843137254901,
+        "hi": 0.7745098039215685
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.4186274509803921,
+        "lo": 0.28382352941176464,
+        "hi": 0.5593137254901961
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.6470588235294118,
+        "lo": 0.47058823529411764,
+        "hi": 0.7941176470588235
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.4573087363346509,
+        "lo": 0.3261530431257045,
+        "hi": 0.5893517660824238,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 0.9738562091503268,
+        "lo": 0.9281045751633986,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 0.9444444444444444,
+        "lo": 0.8856209150326797,
+        "hi": 0.9901960784313726
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 0.9803921568627451,
+        "lo": 0.9411764705882353,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 0.9489468704031389,
+        "lo": 0.895326490736249,
+        "hi": 0.9901960784313726,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.2833333333333333,
+        "lo": 0.11666666666666665,
+        "hi": 0.46111111111111114
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.36333333333333334,
+        "lo": 0.14666666666666667,
+        "hi": 0.6
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.4666666666666667,
+        "lo": 0.2,
+        "hi": 0.7333333333333333
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.27717855520452683,
+        "lo": 0.10846380360604391,
+        "hi": 0.45889354776606006,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "bm25-only": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.8276836158192091,
+        "lo": 0.7598870056497175,
+        "hi": 0.8898305084745762
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.7395480225988701,
+        "lo": 0.668361581920904,
+        "hi": 0.8070621468926554
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.847457627118644,
+        "lo": 0.7796610169491526,
+        "hi": 0.9067796610169492
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.7540457256661581,
+        "lo": 0.6847498908851668,
+        "hi": 0.818410502550184,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.6927083333333334,
+        "lo": 0.5833333333333333,
+        "hi": 0.796875
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.5197916666666667,
+        "lo": 0.4174479166666666,
+        "hi": 0.6200520833333333
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.71875,
+        "lo": 0.609375,
+        "hi": 0.828125
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.5559112873609569,
+        "lo": 0.455831597881474,
+        "hi": 0.6538930530947087,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.45454545454545453,
+        "lo": 0.29292929292929293,
+        "hi": 0.6161616161616162
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.25202020202020203,
+        "lo": 0.14343434343434344,
+        "hi": 0.37222222222222223
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.48484848484848486,
+        "lo": 0.30303030303030304,
+        "hi": 0.6666666666666666
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.2919329979662505,
+        "lo": 0.17967757469029724,
+        "hi": 0.41140338176623725,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9313725490196079,
+        "lo": 0.8529411764705882,
+        "hi": 0.9901960784313727
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.8220588235294117,
+        "lo": 0.7191176470588235,
+        "hi": 0.9176470588235294
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9705882352941176,
+        "lo": 0.9117647058823529,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.8336354910505996,
+        "lo": 0.7430032240907909,
+        "hi": 0.9163430695939666,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.6444444444444444,
+        "lo": 0.4222222222222223,
+        "hi": 0.8444444444444443
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.7,
+        "lo": 0.5,
+        "hi": 0.9
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.8,
+        "lo": 0.6,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.6277175461644228,
+        "lo": 0.4178679515288816,
+        "hi": 0.8189410103996344,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.9124293785310735,
+        "lo": 0.8587570621468927,
+        "hi": 0.9576271186440678
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.8679378531073447,
+        "lo": 0.8107344632768362,
+        "hi": 0.9187853107344633
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9322033898305084,
+        "lo": 0.8813559322033898,
+        "hi": 0.9745762711864406
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.8729316072379214,
+        "lo": 0.8181832855420959,
+        "hi": 0.9213135241677779,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.84375,
+        "lo": 0.7500000000000001,
+        "hi": 0.9270833333333333
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.7565104166666666,
+        "lo": 0.6614583333333334,
+        "hi": 0.84375
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.875,
+        "lo": 0.78125,
+        "hi": 0.953125
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.7703439307037592,
+        "lo": 0.6786304188006744,
+        "hi": 0.8536766560061085,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.696969696969697,
+        "lo": 0.5454545454545454,
+        "hi": 0.8383838383838385
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.5732323232323233,
+        "lo": 0.4318181818181818,
+        "hi": 0.7146464646464646
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.7575757575757576,
+        "lo": 0.6060606060606061,
+        "hi": 0.9090909090909091
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.5866794244816335,
+        "lo": 0.44733535391824775,
+        "hi": 0.721949831911166,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9901960784313725,
+        "lo": 0.9705882352941176,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.9558823529411765,
+        "lo": 0.8970588235294118,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.9601620190053181,
+        "lo": 0.9210354215115295,
+        "hi": 0.9905803250001108,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.7777777777777778,
+        "lo": 0.5999999999999999,
+        "hi": 0.9333333333333333
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.8111111111111111,
+        "lo": 0.6333333333333333,
+        "hi": 0.9555555555555556
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.9333333333333333,
+        "lo": 0.8,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.7526449716381722,
+        "lo": 0.5682875958389307,
+        "hi": 0.9084422319686494,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid-rerank": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.943502824858757,
+        "lo": 0.903954802259887,
+        "hi": 0.9774011299435029
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.902542372881356,
+        "lo": 0.8573446327683615,
+        "hi": 0.9449152542372882
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9661016949152542,
+        "lo": 0.9322033898305084,
+        "hi": 0.9915254237288136
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.9069884835341986,
+        "lo": 0.8634092022981122,
+        "hi": 0.9472310541471016,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.9010416666666666,
+        "lo": 0.828125,
+        "hi": 0.9635416666666666
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.8307291666666666,
+        "lo": 0.7500000000000001,
+        "hi": 0.9010416666666667
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.9375,
+        "lo": 0.875,
+        "hi": 0.984375
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.8378191619380365,
+        "lo": 0.7624003621733004,
+        "hi": 0.9045201270448229,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.8383838383838385,
+        "lo": 0.7171717171717172,
+        "hi": 0.9393939393939394
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.7323232323232324,
+        "lo": 0.6060606060606061,
+        "hi": 0.8484848484848484
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.9090909090909091,
+        "lo": 0.7878787878787878,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.7381383896027703,
+        "lo": 0.6191380361319424,
+        "hi": 0.8461669858997459,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9607843137254901,
+        "lo": 0.892156862745098,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.9215686274509803,
+        "lo": 0.8382352941176471,
+        "hi": 0.9852941176470589
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9705882352941176,
+        "lo": 0.9117647058823529,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.9313551235336474,
+        "lo": 0.8539748366638986,
+        "hi": 0.9881881687370772,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.8222222222222223,
+        "lo": 0.6666666666666667,
+        "hi": 0.9555555555555555
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.8666666666666667,
+        "lo": 0.7333333333333333,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.8072088521356819,
+        "lo": 0.6497991225365136,
+        "hi": 0.9446383553326478,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    }
+   },
+   "comparisons": {
+    "fastembed-hybrid_vs_bm25-only": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 14,
+        "losses": 1,
+        "ties": 49,
+        "p": 0.0009765625
+       },
+       "permutation": {
+        "mean_diff": 0.15104166666666666,
+        "p": 0.0018998100189981002
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 30,
+        "losses": 1,
+        "ties": 33,
+        "p": 2.9802322387695312e-08
+       },
+       "permutation": {
+        "mean_diff": 0.23671875,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 11,
+        "losses": 1,
+        "ties": 52,
+        "p": 0.00634765625
+       },
+       "permutation": {
+        "mean_diff": 0.15625,
+        "p": 0.005699430056994301
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 11,
+        "losses": 1,
+        "ties": 21,
+        "p": 0.00634765625
+       },
+       "permutation": {
+        "mean_diff": 0.24242424242424243,
+        "p": 0.007399260073992601
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 21,
+        "losses": 1,
+        "ties": 11,
+        "p": 1.0967254638671875e-05
+       },
+       "permutation": {
+        "mean_diff": 0.3212121212121212,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 10,
+        "losses": 1,
+        "ties": 22,
+        "p": 0.01171875
+       },
+       "permutation": {
+        "mean_diff": 0.2727272727272727,
+        "p": 0.010498950104989501
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 4,
+        "losses": 0,
+        "ties": 30,
+        "p": 0.125
+       },
+       "permutation": {
+        "mean_diff": 0.058823529411764705,
+        "p": 0.11908809119088092
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 9,
+        "losses": 0,
+        "ties": 25,
+        "p": 0.00390625
+       },
+       "permutation": {
+        "mean_diff": 0.1338235294117647,
+        "p": 0.004999500049995001
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 1,
+        "losses": 0,
+        "ties": 33,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.029411764705882353,
+        "p": 1.0
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 15,
+        "losses": 1,
+        "ties": 102,
+        "p": 0.000518798828125
+       },
+       "permutation": {
+        "mean_diff": 0.0847457627118644,
+        "p": 0.0016998300169983002
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 30,
+        "losses": 1,
+        "ties": 87,
+        "p": 2.9802322387695312e-08
+       },
+       "permutation": {
+        "mean_diff": 0.12838983050847458,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 11,
+        "losses": 1,
+        "ties": 106,
+        "p": 0.00634765625
+       },
+       "permutation": {
+        "mean_diff": 0.0847457627118644,
+        "p": 0.0059994000599940004
+       }
+      }
+     }
+    },
+    "fastembed-hybrid_vs_stub-hybrid": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 32,
+        "losses": 0,
+        "ties": 32,
+        "p": 4.656612873077393e-10
+       },
+       "permutation": {
+        "mean_diff": 0.4427083333333333,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 45,
+        "losses": 0,
+        "ties": 19,
+        "p": 5.684341886080802e-14
+       },
+       "permutation": {
+        "mean_diff": 0.49921875,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 29,
+        "losses": 0,
+        "ties": 35,
+        "p": 3.725290298461914e-09
+       },
+       "permutation": {
+        "mean_diff": 0.453125,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 21,
+        "losses": 0,
+        "ties": 12,
+        "p": 9.5367431640625e-07
+       },
+       "permutation": {
+        "mean_diff": 0.5580808080808081,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 23,
+        "losses": 0,
+        "ties": 10,
+        "p": 2.384185791015625e-07
+       },
+       "permutation": {
+        "mean_diff": 0.47525252525252526,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 19,
+        "losses": 0,
+        "ties": 14,
+        "p": 3.814697265625e-06
+       },
+       "permutation": {
+        "mean_diff": 0.5757575757575758,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 15,
+        "losses": 0,
+        "ties": 19,
+        "p": 6.103515625e-05
+       },
+       "permutation": {
+        "mean_diff": 0.37254901960784315,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 24,
+        "losses": 0,
+        "ties": 10,
+        "p": 1.1920928955078125e-07
+       },
+       "permutation": {
+        "mean_diff": 0.5372549019607843,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 12,
+        "losses": 0,
+        "ties": 22,
+        "p": 0.00048828125
+       },
+       "permutation": {
+        "mean_diff": 0.35294117647058826,
+        "p": 0.0007999200079992001
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 2,
+        "losses": 0,
+        "ties": 49,
+        "p": 0.5
+       },
+       "permutation": {
+        "mean_diff": 0.026143790849673207,
+        "p": 0.5013498650134987
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 4,
+        "losses": 0,
+        "ties": 47,
+        "p": 0.125
+       },
+       "permutation": {
+        "mean_diff": 0.05555555555555556,
+        "p": 0.12308769123087691
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 1,
+        "losses": 0,
+        "ties": 50,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0196078431372549,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 38,
+        "losses": 0,
+        "ties": 80,
+        "p": 7.275957614183426e-12
+       },
+       "permutation": {
+        "mean_diff": 0.27471751412429374,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 51,
+        "losses": 0,
+        "ties": 67,
+        "p": 8.881784197001252e-16
+       },
+       "permutation": {
+        "mean_diff": 0.31172316384180787,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 32,
+        "losses": 0,
+        "ties": 86,
+        "p": 4.656612873077393e-10
+       },
+       "permutation": {
+        "mean_diff": 0.2711864406779661,
+        "p": 9.999000099990002e-05
+       }
+      }
+     }
+    }
+   },
+   "controls": {
+    "note": "controls are EXCLUDED from all metric means; the product has no abstain path, so k hits come back regardless",
+    "mean_hits_returned": 5.0
+   },
+   "wall_seconds": 35.6
+  },
+  "1000": {
+   "filler_sha256": "73f7eae8d34bf067e36b1033c6dd7d6ec28bede11ffc8e2ebcd720cfddf5b164",
+   "arms": {
+    "stub-hybrid": {
+     "label": "PIPELINE-ONLY (never quality)",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.6391242937853108,
+        "lo": 0.5543785310734464,
+        "hi": 0.7217514124293786
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.5412429378531074,
+        "lo": 0.4600282485875707,
+        "hi": 0.6210451977401131
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.6694915254237288,
+        "lo": 0.5847457627118644,
+        "hi": 0.7542372881355932
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.5570431111491427,
+        "lo": 0.477352462881705,
+        "hi": 0.6343762851307597,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.3958333333333333,
+        "lo": 0.2760416666666667,
+        "hi": 0.515625
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.221875,
+        "lo": 0.14765625000000002,
+        "hi": 0.3013020833333333
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.421875,
+        "lo": 0.296875,
+        "hi": 0.546875
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.2613606060794628,
+        "lo": 0.1797070691921757,
+        "hi": 0.34491245812684246,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.14393939393939395,
+        "lo": 0.030303030303030304,
+        "hi": 0.2727272727272727
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.07424242424242425,
+        "lo": 0.013636363636363637,
+        "hi": 0.15606060606060607
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.15151515151515152,
+        "lo": 0.030303030303030304,
+        "hi": 0.2727272727272727
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.08533268380808508,
+        "lo": 0.01911908344155932,
+        "hi": 0.16247972568286392,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.607843137254902,
+        "lo": 0.4509803921568628,
+        "hi": 0.7549019607843137
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.38480392156862747,
+        "lo": 0.2720588235294117,
+        "hi": 0.5
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.7058823529411765,
+        "lo": 0.5588235294117647,
+        "hi": 0.8529411764705882
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.4196408576828716,
+        "lo": 0.3078848754466058,
+        "hi": 0.5314191422444092,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 0.9803921568627451,
+        "lo": 0.9411764705882353,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 0.9477124183006537,
+        "lo": 0.8921568627450981,
+        "hi": 0.9901960784313726
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 0.9803921568627451,
+        "lo": 0.9411764705882353,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 0.953869007621851,
+        "lo": 0.9022821497086853,
+        "hi": 0.9927633285014011,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.36111111111111105,
+        "lo": 0.17777777777777776,
+        "hi": 0.5444444444444444
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.41111111111111115,
+        "lo": 0.19444444444444445,
+        "hi": 0.6333333333333333
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.6,
+        "lo": 0.3333333333333333,
+        "hi": 0.8
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.32744827662400183,
+        "lo": 0.15481377273889418,
+        "hi": 0.5104253096476307,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "bm25-only": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.8305084745762712,
+        "lo": 0.7627118644067796,
+        "hi": 0.8926553672316384
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.7419491525423728,
+        "lo": 0.6707627118644067,
+        "hi": 0.8101694915254237
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.847457627118644,
+        "lo": 0.7796610169491526,
+        "hi": 0.9067796610169492
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.7585258469476489,
+        "lo": 0.6898110969552422,
+        "hi": 0.822638731688846,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.703125,
+        "lo": 0.59375,
+        "hi": 0.8072916666666666
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.53984375,
+        "lo": 0.4364583333333333,
+        "hi": 0.6432291666666667
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.734375,
+        "lo": 0.625,
+        "hi": 0.84375
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.5725655454852523,
+        "lo": 0.470182791489939,
+        "hi": 0.6714692990990095,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.45454545454545453,
+        "lo": 0.29292929292929293,
+        "hi": 0.6161616161616162
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.2919191919191919,
+        "lo": 0.16060606060606064,
+        "hi": 0.4318181818181818
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.48484848484848486,
+        "lo": 0.30303030303030304,
+        "hi": 0.6666666666666666
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.31990806787401976,
+        "lo": 0.19318061708475626,
+        "hi": 0.45534075654137596,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9411764705882353,
+        "lo": 0.8627450980392156,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.7916666666666667,
+        "lo": 0.6862745098039217,
+        "hi": 0.8872549019607844
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9705882352941176,
+        "lo": 0.9117647058823529,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.8220318735288215,
+        "lo": 0.728881089304752,
+        "hi": 0.9047876926438976,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.6,
+        "lo": 0.3777777777777777,
+        "hi": 0.8
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.6333333333333333,
+        "lo": 0.4,
+        "hi": 0.8333333333333334
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.7333333333333333,
+        "lo": 0.4666666666666667,
+        "hi": 0.9333333333333333
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.5833400507776022,
+        "lo": 0.3612644671249893,
+        "hi": 0.7893974268342014,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.940677966101695,
+        "lo": 0.8983050847457628,
+        "hi": 0.9774011299435027
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.8766949152542373,
+        "lo": 0.8248587570621468,
+        "hi": 0.9237288135593219
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9661016949152542,
+        "lo": 0.9322033898305084,
+        "hi": 0.9915254237288136
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.8864669860460148,
+        "lo": 0.8380976387360977,
+        "hi": 0.9303719033966918,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.9010416666666666,
+        "lo": 0.828125,
+        "hi": 0.9635416666666666
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.78046875,
+        "lo": 0.6927083333333334,
+        "hi": 0.8606770833333335
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.9375,
+        "lo": 0.875,
+        "hi": 0.984375
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.801672225663498,
+        "lo": 0.7210141154714161,
+        "hi": 0.875636037982747,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.8383838383838385,
+        "lo": 0.7171717171717171,
+        "hi": 0.9393939393939394
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.6424242424242425,
+        "lo": 0.5121212121212122,
+        "hi": 0.7651515151515151
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.9090909090909091,
+        "lo": 0.7878787878787878,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.6791834490824715,
+        "lo": 0.5570634573000522,
+        "hi": 0.7940489904893598,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9509803921568628,
+        "lo": 0.8725490196078431,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.9191176470588235,
+        "lo": 0.8308823529411765,
+        "hi": 0.9852941176470589
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9705882352941176,
+        "lo": 0.9117647058823529,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.9173544274620052,
+        "lo": 0.8342999106994571,
+        "hi": 0.9826527792410263,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.8,
+        "lo": 0.6444444444444444,
+        "hi": 0.9333333333333333
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.8055555555555556,
+        "lo": 0.65,
+        "hi": 0.9333333333333333
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.7559264364029556,
+        "lo": 0.5779632076405473,
+        "hi": 0.9065148632057389,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid-rerank": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.9322033898305084,
+        "lo": 0.8870056497175142,
+        "hi": 0.9717514124293786
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.8833333333333333,
+        "lo": 0.8324858757062146,
+        "hi": 0.9316384180790961
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9491525423728814,
+        "lo": 0.9067796610169492,
+        "hi": 0.9830508474576272
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.8903704009194333,
+        "lo": 0.8417460579693268,
+        "hi": 0.9352974668799856,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.8802083333333334,
+        "lo": 0.7968750000000001,
+        "hi": 0.9479166666666667
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.7953125,
+        "lo": 0.70625,
+        "hi": 0.8734375000000002
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.90625,
+        "lo": 0.828125,
+        "hi": 0.96875
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.8071795721170631,
+        "lo": 0.7234353117560787,
+        "hi": 0.8811373321986621,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.8282828282828283,
+        "lo": 0.7070707070707071,
+        "hi": 0.9393939393939394
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.6939393939393939,
+        "lo": 0.5585858585858585,
+        "hi": 0.8191919191919191
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.8787878787878788,
+        "lo": 0.7575757575757576,
+        "hi": 0.9696969696969697
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.7090191851014886,
+        "lo": 0.587414981672057,
+        "hi": 0.8228350352124911,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9313725490196079,
+        "lo": 0.8431372549019607,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.892156862745098,
+        "lo": 0.7941176470588234,
+        "hi": 0.9705882352941176
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9411764705882353,
+        "lo": 0.8529411764705882,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.901943358827765,
+        "lo": 0.8060063145000322,
+        "hi": 0.977333161489179,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.8,
+        "lo": 0.6222222222222222,
+        "hi": 0.9333333333333335
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.8444444444444444,
+        "lo": 0.6666666666666666,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.9333333333333333,
+        "lo": 0.8,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.7915662279349235,
+        "lo": 0.6103215344077315,
+        "hi": 0.9446383553326477,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    }
+   },
+   "comparisons": {
+    "fastembed-hybrid_vs_bm25-only": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 17,
+        "losses": 1,
+        "ties": 46,
+        "p": 0.00014495849609375
+       },
+       "permutation": {
+        "mean_diff": 0.19791666666666666,
+        "p": 0.00039996000399960006
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 31,
+        "losses": 1,
+        "ties": 32,
+        "p": 1.5366822481155396e-08
+       },
+       "permutation": {
+        "mean_diff": 0.240625,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 14,
+        "losses": 1,
+        "ties": 49,
+        "p": 0.0009765625
+       },
+       "permutation": {
+        "mean_diff": 0.203125,
+        "p": 0.000999900009999
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 15,
+        "losses": 0,
+        "ties": 18,
+        "p": 6.103515625e-05
+       },
+       "permutation": {
+        "mean_diff": 0.3838383838383838,
+        "p": 0.00019998000199980003
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 22,
+        "losses": 0,
+        "ties": 11,
+        "p": 4.76837158203125e-07
+       },
+       "permutation": {
+        "mean_diff": 0.3505050505050505,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 14,
+        "losses": 0,
+        "ties": 19,
+        "p": 0.0001220703125
+       },
+       "permutation": {
+        "mean_diff": 0.42424242424242425,
+        "p": 0.00029997000299970003
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 3,
+        "losses": 1,
+        "ties": 30,
+        "p": 0.625
+       },
+       "permutation": {
+        "mean_diff": 0.009803921568627454,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 10,
+        "losses": 1,
+        "ties": 23,
+        "p": 0.01171875
+       },
+       "permutation": {
+        "mean_diff": 0.12745098039215688,
+        "p": 0.040995900409959006
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 1,
+        "losses": 1,
+        "ties": 32,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 18,
+        "losses": 1,
+        "ties": 99,
+        "p": 7.62939453125e-05
+       },
+       "permutation": {
+        "mean_diff": 0.11016949152542373,
+        "p": 0.00029997000299970003
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 32,
+        "losses": 1,
+        "ties": 85,
+        "p": 7.916241884231567e-09
+       },
+       "permutation": {
+        "mean_diff": 0.13474576271186442,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 15,
+        "losses": 1,
+        "ties": 102,
+        "p": 0.000518798828125
+       },
+       "permutation": {
+        "mean_diff": 0.11864406779661017,
+        "p": 0.0004999500049995
+       }
+      }
+     }
+    },
+    "fastembed-hybrid_vs_stub-hybrid": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 37,
+        "losses": 1,
+        "ties": 26,
+        "p": 2.837623469531536e-10
+       },
+       "permutation": {
+        "mean_diff": 0.5052083333333334,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 54,
+        "losses": 1,
+        "ties": 9,
+        "p": 3.1086244689504383e-15
+       },
+       "permutation": {
+        "mean_diff": 0.55859375,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 34,
+        "losses": 1,
+        "ties": 29,
+        "p": 2.0954757928848267e-09
+       },
+       "permutation": {
+        "mean_diff": 0.515625,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 26,
+        "losses": 0,
+        "ties": 7,
+        "p": 2.9802322387695312e-08
+       },
+       "permutation": {
+        "mean_diff": 0.6944444444444445,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 29,
+        "losses": 0,
+        "ties": 4,
+        "p": 3.725290298461914e-09
+       },
+       "permutation": {
+        "mean_diff": 0.5681818181818182,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 25,
+        "losses": 0,
+        "ties": 8,
+        "p": 5.960464477539063e-08
+       },
+       "permutation": {
+        "mean_diff": 0.7575757575757576,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 16,
+        "losses": 1,
+        "ties": 17,
+        "p": 0.000274658203125
+       },
+       "permutation": {
+        "mean_diff": 0.34313725490196084,
+        "p": 0.00039996000399960006
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 27,
+        "losses": 1,
+        "ties": 6,
+        "p": 2.1606683731079102e-07
+       },
+       "permutation": {
+        "mean_diff": 0.5343137254901961,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 10,
+        "losses": 1,
+        "ties": 23,
+        "p": 0.01171875
+       },
+       "permutation": {
+        "mean_diff": 0.2647058823529412,
+        "p": 0.0108989101089891
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 1,
+        "losses": 0,
+        "ties": 50,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0196078431372549,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 4,
+        "losses": 0,
+        "ties": 47,
+        "p": 0.125
+       },
+       "permutation": {
+        "mean_diff": 0.052287581699346414,
+        "p": 0.12308769123087691
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 1,
+        "losses": 0,
+        "ties": 50,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0196078431372549,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 43,
+        "losses": 1,
+        "ties": 74,
+        "p": 5.115907697472721e-12
+       },
+       "permutation": {
+        "mean_diff": 0.3015536723163842,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 60,
+        "losses": 1,
+        "ties": 57,
+        "p": 5.377642775528102e-17
+       },
+       "permutation": {
+        "mean_diff": 0.33545197740113,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 36,
+        "losses": 1,
+        "ties": 81,
+        "p": 5.529727786779404e-10
+       },
+       "permutation": {
+        "mean_diff": 0.2966101694915254,
+        "p": 9.999000099990002e-05
+       }
+      }
+     }
+    }
+   },
+   "controls": {
+    "note": "controls are EXCLUDED from all metric means; the product has no abstain path, so k hits come back regardless",
+    "mean_hits_returned": 5.0
+   },
+   "abstention_diagnostic": {
+    "label": "diagnostic \u2014 no abstain path exists in the product; routed to fix-orchestrator",
+    "score": "top-1 cosine (adapter.vector_query, real embedder)",
+    "answerable": {
+     "n": 118,
+     "mean": 0.7774665749838079,
+     "min": 0.6033492435177339,
+     "max": 0.9273377801881771
+    },
+    "control": {
+     "n": 12,
+     "mean": 0.6459728563170591,
+     "min": 0.5741003004953787,
+     "max": 0.6960279434383423
+    },
+    "auc": 0.9307909604519774,
+    "sweep": [
+     {
+      "tau": 0.4,
+      "answerable_accept": 1.0,
+      "control_accept": 1.0
+     },
+     {
+      "tau": 0.45,
+      "answerable_accept": 1.0,
+      "control_accept": 1.0
+     },
+     {
+      "tau": 0.5,
+      "answerable_accept": 1.0,
+      "control_accept": 1.0
+     },
+     {
+      "tau": 0.55,
+      "answerable_accept": 1.0,
+      "control_accept": 1.0
+     },
+     {
+      "tau": 0.6,
+      "answerable_accept": 1.0,
+      "control_accept": 0.9166666666666666
+     },
+     {
+      "tau": 0.65,
+      "answerable_accept": 0.940677966101695,
+      "control_accept": 0.4166666666666667
+     },
+     {
+      "tau": 0.7,
+      "answerable_accept": 0.7627118644067796,
+      "control_accept": 0.0
+     },
+     {
+      "tau": 0.75,
+      "answerable_accept": 0.5423728813559322,
+      "control_accept": 0.0
+     },
+     {
+      "tau": 0.8,
+      "answerable_accept": 0.423728813559322,
+      "control_accept": 0.0
+     },
+     {
+      "tau": 0.85,
+      "answerable_accept": 0.3305084745762712,
+      "control_accept": 0.0
+     },
+     {
+      "tau": 0.9,
+      "answerable_accept": 0.07627118644067797,
+      "control_accept": 0.0
+     },
+     {
+      "tau": 0.95,
+      "answerable_accept": 0.0,
+      "control_accept": 0.0
+     }
+    ]
+   },
+   "wall_seconds": 93.1
+  },
+  "10000": {
+   "filler_sha256": "69e287192b9987fffd57f2302be766ddc606df91d8ddeb12957aed134a2328bb",
+   "arms": {
+    "stub-hybrid": {
+     "label": "PIPELINE-ONLY (never quality)",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.6963276836158192,
+        "lo": 0.615819209039548,
+        "hi": 0.7740112994350282
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.5179378531073446,
+        "lo": 0.4451977401129944,
+        "hi": 0.5906779661016949
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.7288135593220338,
+        "lo": 0.6440677966101694,
+        "hi": 0.8050847457627118
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.5570083407195617,
+        "lo": 0.48514969607477426,
+        "hi": 0.6277918527252794,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.4791666666666667,
+        "lo": 0.359375,
+        "hi": 0.59375
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.22005208333333334,
+        "lo": 0.16276041666666666,
+        "hi": 0.27864583333333337
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.515625,
+        "lo": 0.390625,
+        "hi": 0.640625
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.2814495967684972,
+        "lo": 0.20977747624907844,
+        "hi": 0.3518994788333941,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.22727272727272727,
+        "lo": 0.101010101010101,
+        "hi": 0.36868686868686873
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.10101010101010101,
+        "lo": 0.045454545454545456,
+        "hi": 0.16414141414141414
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.2727272727272727,
+        "lo": 0.12121212121212122,
+        "hi": 0.42424242424242425
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.12632168819217884,
+        "lo": 0.05585744668338344,
+        "hi": 0.20443975950052098,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.6960784313725491,
+        "lo": 0.5490196078431372,
+        "hi": 0.8333333333333333
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.35049019607843135,
+        "lo": 0.267156862745098,
+        "hi": 0.4387254901960784
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.7647058823529411,
+        "lo": 0.6176470588235294,
+        "hi": 0.9117647058823529
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.42744145002477785,
+        "lo": 0.3320894281967113,
+        "hi": 0.5200109440595808,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 0.8993464052287582,
+        "lo": 0.834640522875817,
+        "hi": 0.9575163398692811
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 0.9220658665436068,
+        "lo": 0.8739442557423038,
+        "hi": 0.9656296088517271,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.47777777777777775,
+        "lo": 0.28888888888888886,
+        "hi": 0.6666666666666666
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.4277777777777778,
+        "lo": 0.2388888888888889,
+        "hi": 0.6222222222222221
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.7333333333333333,
+        "lo": 0.4666666666666667,
+        "hi": 0.9333333333333333
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.39170783137742166,
+        "lo": 0.21534464451368496,
+        "hi": 0.5730986419060987,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "bm25-only": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.8199152542372882,
+        "lo": 0.7514124293785311,
+        "hi": 0.882768361581921
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.7247175141242937,
+        "lo": 0.6522598870056497,
+        "hi": 0.7935028248587571
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.8389830508474576,
+        "lo": 0.7711864406779662,
+        "hi": 0.8983050847457628
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.7419153364191328,
+        "lo": 0.6723140832719015,
+        "hi": 0.8067295419929205,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.6875,
+        "lo": 0.5729166666666667,
+        "hi": 0.7916666666666667
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.5080729166666667,
+        "lo": 0.4065104166666666,
+        "hi": 0.60859375
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.71875,
+        "lo": 0.609375,
+        "hi": 0.828125
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.5442995982331099,
+        "lo": 0.44303416277542157,
+        "hi": 0.6425395857054641,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.44696969696969696,
+        "lo": 0.2828282828282829,
+        "hi": 0.6085858585858587
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.2656565656565657,
+        "lo": 0.1484848484848485,
+        "hi": 0.39242424242424245
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.48484848484848486,
+        "lo": 0.30303030303030304,
+        "hi": 0.6666666666666666
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.296392524894643,
+        "lo": 0.18015855139211545,
+        "hi": 0.4182646230272124,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9117647058823529,
+        "lo": 0.8137254901960784,
+        "hi": 0.9901960784313725
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.7573529411764706,
+        "lo": 0.6397058823529411,
+        "hi": 0.8627450980392157
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9411764705882353,
+        "lo": 0.8529411764705882,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.7872075404686601,
+        "lo": 0.6812208979466144,
+        "hi": 0.883077678148101,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.5833333333333334,
+        "lo": 0.3611111111111111,
+        "hi": 0.7833333333333334
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.6333333333333333,
+        "lo": 0.4,
+        "hi": 0.8333333333333334
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 0.7333333333333333,
+        "lo": 0.4666666666666667,
+        "hi": 0.9333333333333333
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.5697322381974801,
+        "lo": 0.35262340000077763,
+        "hi": 0.7732720762290817,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.9293785310734464,
+        "lo": 0.884180790960452,
+        "hi": 0.9689265536723164
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.8792372881355932,
+        "lo": 0.8283898305084746,
+        "hi": 0.9258474576271186
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9576271186440678,
+        "lo": 0.9152542372881356,
+        "hi": 0.9915254237288136
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.8821111620171215,
+        "lo": 0.8335060937967835,
+        "hi": 0.9264011121181828,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.8697916666666666,
+        "lo": 0.7916666666666666,
+        "hi": 0.9427083333333333
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.78515625,
+        "lo": 0.6966145833333334,
+        "hi": 0.8658854166666667
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.921875,
+        "lo": 0.84375,
+        "hi": 0.984375
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.787646657312759,
+        "lo": 0.7033980537747331,
+        "hi": 0.8640755095459672,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.8282828282828283,
+        "lo": 0.7070707070707071,
+        "hi": 0.9292929292929293
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.696969696969697,
+        "lo": 0.5656565656565657,
+        "hi": 0.8181818181818182
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.9090909090909091,
+        "lo": 0.7878787878787878,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.7089285882338441,
+        "lo": 0.583564954748693,
+        "hi": 0.8252372309235694,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9215686274509803,
+        "lo": 0.8235294117647058,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.875,
+        "lo": 0.7647058823529411,
+        "hi": 0.9632352941176471
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9411764705882353,
+        "lo": 0.8529411764705882,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.8733668737148085,
+        "lo": 0.7712770912612917,
+        "hi": 0.9549787860594928,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.7777777777777778,
+        "lo": 0.6,
+        "hi": 0.9111111111111112
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.8388888888888889,
+        "lo": 0.6888888888888888,
+        "hi": 0.9666666666666667
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.7469363325058485,
+        "lo": 0.5815199866011557,
+        "hi": 0.8963394457994924,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    },
+    "fastembed-hybrid-rerank": {
+     "label": "quality",
+     "subsets": {
+      "all": {
+       "recall_at_k": {
+        "n": 118,
+        "mean": 0.9322033898305084,
+        "lo": 0.8870056497175142,
+        "hi": 0.9717514124293785
+       },
+       "reciprocal_rank": {
+        "n": 118,
+        "mean": 0.9042372881355932,
+        "lo": 0.8567796610169492,
+        "hi": 0.9477401129943502
+       },
+       "hit_rate_at_k": {
+        "n": 118,
+        "mean": 0.9576271186440678,
+        "lo": 0.9152542372881356,
+        "hi": 0.9915254237288136
+       },
+       "ndcg_at_k": {
+        "n": 118,
+        "mean": 0.9012716213247075,
+        "lo": 0.8551031676101437,
+        "hi": 0.9437463388706535,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "paraphrase": {
+       "recall_at_k": {
+        "n": 64,
+        "mean": 0.8802083333333334,
+        "lo": 0.8020833333333333,
+        "hi": 0.9479166666666667
+       },
+       "reciprocal_rank": {
+        "n": 64,
+        "mean": 0.8338541666666667,
+        "lo": 0.7510416666666668,
+        "hi": 0.9067708333333333
+       },
+       "hit_rate_at_k": {
+        "n": 64,
+        "mean": 0.921875,
+        "lo": 0.84375,
+        "hi": 0.984375
+       },
+       "ndcg_at_k": {
+        "n": 64,
+        "mean": 0.8272786972392874,
+        "lo": 0.7465731947799998,
+        "hi": 0.897738659478749,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "low": {
+       "recall_at_k": {
+        "n": 33,
+        "mean": 0.8282828282828283,
+        "lo": 0.7070707070707072,
+        "hi": 0.9292929292929293
+       },
+       "reciprocal_rank": {
+        "n": 33,
+        "mean": 0.7535353535353535,
+        "lo": 0.6282828282828283,
+        "hi": 0.8686868686868686
+       },
+       "hit_rate_at_k": {
+        "n": 33,
+        "mean": 0.9090909090909091,
+        "lo": 0.8181818181818182,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 33,
+        "mean": 0.7368153596891798,
+        "lo": 0.6206078493071923,
+        "hi": 0.8433741428109056,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "med": {
+       "recall_at_k": {
+        "n": 34,
+        "mean": 0.9313725490196079,
+        "lo": 0.8431372549019607,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 34,
+        "mean": 0.9068627450980392,
+        "lo": 0.803921568627451,
+        "hi": 0.9852941176470589
+       },
+       "hit_rate_at_k": {
+        "n": 34,
+        "mean": 0.9411764705882353,
+        "lo": 0.8529411764705882,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 34,
+        "mean": 0.9127983660756633,
+        "lo": 0.8162660736740563,
+        "hi": 0.9881881687370772,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "high": {
+       "recall_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "reciprocal_rank": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 51,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0,
+        "label": "diagnostic only (binary gold)"
+       }
+      },
+      "multi_gold": {
+       "recall_at_k": {
+        "n": 15,
+        "mean": 0.8,
+        "lo": 0.6444444444444444,
+        "hi": 0.9333333333333333
+       },
+       "reciprocal_rank": {
+        "n": 15,
+        "mean": 0.9111111111111111,
+        "lo": 0.7777777777777779,
+        "hi": 1.0
+       },
+       "hit_rate_at_k": {
+        "n": 15,
+        "mean": 1.0,
+        "lo": 1.0,
+        "hi": 1.0
+       },
+       "ndcg_at_k": {
+        "n": 15,
+        "mean": 0.8031126822720495,
+        "lo": 0.6500405548743252,
+        "hi": 0.9270683623689789,
+        "label": "diagnostic only (binary gold)"
+       }
+      }
+     }
+    }
+   },
+   "comparisons": {
+    "fastembed-hybrid_vs_bm25-only": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 18,
+        "losses": 4,
+        "ties": 42,
+        "p": 0.004343509674072266
+       },
+       "permutation": {
+        "mean_diff": 0.18229166666666666,
+        "p": 0.0047995200479952005
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 33,
+        "losses": 6,
+        "ties": 25,
+        "p": 1.429926123819314e-05
+       },
+       "permutation": {
+        "mean_diff": 0.27708333333333335,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 16,
+        "losses": 3,
+        "ties": 45,
+        "p": 0.004425048828125
+       },
+       "permutation": {
+        "mean_diff": 0.203125,
+        "p": 0.0045995400459954
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 17,
+        "losses": 1,
+        "ties": 15,
+        "p": 0.00014495849609375
+       },
+       "permutation": {
+        "mean_diff": 0.3813131313131313,
+        "p": 0.00039996000399960006
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 23,
+        "losses": 3,
+        "ties": 7,
+        "p": 8.797645568847656e-05
+       },
+       "permutation": {
+        "mean_diff": 0.4313131313131313,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 15,
+        "losses": 1,
+        "ties": 17,
+        "p": 0.000518798828125
+       },
+       "permutation": {
+        "mean_diff": 0.42424242424242425,
+        "p": 0.0008999100089991
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 3,
+        "losses": 3,
+        "ties": 28,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.009803921568627454,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 11,
+        "losses": 3,
+        "ties": 20,
+        "p": 0.057373046875
+       },
+       "permutation": {
+        "mean_diff": 0.11764705882352941,
+        "p": 0.046795320467953205
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 2,
+        "losses": 2,
+        "ties": 30,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 20,
+        "losses": 4,
+        "ties": 94,
+        "p": 0.001543879508972168
+       },
+       "permutation": {
+        "mean_diff": 0.10946327683615818,
+        "p": 0.0021997800219978004
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 34,
+        "losses": 6,
+        "ties": 78,
+        "p": 8.364584573428147e-06
+       },
+       "permutation": {
+        "mean_diff": 0.15451977401129943,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 17,
+        "losses": 3,
+        "ties": 98,
+        "p": 0.0025768280029296875
+       },
+       "permutation": {
+        "mean_diff": 0.11864406779661017,
+        "p": 0.0027997200279972004
+       }
+      }
+     }
+    },
+    "fastembed-hybrid_vs_stub-hybrid": {
+     "paraphrase": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 29,
+        "losses": 1,
+        "ties": 34,
+        "p": 5.774199962615967e-08
+       },
+       "permutation": {
+        "mean_diff": 0.390625,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 55,
+        "losses": 2,
+        "ties": 7,
+        "p": 2.295386103412511e-14
+       },
+       "permutation": {
+        "mean_diff": 0.5651041666666666,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 27,
+        "losses": 1,
+        "ties": 36,
+        "p": 2.1606683731079102e-07
+       },
+       "permutation": {
+        "mean_diff": 0.40625,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "low": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 23,
+        "losses": 0,
+        "ties": 10,
+        "p": 2.384185791015625e-07
+       },
+       "permutation": {
+        "mean_diff": 0.601010101010101,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 28,
+        "losses": 0,
+        "ties": 5,
+        "p": 7.450580596923828e-09
+       },
+       "permutation": {
+        "mean_diff": 0.595959595959596,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 21,
+        "losses": 0,
+        "ties": 12,
+        "p": 9.5367431640625e-07
+       },
+       "permutation": {
+        "mean_diff": 0.6363636363636364,
+        "p": 9.999000099990002e-05
+       }
+      }
+     },
+     "med": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 10,
+        "losses": 1,
+        "ties": 23,
+        "p": 0.01171875
+       },
+       "permutation": {
+        "mean_diff": 0.22549019607843138,
+        "p": 0.014098590140985901
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 29,
+        "losses": 2,
+        "ties": 3,
+        "p": 4.628673195838928e-07
+       },
+       "permutation": {
+        "mean_diff": 0.5245098039215685,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 7,
+        "losses": 1,
+        "ties": 26,
+        "p": 0.0703125
+       },
+       "permutation": {
+        "mean_diff": 0.17647058823529413,
+        "p": 0.06969303069693031
+       }
+      }
+     },
+     "high": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 9,
+        "losses": 0,
+        "ties": 42,
+        "p": 0.00390625
+       },
+       "permutation": {
+        "mean_diff": 0.10065359477124183,
+        "p": 0.0032996700329967
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 0,
+        "losses": 0,
+        "ties": 51,
+        "p": 1.0
+       },
+       "permutation": {
+        "mean_diff": 0.0,
+        "p": 1.0
+       }
+      }
+     },
+     "all": {
+      "recall_at_k": {
+       "sign_test": {
+        "wins": 33,
+        "losses": 1,
+        "ties": 84,
+        "p": 4.0745362639427185e-09
+       },
+       "permutation": {
+        "mean_diff": 0.2330508474576271,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "reciprocal_rank": {
+       "sign_test": {
+        "wins": 66,
+        "losses": 2,
+        "ties": 50,
+        "p": 1.5903890617646743e-17
+       },
+       "permutation": {
+        "mean_diff": 0.3612994350282486,
+        "p": 9.999000099990002e-05
+       }
+      },
+      "hit_rate_at_k": {
+       "sign_test": {
+        "wins": 28,
+        "losses": 1,
+        "ties": 89,
+        "p": 1.1175870895385742e-07
+       },
+       "permutation": {
+        "mean_diff": 0.2288135593220339,
+        "p": 9.999000099990002e-05
+       }
+      }
+     }
+    }
+   },
+   "controls": {
+    "note": "controls are EXCLUDED from all metric means; the product has no abstain path, so k hits come back regardless",
+    "mean_hits_returned": 5.0
+   },
+   "wall_seconds": 479.5
+  }
+ }
+}
