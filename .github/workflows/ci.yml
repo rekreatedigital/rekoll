@@ -103,22 +103,32 @@ jobs:
       - name: Test
         run: pytest
 
-  # Scaffolding for the real-embedder quality path (efficacy program, ADR-0011):
-  # the same suite with the optional [embeddings] extra installed, via the
-  # [bench] aggregation extra so the extra itself stays resolution-tested.
-  # Needs network (fastembed downloads its ONNX models on first use) — the
-  # default `test` job stays offline. The ratcheted real-embedder quality gate
-  # lands on top of this job later (pinned model revision + cache + tolerance
-  # band); this scaffold only proves the suite stays green with the extra
-  # present.
+  # The real-embedder quality path (efficacy program, ADR-0011): the same
+  # suite with the optional [embeddings] extra installed, via the [bench]
+  # aggregation extra so the extra itself stays resolution-tested. This job is
+  # what runs the RATCHETED semantic quality gate
+  # (tests/test_benchmark_semantic.py — raise-only floors on the real model
+  # over the frozen semantic_v1 fixture); the default `test` job stays offline
+  # and skips that gate cleanly. Single fixed runner OS on purpose: floors are
+  # calibrated with a tolerance band (baseline minus one bootstrap half-width),
+  # not bit-exactness. The ONNX models are cached between runs; the cache key
+  # tracks the fastembed floor declared in pyproject so a model-family bump
+  # refreshes the cache.
   test-embeddings:
     runs-on: ubuntu-latest
+    env:
+      FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed-cache
     steps:
       # SHA-pinned to match the supply-chain posture of the other jobs.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
+      - name: Cache fastembed ONNX models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.fastembed-cache
+          key: fastembed-models-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
       - name: Install (with the embeddings extra, via [bench])
         run: pip install -e ".[dev,bench]"
       - name: Test
