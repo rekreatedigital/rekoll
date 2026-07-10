@@ -49,8 +49,8 @@ the working directory; that's how it knows which project's memory to open.
 | Tool | What it does |
 | --- | --- |
 | `remember` | Save one memory (a fact, decision, or event). Screened by the injection firewall first. |
-| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `{context, ids, mode, count}` — a safe context block, the record ids in rank order, and `mode` (below). |
-| `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `{files, chunks, skipped, filtered, total}`; `filtered` counts names excluded unread (vendored venvs, lockfiles, credential-shaped names). Counts only, never names. |
+| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `ids` (record ids in rank order), `count`, and `mode` (see below). |
+| `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
 | `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
 
@@ -59,7 +59,7 @@ the working directory; that's how it knows which project's memory to open.
 `recall` and `status` both return `mode`, the honest-degradation string
 (ADR-0024). It names the retrieval pipeline that actually **ran**:
 
-| `mode` | What it means |
+| Value | What it means |
 | --- | --- |
 | `vector+lexical+rerank` | Full hybrid ranking. Trust the order. |
 | `vector+lexical (stub-embedder)` | No real semantics installed (`pip install "rekoll[embeddings]"`). |
