@@ -231,10 +231,24 @@ class RecallResult:
     withholds any hit whose stored hash no longer matches its content, so even
     a full-hybrid mode can arrive with fewer hits than ``k`` — or none (see
     :meth:`Memory.recall`: ``k`` is an upper bound, not a promise).
+
+    ``abstained`` is True when a ``min_score`` gate refused the query outright
+    (ADR-0028): nothing was close enough, so nothing is returned. This is the
+    one case where zero hits does NOT mean "the store had nothing" — and it is
+    exactly why the flag exists. ``mode`` names it too, with the numbers.
+
+    ``top_vector_score`` is the top-1 cosine similarity from the vector leg,
+    captured before fusion, over hits that were allowed to surface — the
+    quantity ``min_score`` is compared against. It is None whenever no
+    cosine-metric vector leg produced a surfacable candidate. It is NOT
+    ``hits[0].score`` (that is an RRF or reranker score); read it here to pick
+    a threshold from your own data.
     """
 
     hits: tuple[QueryHit, ...]
     mode: str = "unspecified"
+    abstained: bool = False
+    top_vector_score: Optional[float] = None
 
     def __iter__(self):
         return iter(self.hits)
@@ -825,6 +839,7 @@ class Memory:
         kind: Optional[Kind] = None,
         rerank: bool = True,
         call_id: Optional[str] = None,
+        min_score: Optional[float] = None,
     ) -> RecallResult:
         """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
 
@@ -835,12 +850,29 @@ class Memory:
         candidate that fails content-hash verification (direct-DB tampering) is
         withheld with a warning (ADR-0019). ``k`` is an upper bound, not a promise.
 
-        ``RecallResult.mode`` names exactly what ran (honest degradation).
+        ``min_score`` (opt-in, default off) turns on the **abstain gate**
+        (ADR-0028): a floor on the vector leg's top-1 COSINE similarity. If the
+        closest surfacable memory is not at least this similar, recall returns
+        NO hits and sets ``abstained=True`` — an honest "I don't know" instead
+        of ``k`` confident-looking hits for a question the store cannot answer.
+        An abstain is never confusable with an empty store: it says so in
+        ``mode`` and in ``abstained``.
+
+        ``min_score`` is a cosine in [-1, 1], not a fused score. Read
+        ``RecallResult.top_vector_score`` (populated on every ordinary recall)
+        to choose a threshold from your own corpus; on a frozen 1,000-doc
+        fixture, 0.70 separated answerable from unanswerable queries well
+        (top-1 cosine AUC 0.931). Your corpus and embedder will differ —
+        measure, don't copy the number.
+
+        ``RecallResult.mode`` names exactly what ran (honest degradation),
+        including whether the gate abstained, or could not be evaluated at all.
         The surfaced ids are recorded in the was-it-used ledger; pass
         ``call_id`` to attribute this recall to one host action so
-        :meth:`informed_by` can join them later.
+        :meth:`informed_by` can join them later. An abstain surfaces no ids, so
+        it credits nothing to the ledger.
         """
-        result = self._search(query, k=k, kind=kind, rerank=rerank)
+        result = self._search(query, k=k, kind=kind, rerank=rerank, min_score=min_score)
         try:
             self.ledger.record(
                 [h.record.id for h in result.hits], query=query, call_id=call_id
@@ -1105,26 +1137,57 @@ class Memory:
 
     # -- internals ----------------------------------------------------------
     def _search(
-        self, query: str, *, k: int, kind: Optional[Kind] = None, rerank: bool = True
+        self,
+        query: str,
+        *,
+        k: int,
+        kind: Optional[Kind] = None,
+        rerank: bool = True,
+        min_score: Optional[float] = None,
     ) -> RecallResult:
-        """The one read path recall/health/self_test share (no ledger write)."""
+        """The one read path recall/health/self_test share (no ledger write).
+
+        health/self_test never pass ``min_score``: a probe of the index must not
+        be able to abstain, or a healthy scope could read as a broken one.
+        """
         use_vector = self._identity_state != "mismatch"
         reranker = self.reranker if rerank else None
         result = hybrid_search(
             self.adapter, scope=self.scope, query=query, embedder=self.embedder,
             k=k, kind=kind, reranker=reranker, use_vector=use_vector,
+            min_score=min_score,
         )
+        if result.abstained:
+            # Only the vector leg ran before the gate refused; naming the lexical
+            # or rerank legs here would claim work that never happened.
+            mode = self._mode(reranked=False, lexical=False) + (
+                f": abstained (top-1 cosine {result.top_vector_score:.3f} "
+                f"< min_score {min_score:.3f})"
+            )
+        else:
+            mode = self._mode(reranked=reranker is not None)
+            if result.gate.startswith("unavailable"):
+                reason = result.gate.split(": ", 1)[1]
+                mode += f"; min_score not applied ({reason})"
         return RecallResult(
-            hits=tuple(result.hits), mode=self._mode(reranked=reranker is not None)
+            hits=tuple(result.hits),
+            mode=mode,
+            abstained=result.abstained,
+            top_vector_score=result.top_vector_score,
         )
 
-    def _mode(self, *, reranked: Optional[bool] = None) -> str:
+    def _mode(
+        self, *, reranked: Optional[bool] = None, lexical: Optional[bool] = None
+    ) -> str:
         """Compose the honest-degradation string: exactly what a read runs.
 
         ``reranked=None`` (health/introspection) describes the default recall
-        configuration; a bool describes one concrete search.
+        configuration; a bool describes one concrete search. ``lexical=None``
+        means "whatever the adapter advertises"; pass False when a concrete
+        search refused the lexical leg (an abstain short-circuits before it).
         """
-        lexical = self.adapter.supports(CAP_LEXICAL)
+        if lexical is None:
+            lexical = self.adapter.supports(CAP_LEXICAL)
         rerank = (self.reranker is not None) if reranked is None else reranked
         if self._identity_state == "mismatch":
             base = "lexical-only" if lexical else "none"
