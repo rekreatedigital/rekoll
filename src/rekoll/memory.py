@@ -1230,6 +1230,12 @@ class Memory:
                 if d in skip or d.endswith(".egg-info"):
                     continue
                 full = os.path.join(dirpath, d)
+                if not _within(root_real, full):
+                    # LOAD-BEARING and unconditional (H1, PR #14): an out-of-
+                    # tree directory is never walked. Checked FIRST — never
+                    # stat inside a directory whose real path already escaped
+                    # the root.
+                    continue
                 if os.path.isfile(os.path.join(full, "pyvenv.cfg")):
                     # A virtualenv by STRUCTURE: ``python -m venv X`` drops
                     # ``pyvenv.cfg`` at X's root whatever X is called, so this

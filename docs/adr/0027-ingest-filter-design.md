@@ -34,9 +34,18 @@ overridable per call:
   `python -m venv X` drops at X's root, so it identifies a virtualenv by
   STRUCTURE regardless of its name. This is the durable fix; the name entries
   (`venv`, `.venv`, `env`) remain as a stat-free fast path. Detection lives in
-  `_walk`'s dirnames-pruning loop, before the real-path containment and cycle
-  guards, which are unchanged. Cost: one `isfile` stat per directory
-  considered.
+  `_walk`'s dirnames-pruning loop, AFTER the real-path containment guard and
+  before the cycle guard. Cost: one `isfile` stat per in-root directory the
+  walk would otherwise descend.
+- **Everything in this ADR is IN ADDITION to real-path containment, never a
+  substitute.** The `_within(root_real, ...)` pruning in `_walk` (the H1
+  junction-escape fix, PR #14) remains load-bearing and **unconditional** —
+  it is the only guard that keeps an out-of-tree directory from being
+  descended under `follow_symlinks=True` (the per-file containment check is
+  disabled there) — and it runs FIRST, so the walk never stats inside a
+  directory whose real path already escaped the root. Pinned by the junction
+  tests in `tests/test_fs_containment.py`: the `follow_symlinks=True` case
+  and the `skipped == 0` dir-level-pruning assertions.
 - The pruning applies to directories the walk would *descend into*. Pointing
   `ingest_path` at a virtualenv root itself is explicit intent and is walked
   (consistent with the single-file rule below).
