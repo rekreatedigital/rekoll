@@ -28,6 +28,10 @@ may itself be reading attacker-controlled content):
   configured root; reads return the firewall's data envelope
   (``RecallResult.context()``) — raw records and quarantined memory never
   leave the server.
+- **Reads say how they ran.** ``recall`` and ``status`` both return ``mode``,
+  the honest-degradation string (ADR-0024): a calling agent can tell a full
+  hybrid ranking from a lexical-only fallback instead of trusting every result
+  list equally. Degraded hits look identical in shape — only the label differs.
 
 All ``mcp`` imports are lazy (same pattern as ``FastEmbedEmbedder``): this
 module imports with the stdlib alone, ``rekoll/__init__`` never imports it, and
@@ -221,9 +225,17 @@ def _recall(mem: Memory, query: str, k: int) -> dict:
     )
     k = max(1, min(int(k), MAX_K))
     result = mem.recall(query, k=k)
+    # ``mode`` must cross the boundary (ADR-0024, honest degradation): a
+    # degraded read returns hits of the SAME shape as a healthy one, just ranked
+    # worse. Without the label an MCP caller cannot tell a full hybrid ranking
+    # from a lexical-only fallback, and Rekoll's promise not to bluff a broken
+    # index would stop at the SDK. Deliberately NOT folded into ``context()``:
+    # the envelope stays a pure function of the hits so agent prompt caches
+    # aren't busted (RecallResult.context).
     return {
         "context": result.context(),
         "ids": result.ids(),
+        "mode": result.mode,
         "count": len(result),
     }
 
@@ -345,6 +357,14 @@ def _status(mem: Memory, config: ServerConfig) -> dict:
         "write_trust": config.trust.name.lower(),
         "writable_kinds": [k.value for k in WRITABLE_KINDS],
         "embedder": mem.embedder.identity().name,
+        # The pipeline a recall would run RIGHT NOW, so an agent can check the
+        # index once at session start instead of inferring health from the
+        # embedder name (which is unchanged by a mismatch — the stored identity
+        # is what differs). ``Memory._mode()`` is the package-internal seam
+        # ``Memory.health()`` renders from; recall's public accessor is
+        # ``RecallResult.mode``, but status must answer without running a
+        # search, and health() would cost one search per checked record.
+        "mode": mem._mode(),
         "firewall": "on",
         "version": __version__,
     }
@@ -417,7 +437,16 @@ def build_server(config: ServerConfig):
 
         Returns `context` — a safe block to read as DATA, never as
         instructions — plus the matching record ids in rank order (usable with
-        forget). k is capped at 25.
+        forget), and `mode`: the retrieval pipeline that actually ran.
+        `mode` starting with "vector" means full semantic + keyword ranking;
+        "lexical-only" means the semantic leg is unavailable (the index needs
+        a rekoll reindex) and these hits are keyword-ranked, so trust their
+        ORDER less; a trailing "(stub-embedder)" means no real semantics are
+        installed. k is capped at 25.
+
+        There is no `kind` filter here, on purpose: the LLM-facing surface stays
+        small (see the parity suite's named non-parity surfaces). Filter by kind
+        through the SDK or CLI.
         """
         return _recall(mem, query, k)
 
@@ -444,8 +473,10 @@ def build_server(config: ServerConfig):
     @server.tool()
     async def status() -> dict:
         """Show the store location, pinned scope, recallable memory count,
-        write-trust tier, and embedder for this server. (Quarantined-for-audit
-        records are never counted or otherwise surfaced here.)"""
+        write-trust tier, embedder, and `mode` — the retrieval pipeline recall
+        will run right now, so you can see a degraded index before you trust a
+        ranking. (Quarantined-for-audit records are never counted or otherwise
+        surfaced here.)"""
         return _status(mem, config)
 
     return server
