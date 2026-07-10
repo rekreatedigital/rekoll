@@ -153,18 +153,23 @@ timing puts ~97% of a no-rerank read in the brute-force vector scan → issue
 
 ## 7. Findings routed to the fix-orchestrator (all filed, evidence-backed)
 
-| # | severity | finding |
-|---|---|---|
-| #27 | HIGH | zero-config ingest drowns in a checked-in `env/` virtualenv (`DEFAULT_SKIP_DIRS` misses `env`, `site-packages`) |
-| #35 | MED→HIGH at scale | brute-force SQLite vector scan ≈97% of read latency at 1k records |
-| #32 | MED | no score-threshold/abstain path — unanswerable queries get k confident-looking hits (signal exists: AUC 0.931) |
-| #36 | MED | `candidates=N` without a reranker silently degrades quality as N grows |
-| #25 | MED | MCP/CLI hide `RecallResult.mode` — honest degradation invisible outside the SDK |
-| #29 | MED-HIGH (policy) | well-known secrets files (credentials.json) stored as ordinary records |
-| #28 | MED | lockfiles ingested by default (53–74% of chunks in JS repos) |
-| #37 | decision | OWNER: Memory auto-rerank default — +60% latency, no detectable lift at default depth |
-| #33 | LOW-MED | no `use_lexical` lever on `hybrid_search` |
-| #24 | LOW | `health()` misattributes a tampered newest record to dead ingestion |
+| # | severity | finding | fix-wave status (2026-07-10) |
+|---|---|---|---|
+| #27 | HIGH | zero-config ingest drowns in a checked-in `env/` virtualenv (`DEFAULT_SKIP_DIRS` misses `env`, `site-packages`) | **fixed** — PR #39 (ADR-0027) |
+| #35 | MED→HIGH at scale | brute-force SQLite vector scan ≈97% of read latency at 1k records | **fixed** — PR #42 (ADR-0030) |
+| #32 | MED | no score-threshold/abstain path — unanswerable queries get k confident-looking hits (signal exists: AUC 0.931) | **fixed** — PR #44 (ADR-0028, opt-in `min_score`) |
+| #36 | MED | `candidates=N` without a reranker silently degrades quality as N grows | **fixed** — PR #44 |
+| #25 | MED | MCP/CLI hide `RecallResult.mode` — honest degradation invisible outside the SDK | **fixed** — PR #40 (`mode` crosses every door) |
+| #29 | MED-HIGH (policy) | well-known secrets files (credentials.json) stored as ordinary records | **fixed** — PR #39 (skip + warn) |
+| #28 | MED | lockfiles ingested by default (53–74% of chunks in JS repos) | **fixed** — PR #39 |
+| #37 | decision | OWNER: Memory auto-rerank default — +60% latency, no detectable lift at default depth | open — final fix lane |
+| #33 | LOW-MED | no `use_lexical` lever on `hybrid_search` | **fixed** — PR #44 |
+| #24 | LOW | `health()` misattributes a tampered newest record to dead ingestion | open — final fix lane |
+
+The measurements in this report predate the fix wave. A full re-baseline
+(compare_arms + ablation + dogfood, and re-derived raise-only gate floors)
+follows the final lane, since #37 changes the default configuration the
+numbers are measured under.
 
 ## 8. Reproduce everything
 
