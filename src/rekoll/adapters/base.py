@@ -28,11 +28,31 @@ __all__ = [
     "CAP_VECTOR",
     "CAP_LEXICAL",
     "CAP_RELATIONAL",
+    "CAP_VECTOR_INDEX",
 ]
 
 CAP_VECTOR = "vector"
 CAP_LEXICAL = "lexical"
 CAP_RELATIONAL = "relational"
+
+#: Advertised by a backend whose ``vector_query`` is served by a real vector
+#: INDEX (HNSW/IVF/sqlite-vec/pgvector/...) rather than an exhaustive scan of
+#: every stored vector (ADR-0030).
+#:
+#: This is a *cost* signal, not a correctness one. A backend that does not
+#: advertise it still returns exact top-k; it just pays O(N·dim) per query, so
+#: read latency grows linearly with the store. Callers that must stay within a
+#: latency budget at large N can check ``supports(CAP_VECTOR_INDEX)`` and pick a
+#: heavier backend, or size their store accordingly.
+#:
+#: Advertising it also means the caller should EXPECT APPROXIMATE recall: an ANN
+#: index may omit a true nearest neighbour. ``Memory.health()`` already widens
+#: its retrievability probe to a membership window for exactly this reason, so
+#: an approximate self-match that is not top-1 does not read as dead ingestion.
+#:
+#: The reference SQLite adapter deliberately does NOT advertise it: it is an
+#: exact, cached, vectorized full scan.
+CAP_VECTOR_INDEX = "vector_index"
 
 
 class UnsupportedCapabilityError(Exception):

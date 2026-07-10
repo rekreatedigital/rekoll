@@ -7,20 +7,28 @@ This is the default backend and the executable example of the canonical schema:
    (record_metadata, record_links) — never an unbounded JSON blob.
  - Per-scope embedder identity is persisted for the guard.
 
-Vector search is computed in pure Python over stored vectors here so the
-foundation runs with zero native/ML dependencies. P1 swaps in sqlite-vec + a
-real local embedding model; the adapter contract does not change.
+Vector search is an EXACT full scan over stored vectors — no index, no ANN, so
+the foundation runs with zero native/ML dependencies and top-k is always exact.
+The scan is made cheap rather than made approximate (ADR-0030): decoded vectors
+and their norms are cached per (table, scope) and invalidated on write, and the
+scoring inner loop is vectorized with numpy *only if numpy is already loaded*.
+The zero-dependency pure-Python path remains the default and is bit-exact.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
+import sys
+from array import array
 from datetime import datetime
+from functools import reduce
+from operator import add, mul
 from typing import Mapping, Optional, Sequence
 
-from ..embedding import EmbedderIdentity, cosine
+from ..embedding import EmbedderIdentity
 from ..model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 from .base import CAP_LEXICAL, CAP_VECTOR, GetResult, QueryHit, QueryResult, StorageAdapter
 
@@ -98,18 +106,224 @@ def _fts_query(text: str) -> Optional[str]:
     return " OR ".join(f'"{t}"' for t in unique)
 
 
+VECTOR_BACKENDS = ("auto", "numpy", "python")
+
+#: How many decoded vectors the scan cache may hold across all (table, scope)
+#: entries before it starts evicting least-recently-scanned ones. Each cached
+#: vector costs ``8 * dim`` bytes (an ``array('d')``, not a list of boxed
+#: floats), so the default is ~150 MB at dim=384 — generous for a local-first
+#: store, and BOUNDED, which an unbounded cache in a long-lived MCP server
+#: serving many scopes would not be. A scope larger than the whole budget is
+#: simply never cached: it re-decodes per query, exactly as the pre-ADR-0030
+#: brute-force scan did. Correctness never depends on this number.
+DEFAULT_VECTOR_CACHE_MAX_VECTORS = 50_000
+
+
+def _norm(vec: Sequence[float]) -> float:
+    """L2 norm accumulated in the SAME order as ``embedding.cosine``'s ``nb``
+    loop, so the pure-Python score below stays bit-identical to ``cosine()``."""
+    n = 0.0
+    for y in vec:
+        n += y * y
+    return math.sqrt(n)
+
+
+class _CachedVector:
+    __slots__ = ("status", "trust", "vec", "norm", "dim")
+
+    def __init__(self, status: str, trust: int, vec: Sequence[float]) -> None:
+        self.status = status
+        self.trust = trust
+        # array('d') holds raw C doubles: 8 bytes each instead of a list's
+        # 8-byte pointer + 24-byte float object (4x smaller at dim=384). The
+        # values are the identical doubles json.loads produced, so the scores
+        # stay bit-exact.
+        self.vec = vec if isinstance(vec, array) else array("d", vec)
+        self.norm = _norm(self.vec)
+        self.dim = len(self.vec)
+
+
+class _ScanCache:
+    """Decoded embeddings for one (table, scope_key), in ROWID ORDER.
+
+    Holds only what the SCAN needs — id, status, trust_tier, vector, norm, dim.
+    Never a whole record: ``vector_query`` re-reads the top-k rows from SQLite,
+    so every column the caller actually sees is live, not cached.
+
+    ``rows`` is an insertion-ordered dict, and that ordering IS the rowid
+    ordering — maintained, not re-derived. The three mutations SQLite performs
+    map exactly onto the three dict mutations:
+
+      INSERT                 -> new rowid at the end   -> ``rows[id] = v``
+      INSERT OR REPLACE      -> delete + insert, so the rowid moves to the end
+                                -> ``rows.pop(id)`` then ``rows[id] = v``
+      DELETE                 -> row gone               -> ``rows.pop(id)``
+
+    That correspondence is what lets a write update the cache in place instead of
+    dropping it, and it is asserted directly by the randomized order test in
+    tests/test_vector_scan_equivalence.py.
+    """
+
+    __slots__ = ("data_version", "rows", "_mats")
+
+    def __init__(self, data_version: int) -> None:
+        self.data_version = data_version
+        self.rows: dict[str, _CachedVector] = {}
+        self._mats: dict[int, tuple] = {}
+
+    def put(self, rid: str, entry: Optional[_CachedVector]) -> None:
+        self._mats.clear()
+        self.rows.pop(rid, None)  # replace => the row moves to the end
+        if entry is not None:  # a row with no embedding simply leaves the scan
+            self.rows[rid] = entry
+
+    def drop(self, rid: str) -> None:
+        if self.rows.pop(rid, None) is not None:
+            self._mats.clear()
+
+    def matrix_for_dim(self, np, dim: int):
+        """(ids, matrix, norms) for the rows of dimension ``dim``, in rowid order.
+
+        Grouped by dim because a mid-flight embedder swap leaves vectors of two
+        widths in one scope; the scan skips the non-matching ones (it does not
+        crash and does not truncate), so they must not enter the matmul.
+        """
+        cached = self._mats.get(dim)
+        if cached is None:
+            ids = [rid for rid, v in self.rows.items() if v.dim == dim]
+            mat = np.array([self.rows[i].vec for i in ids], dtype=np.float64).reshape(len(ids), dim)
+            norms = np.array([self.rows[i].norm for i in ids], dtype=np.float64)
+            cached = (ids, mat, norms)
+            self._mats[dim] = cached
+        return cached
+
+
 class SQLiteAdapter(StorageAdapter):
     name = "sqlite"
     capabilities = frozenset({CAP_VECTOR, CAP_LEXICAL})
     distance_metric = "cosine"
 
-    def __init__(self, path: str = ":memory:") -> None:
+    def __init__(
+        self,
+        path: str = ":memory:",
+        *,
+        vector_backend: str = "auto",
+        vector_cache_max_vectors: int = DEFAULT_VECTOR_CACHE_MAX_VECTORS,
+    ) -> None:
+        if vector_backend not in VECTOR_BACKENDS:
+            raise ValueError(
+                f"unknown vector_backend {vector_backend!r}; "
+                f"expected one of {list(VECTOR_BACKENDS)}"
+            )
+        if vector_cache_max_vectors < 0:
+            raise ValueError("vector_cache_max_vectors must be >= 0 (0 disables the cache)")
         self.path = path
+        self.vector_backend = vector_backend
+        self.vector_cache_max_vectors = vector_cache_max_vectors
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         if path != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL")
         self._create_schema()
+        # Scan cache, keyed (table, scope_key).
+        #
+        # Writes through THIS adapter update it IN PLACE (we know exactly which
+        # rows moved), so the common remember()-then-recall() cycle never pays a
+        # rebuild. Writes by ANY OTHER connection or process on the same file are
+        # caught by ``PRAGMA data_version``, which SQLite bumps for foreign
+        # commits and deliberately does NOT bump for our own; a mismatch forces a
+        # full rebuild. Without that second half, a second process writing the
+        # same .db would be served stale vectors forever.
+        self._scan_cache: dict[tuple[str, str], _ScanCache] = {}
+
+    # -- vector-scan backend ------------------------------------------------
+    def _numpy(self):
+        """The numpy module to vectorize with, or None to stay pure-Python.
+
+        ``auto`` (the default) NEVER imports numpy — it only uses it if
+        something else already has. That keeps the zero-dependency default path
+        honestly zero-dependency (``import rekoll`` + a StubEmbedder recall
+        pulls in nothing), while a user on the ``[embeddings]`` extra gets the
+        fast path for free: fastembed imports numpy, so by the time any real
+        vector exists numpy is already resident. ``numpy`` forces it (and raises
+        if absent); ``python`` pins the fallback.
+        """
+        if self.vector_backend == "python":
+            return None
+        if self.vector_backend == "numpy":
+            import numpy  # noqa: PLC0415 - deliberately lazy
+
+            return numpy
+        return sys.modules.get("numpy")
+
+    def _data_version(self) -> int:
+        return self._conn.execute("PRAGMA data_version").fetchone()[0]
+
+    def _apply_cache_writes(self, mutations: Sequence[tuple]) -> None:
+        """Fold committed row mutations into any live cache entry.
+
+        Applied only AFTER a successful commit, so a rolled-back batch leaves the
+        cache exactly as it found it. Entries that were never built are skipped —
+        they will be filled from SQLite on first query.
+        """
+        for op, table, skey, rid, entry in mutations:
+            cached = self._scan_cache.get((table, skey))
+            if cached is None:
+                continue
+            if op == "put":
+                cached.put(rid, entry)
+            else:
+                cached.drop(rid)
+        if mutations:
+            # A long ingest can grow a live entry past the budget one row at a
+            # time; it must not escape the bound just because it never re-scanned.
+            self._evict_to_budget()
+
+    def _cached_vector_count(self) -> int:
+        return sum(len(e.rows) for e in self._scan_cache.values())
+
+    def _evict_to_budget(self, protect: Optional[tuple[str, str]] = None) -> None:
+        """Drop least-recently-scanned entries until the budget is met.
+
+        ``self._scan_cache`` doubles as the LRU order: ``_scan`` re-inserts the
+        entry it serves, moving it to the end, so the front is the coldest.
+        """
+        total = self._cached_vector_count()
+        for key in list(self._scan_cache):
+            if total <= self.vector_cache_max_vectors:
+                return
+            if key == protect:
+                continue
+            total -= len(self._scan_cache.pop(key).rows)
+
+    def _scan(self, table: str, skey: str, data_version: int) -> _ScanCache:
+        key = (table, skey)
+        entry = self._scan_cache.get(key)
+        if entry is not None and entry.data_version == data_version:
+            self._scan_cache[key] = self._scan_cache.pop(key)  # LRU: touch
+            return entry
+        entry = _ScanCache(data_version)
+        # Explicit rowid order: the pre-cache scan relied on SQLite's
+        # implementation-defined row order to break exact score ties. Pinning it
+        # makes tie order deterministic AND equal to what the old unordered scan
+        # returned in practice (a table/index walk is already rowid-ascending).
+        rows = self._conn.execute(
+            f"SELECT id, status, trust_tier, embedding FROM {table} "
+            f"WHERE scope_key=? AND embedding IS NOT NULL ORDER BY rowid",
+            (skey,),
+        ).fetchall()
+        for row in rows:
+            entry.rows[row["id"]] = _CachedVector(
+                row["status"], row["trust_tier"], json.loads(row["embedding"])
+            )
+        self._scan_cache.pop(key, None)
+        if len(entry.rows) <= self.vector_cache_max_vectors:
+            self._scan_cache[key] = entry
+            self._evict_to_budget(protect=key)
+        # else: this scope alone exceeds the budget. Serve the freshly decoded
+        # scan and let it be garbage-collected — i.e. fall back to exactly the
+        # pre-ADR-0030 cost model. Bounded memory beats a fast wrong promise.
+        return entry
 
     # -- schema -------------------------------------------------------------
     def _create_schema(self) -> None:
@@ -194,15 +408,17 @@ class SQLiteAdapter(StorageAdapter):
         self._write(records, replace=True)
 
     def _write(self, records: Sequence[MemoryRecord], *, replace: bool) -> None:
+        mutations: list[tuple] = []
         try:
             for record in records:
-                self._write_one(record, replace=replace)
+                self._write_one(record, replace=replace, mutations=mutations)
             self._conn.commit()
         except Exception:
             self._conn.rollback()
-            raise
+            raise  # mutations discarded: the cache still mirrors the rolled-back DB
+        self._apply_cache_writes(mutations)
 
-    def _write_one(self, r: MemoryRecord, *, replace: bool) -> None:
+    def _write_one(self, r: MemoryRecord, *, replace: bool, mutations: list[tuple]) -> None:
         table = _KIND_TABLE[r.kind]
         proof_count = r.proof_count
         if replace:
@@ -238,6 +454,8 @@ class SQLiteAdapter(StorageAdapter):
                     self._conn.execute("DELETE FROM record_metadata WHERE record_id=?", (old,))
                     self._conn.execute("DELETE FROM record_links WHERE record_id=?", (old,))
                     self._conn.execute("DELETE FROM fts WHERE rid=?", (old,))
+                    # the UNIQUE conflict below will drop the displaced row too
+                    mutations.append(("drop", table, r.scope.key(), old, None))
                 # else same_id: fall through to update in place (idempotent
                 # re-ingest / re-embed) — trust is equal or higher, never lower.
                 #
@@ -250,7 +468,22 @@ class SQLiteAdapter(StorageAdapter):
                 # (an import/restore carrying usage) may still raise it.
                 proof_count = max(int(prior["proof_count"]), proof_count)
         verb = "INSERT OR REPLACE" if replace else "INSERT"
-        embedding = json.dumps(list(r.embedding)) if r.embedding is not None else None
+        vector = list(r.embedding) if r.embedding is not None else None
+        embedding = json.dumps(vector) if vector is not None else None
+        # The row lands at the END of the table (a fresh INSERT, or a REPLACE
+        # that deletes then re-inserts), so the cache appends it at the end too.
+        # A record with no embedding drops out of the scan entirely.
+        mutations.append(
+            (
+                "put",
+                table,
+                r.scope.key(),
+                r.id,
+                None
+                if vector is None
+                else _CachedVector(r.status.value, int(r.trust_tier), vector),
+            )
+        )
         placeholders = ",".join("?" * 25)
         self._conn.execute(
             f"{verb} INTO {table} ({_INSERT_COLUMNS}) VALUES ({placeholders})",
@@ -317,12 +550,14 @@ class SQLiteAdapter(StorageAdapter):
         # ADR-0003 isolation violation. We only ever touch child/FTS rows for ids
         # confirmed to belong to this scope.
         in_scope: list[str] = []
+        mutations: list[tuple] = []
         for table in _KIND_TABLE.values():
             rows = self._conn.execute(
                 f"SELECT id FROM {table} WHERE scope_key=? AND id IN ({placeholders})",
                 (skey, *ids),
             ).fetchall()
             in_scope.extend(row["id"] for row in rows)
+            mutations.extend(("drop", table, skey, row["id"], None) for row in rows)
         removed = 0
         for table in _KIND_TABLE.values():
             cur = self._conn.execute(
@@ -336,6 +571,7 @@ class SQLiteAdapter(StorageAdapter):
             self._conn.execute(f"DELETE FROM record_links WHERE record_id IN ({ph})", tuple(in_scope))
             self._conn.execute(f"DELETE FROM fts WHERE rid IN ({ph})", tuple(in_scope))
         self._conn.commit()
+        self._apply_cache_writes(mutations)
         return removed
 
     def bump_proof_count(self, *, scope: Scope, ids: Sequence[str]) -> int:
@@ -358,6 +594,12 @@ class SQLiteAdapter(StorageAdapter):
             )
             credited += cur.rowcount
         self._conn.commit()
+        # NO scan-cache mutation on purpose. This touches exactly one column —
+        # proof_count — and the cache holds none of it (id/status/trust_tier/
+        # vector/norm only); the records handed back by vector_query are re-read
+        # from SQLite, so the fresh count is always what the caller sees. Since
+        # mark_used() fires after every recall, dropping the cache here would
+        # throw it away on every read cycle and undo the whole optimization.
         return credited
 
     # -- reads --------------------------------------------------------------
@@ -430,34 +672,102 @@ class SQLiteAdapter(StorageAdapter):
                 )
         query_vec = [float(x) for x in embedding]
         qdim = len(query_vec)
+        if k <= 0:
+            return QueryResult(hits=())
         skey = scope.key()
         tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
         status_filter = where.get("status") if where else None
-        min_trust = where.get("min_trust") if where else None
-        scored: list[tuple[float, sqlite3.Row]] = []
+        min_trust = None if not where or where.get("min_trust") is None else int(where["min_trust"])
+        # qnorm accumulated exactly as embedding.cosine's `na` loop does.
+        qn = 0.0
+        for x in query_vec:
+            qn += x * x
+        qnorm = math.sqrt(qn)
+
+        np = self._numpy()
+        data_version = self._data_version()
+        scored: list[tuple[float, str, str]] = []  # (score, table, id) in scan order
         for table in tables:
-            sql = f"SELECT * FROM {table} WHERE scope_key=? AND embedding IS NOT NULL"
-            params: list[object] = [skey]
-            if status_filter is not None:
-                sql += " AND status=?"
-                params.append(status_filter)
-            if min_trust is not None:
-                sql += " AND trust_tier>=?"
-                params.append(int(min_trust))
-            for row in self._conn.execute(sql, params).fetchall():
-                stored = json.loads(row["embedding"])
-                if len(stored) != qdim:
-                    # Vectors from a different embedder/dim (e.g. after a model
-                    # swap) are not comparable — skip them rather than crash, so
-                    # keyword recall still works while vectors are re-embedded.
+            entry = self._scan(table, skey, data_version)
+            # Rows of a different dim come from a different embedder (e.g. a
+            # model swap mid-scope). They are not comparable, so they are
+            # skipped — not crashed on, not truncated — and keyword recall keeps
+            # working while the scope is re-embedded.
+            if np is None:
+                for rid, v in entry.rows.items():
+                    if v.dim != qdim:
+                        continue
+                    if status_filter is not None and v.status != status_filter:
+                        continue
+                    if min_trust is not None and v.trust < min_trust:
+                        continue
+                    denom = qnorm * v.norm
+                    # reduce(add, ...) is a NAIVE left fold, matching cosine()'s
+                    # `dot += x*y` accumulation bit for bit. Do not swap in the
+                    # builtin sum(): since 3.12 it applies Neumaier compensated
+                    # summation to floats, which is more accurate and therefore
+                    # NOT equal to the score this adapter returned before.
+                    dot = reduce(add, map(mul, query_vec, v.vec), 0.0)
+                    scored.append((dot / denom if denom else 0.0, table, rid))
+            else:
+                dim_ids, mat, dim_norms = entry.matrix_for_dim(np, qdim)
+                if not dim_ids:
                     continue
-                scored.append((cosine(query_vec, stored), row))
+                rows = entry.rows
+                if status_filter is None and min_trust is None:
+                    keep = dim_ids  # whole dim group survives; skip the gather
+                else:
+                    local = [
+                        j
+                        for j, rid in enumerate(dim_ids)
+                        if (status_filter is None or rows[rid].status == status_filter)
+                        and (min_trust is None or rows[rid].trust >= min_trust)
+                    ]
+                    if not local:
+                        continue
+                    keep = [dim_ids[j] for j in local]
+                    mat = mat[local]
+                    dim_norms = dim_norms[local]
+                denom = dim_norms * qnorm
+                dots = mat @ np.asarray(query_vec, dtype=np.float64)
+                scores = np.divide(dots, denom, out=np.zeros_like(dots), where=denom != 0.0)
+                scored.extend(zip(scores.tolist(), [table] * len(keep), keep))
+        # Stable sort: exact ties keep scan order (table order, then rowid) —
+        # the same tiebreak the old unordered brute-force scan produced.
         scored.sort(key=lambda item: item[0], reverse=True)
+        top = scored[:k]
+        if not top:
+            return QueryResult(hits=())
+        rows_by_key = self._rows_for(skey, top)
         hits = tuple(
-            QueryHit(record=self._row_to_record(row), score=score)
-            for score, row in scored[: max(0, k)]
+            QueryHit(record=self._row_to_record(rows_by_key[(table, rid)]), score=score)
+            for score, table, rid in top
         )
         return QueryResult(hits=hits)
+
+    def _rows_for(
+        self, skey: str, want: Sequence[tuple[float, str, str]]
+    ) -> dict[tuple[str, str], sqlite3.Row]:
+        """Full rows for the winners only.
+
+        The scan used to ``SELECT *`` every candidate row just to throw all but
+        ``k`` of them away. Fetching the top-k by id after ranking keeps the
+        record data live (nothing about a returned record is served from cache)
+        while reading ~k rows instead of N.
+        """
+        by_table: dict[str, list[str]] = {}
+        for _, table, rid in want:
+            by_table.setdefault(table, []).append(rid)
+        out: dict[tuple[str, str], sqlite3.Row] = {}
+        for table, ids in by_table.items():
+            placeholders = ",".join("?" * len(ids))
+            rows = self._conn.execute(
+                f"SELECT * FROM {table} WHERE scope_key=? AND id IN ({placeholders})",
+                (skey, *ids),
+            ).fetchall()
+            for row in rows:
+                out[(table, row["id"])] = row
+        return out
 
     def lexical_query(
         self,
@@ -540,6 +850,7 @@ class SQLiteAdapter(StorageAdapter):
         self._conn.commit()
 
     def close(self) -> None:
+        self._scan_cache.clear()
         self._conn.close()
 
     # -- reconstruction -----------------------------------------------------
