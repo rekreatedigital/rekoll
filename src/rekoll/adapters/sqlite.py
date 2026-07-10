@@ -740,15 +740,40 @@ class SQLiteAdapter(StorageAdapter):
         # Stable sort: exact ties keep scan order (table order, then rowid) —
         # the same tiebreak the old unordered brute-force scan produced.
         scored.sort(key=lambda item: item[0], reverse=True)
-        top = scored[:k]
-        if not top:
+        if not scored:
             return QueryResult(hits=())
-        rows_by_key = self._rows_for(skey, top)
-        hits = tuple(
-            QueryHit(record=self._row_to_record(rows_by_key[(table, rid)]), score=score)
-            for score, table, rid in top
-        )
-        return QueryResult(hits=hits)
+        # TOCTOU window (PR #42 review): the ranking above is consistent with
+        # the ``data_version`` snapshot, but ``_rows_for`` re-reads the winners
+        # LIVE. A foreign connection committing inside that window can DELETE a
+        # winner (its key is then absent from ``rows_by_key``) or UPDATE one
+        # below the status/min_trust gate that admitted it from the cache.
+        # INVARIANT: the cached path never returns a result the old
+        # single-snapshot scan could not have returned. So absent winners are
+        # SKIPPED (mirroring lexical_query's ``if rid in records`` guard),
+        # every row is re-checked against the SAME filters on its LIVE columns,
+        # and dropped winners are BACKFILLED from the scored tail — yielding
+        # exactly what the old scan would have returned had the foreign commit
+        # landed just before its single read. Backfill fetches one batch per
+        # round via ``_rows_for`` (never a per-row query), and backfilled
+        # candidates pass the same live re-checks; the loop ends at k live
+        # winners or when the candidates are exhausted. The no-race common
+        # case stays a single ``_rows_for`` round-trip over ``scored[:k]``.
+        hits: list[QueryHit] = []
+        pos = 0
+        while len(hits) < k and pos < len(scored):
+            batch = scored[pos : pos + (k - len(hits))]
+            pos += len(batch)
+            rows_by_key = self._rows_for(skey, batch)
+            for score, table, rid in batch:
+                row = rows_by_key.get((table, rid))
+                if row is None:  # deleted (or re-scoped) inside the window
+                    continue
+                if status_filter is not None and row["status"] != status_filter:
+                    continue
+                if min_trust is not None and row["trust_tier"] < min_trust:
+                    continue
+                hits.append(QueryHit(record=self._row_to_record(row), score=score))
+        return QueryResult(hits=tuple(hits))
 
     def _rows_for(
         self, skey: str, want: Sequence[tuple[float, str, str]]
