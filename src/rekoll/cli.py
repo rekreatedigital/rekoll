@@ -301,6 +301,19 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         f"({stats['chunks']} chunk{'s' if stats['chunks'] != 1 else ''}). "
         f"The store now holds {stats['total']} memories."
     )
+    # Credential-shaped files ingested anyway (a direct path bypasses the
+    # filename filter, #29/#41). The core already warns via ``warnings``, but a
+    # CLI user should see it on the result line too, not only if warnings render
+    # — counts, never names (the names are printed nowhere). stderr keeps stdout
+    # (the machine-readable result) stable.
+    if stats.get("secrets_stored", 0) > 0:
+        n = stats["secrets_stored"]
+        _err(
+            f"rekoll: warning: {n} credential-shaped file{'s' if n != 1 else ''} "
+            f"(name suggests .env / credentials / private key) {'were' if n != 1 else 'was'} "
+            "STORED as memory — now recallable and carried by any export. "
+            "Review, then `rekoll forget <id>` to remove."
+        )
     return 0
 
 

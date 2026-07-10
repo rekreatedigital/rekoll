@@ -366,6 +366,32 @@ def test_ingest_file_reports_counts(project, capsys):
     assert main(["recall", "syn ack handshake"]) == 0
 
 
+def test_ingest_direct_credentials_file_warns_that_a_secret_was_stored(project, capsys):
+    """Issue #41: pointing `rekoll ingest` straight at a credential-shaped file
+    bypasses the filename filter and STORES it. The result must say so — a
+    warning line on stderr (a count, never the name) — so the operator isn't left
+    with a silently-recallable secret. stdout stays the machine-readable result."""
+    (project / "credentials.json").write_text(
+        '{"api_key": "sk-not-a-real-key"}', encoding="utf-8"
+    )
+    assert main(["ingest", "credentials.json"]) == 0
+    captured = capsys.readouterr()
+    assert "Indexed 1 file" in captured.out
+    # The warning is on stderr, and carries a COUNT, not the filename.
+    assert "STORED as memory" in captured.err
+    assert "credential-shaped" in captured.err
+    assert "credentials.json" not in captured.out  # never the name on the result line
+
+
+def test_ingest_normal_file_prints_no_secret_warning(project, capsys):
+    """The secret warning fires ONLY when a secret was actually stored — a normal
+    ingest is silent about it (the discriminating negative of the case above)."""
+    (project / "notes.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    assert main(["ingest", "notes.md"]) == 0
+    captured = capsys.readouterr()
+    assert "STORED as memory" not in captured.err
+
+
 def test_ingest_directory_walks_and_counts_files(project, capsys):
     (project / "a.md").write_text("Alpha document about caching.", encoding="utf-8")
     sub = project / "sub"

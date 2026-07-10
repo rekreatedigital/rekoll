@@ -603,10 +603,16 @@ class Memory:
     ) -> dict:
         """Index a file or directory (code + docs).
 
-        Returns ``{files, chunks, skipped, filtered, total}`` — ``skipped``
-        counts files passed over (symlink, over ``max_file_bytes``, over
-        ``max_chunks_per_doc``, undecodable, or unreadable); ``filtered``
-        counts walk candidates excluded by the filename filter (see below).
+        Returns ``{files, chunks, skipped, filtered, secrets_skipped,
+        secrets_stored, total}`` — ``skipped`` counts files passed over
+        (symlink, over ``max_file_bytes``, over ``max_chunks_per_doc``,
+        undecodable, or unreadable); ``filtered`` counts walk candidates
+        excluded by the filename filter (see below); ``secrets_skipped`` counts
+        credential-shaped files the walk excluded, and ``secrets_stored`` counts
+        credential-shaped files that were ingested anyway (via override or a
+        direct path). The two secrets counts carry the "#29 never silently"
+        signal for callers that cannot see ``warnings`` — e.g. across the MCP
+        door (issue #41). Counts only, never names.
 
         Filtering is one two-level system (ADR-0027). Directory level:
         ``skip_dirs`` (default ``DEFAULT_SKIP_DIRS``) prunes directories by
@@ -655,7 +661,10 @@ class Memory:
                 "the intended tree. Pass follow_symlinks=True to read it.",
                 stacklevel=2,
             )
-            return {"files": 0, "chunks": 0, "skipped": 1, "filtered": 0, "total": self.count()}
+            return {
+                "files": 0, "chunks": 0, "skipped": 1, "filtered": 0,
+                "secrets_skipped": 0, "secrets_stored": 0, "total": self.count(),
+            }
         root_real = _real_path(root)
         single_file = root.is_file()
         targets = [root] if single_file else list(self._walk(root, include, skip))
@@ -764,9 +773,19 @@ class Memory:
                 "export. Use forget() on their records if this was unintended.",
                 stacklevel=2,
             )
+        # ``secrets_skipped`` / ``secrets_stored`` are COUNTS, never names (the
+        # names are the operator's business and are exactly what an injected
+        # instruction would want echoed back — L-mcp-rootleak, ADR-0027). They
+        # carry the "#29 never silently" signal across a boundary that warnings
+        # cannot cross (stdio): a folder ingest that quietly excluded a
+        # credential-shaped file reports secrets_skipped>0, and an explicit
+        # override or direct-path ingest that STORED one reports
+        # secrets_stored>0 — the count the warnings above already computed
+        # (issue #41).
         return {
             "files": files, "chunks": chunks, "skipped": skipped,
-            "filtered": filtered, "total": self.count(),
+            "filtered": filtered, "secrets_skipped": len(secrets_skipped),
+            "secrets_stored": len(secrets_ingested), "total": self.count(),
         }
 
     def forget(self, *ids: str) -> int:

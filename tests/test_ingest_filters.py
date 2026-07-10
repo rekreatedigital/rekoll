@@ -328,11 +328,18 @@ def test_returned_counts_are_coherent(tmp_path):
     mem = _mem()
     with pytest.warns(UserWarning):
         stats = mem.ingest_path(str(repo))
-    assert set(stats) == {"files", "chunks", "skipped", "filtered", "total"}
+    assert set(stats) == {
+        "files", "chunks", "skipped", "filtered",
+        "secrets_skipped", "secrets_stored", "total",
+    }
     assert stats["files"] == 2  # the two legit files
     assert stats["chunks"] >= 2
     assert stats["skipped"] == 0  # nothing errored — filtering is not 'skipped'
     assert stats["filtered"] == 3  # lockfile + two secrets (walk candidates only:
     # env/ was pruned at directory level and never became a candidate)
+    # Of the three filtered, exactly the two credential-shaped ones are counted
+    # as secrets_skipped (issue #41); none were stored (the walk excluded them).
+    assert stats["secrets_skipped"] == 2
+    assert stats["secrets_stored"] == 0
     assert stats["total"] == mem.count()
     mem.close()
