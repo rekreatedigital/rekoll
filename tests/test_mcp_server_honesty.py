@@ -156,6 +156,28 @@ def test_ingest_path_surfaces_the_cores_skipped_count(tmp_path):
     assert out["skipped"] == 1  # the model is told, not left to infer from silence
 
 
+def test_ingest_path_carries_every_key_the_core_reports(tmp_path):
+    """``mcp_server._ingest_path`` copies the core's stats key by key, so a key
+    ADDED to ``Memory.ingest_path``'s return dict would be silently dropped at
+    the boundary — the same class of gap as the missing ``mode`` (issue #25):
+    the door quietly reports less than the engine knows.
+
+    This fails loudly instead, forcing a decision about whether the new key
+    belongs on the LLM-facing surface.
+    """
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+
+    core_keys = set(_mem().ingest_path(str(docs), follow_symlinks=False))
+    door_keys = set(_ingest_path(_mem(), tmp_path.resolve(), "docs"))
+    assert door_keys == core_keys, (
+        f"the MCP door reports {sorted(door_keys)} but Memory.ingest_path returns "
+        f"{sorted(core_keys)} — carry the new key across the boundary (or decide, "
+        "in mcp_server._ingest_path, that the calling model must not see it)"
+    )
+
+
 # -- 3. results: the retrieval mode crosses the boundary -------------------------
 
 def _degraded_mem(tmp_path: Path) -> Memory:
