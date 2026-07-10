@@ -220,6 +220,11 @@ class SQLiteAdapter(StorageAdapter):
         self.path = path
         self.vector_backend = vector_backend
         self.vector_cache_max_vectors = vector_cache_max_vectors
+        if vector_backend == "numpy":
+            # Fail here, not on the first read. Asking for the vectorized backend
+            # on a box without numpy is a configuration error, and a store that
+            # only reveals it under query load reveals it in production.
+            self._numpy()
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         if path != ":memory:":
@@ -796,8 +801,9 @@ class SQLiteAdapter(StorageAdapter):
         status_filter = where.get("status") if where else None
         min_trust = where.get("min_trust") if where else None
         has_filter = status_filter is not None or min_trust is not None
+        skey = scope.key()
         sql = "SELECT rid, bm25(fts) AS s FROM fts WHERE fts MATCH ? AND scope_key=?"
-        params: list[object] = [match, scope.key()]
+        params: list[object] = [match, skey]
         if kind is not None:
             sql += " AND kind=?"
             params.append(kind.value)
@@ -814,22 +820,67 @@ class SQLiteAdapter(StorageAdapter):
         rows = self._conn.execute(sql, params).fetchall()
         if not rows:
             return QueryResult(hits=())
-        records = {
-            r.id: r for r in self.get(scope=scope, ids=[row["rid"] for row in rows]).records
-        }
-        hits: list[QueryHit] = []
+        # Rank and filter on two cheap scalar columns, THEN reconstruct only the
+        # k winners. Building a full MemoryRecord costs two child-table queries
+        # and a json.loads of the embedding; doing that for every MATCH row just
+        # to keep k of them made a 1k-record recall spend most of its time
+        # decoding vectors it would immediately discard.
+        gate = self._filter_columns(skey, [row["rid"] for row in rows])
+        chosen: list[tuple[str, float]] = []
         for row in rows:
-            record = records.get(row["rid"])
-            if record is None:
+            probe = gate.get(row["rid"])
+            if probe is None:  # an fts row whose record is gone, or out of scope
                 continue
-            if status_filter is not None and record.status.value != status_filter:
+            status, trust = probe
+            if status_filter is not None and status != status_filter:
                 continue
-            if min_trust is not None and int(record.trust_tier) < int(min_trust):
+            if min_trust is not None and trust < int(min_trust):
                 continue
-            hits.append(QueryHit(record=record, score=-float(row["s"])))  # bm25: lower is better
-            if len(hits) >= k:
+            chosen.append((row["rid"], -float(row["s"])))  # bm25: lower is better
+            if len(chosen) >= k:
                 break
-        return QueryResult(hits=tuple(hits))
+        if not chosen:
+            return QueryResult(hits=())
+        records = {r.id: r for r in self.get(scope=scope, ids=[rid for rid, _ in chosen]).records}
+        return QueryResult(
+            hits=tuple(
+                QueryHit(record=records[rid], score=score)
+                for rid, score in chosen
+                if rid in records
+            )
+        )
+
+    def _filter_columns(self, skey: str, ids: Sequence[str]) -> dict[str, tuple[str, int]]:
+        """``{id: (status, trust_tier)}`` for in-scope ids — the two columns the
+        read-path filters gate on, without reconstructing a record.
+
+        ``status`` is the EFFECTIVE status, i.e. what ``MemoryRecord`` would
+        report. Quarantine-level trust forces ``status=quarantined`` at
+        construction (``model.MemoryRecord.__post_init__``), so a row whose
+        stored status column still says ``active`` — written by an older Rekoll,
+        or by hand — must be gated as quarantined here too. Reading the raw
+        column instead would let it surface through a ``status='active'`` filter.
+        """
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        active = Status.ACTIVE.value
+        quarantined = Status.QUARANTINED.value
+        floor = int(TrustTier.QUARANTINED)
+        out: dict[str, tuple[str, int]] = {}
+        for table in _KIND_TABLE.values():
+            rows = self._conn.execute(
+                f"SELECT id, status, trust_tier FROM {table} "
+                f"WHERE scope_key=? AND id IN ({placeholders})",
+                (skey, *ids),
+            ).fetchall()
+            for row in rows:
+                trust = int(row["trust_tier"])
+                status = row["status"]
+                if trust <= floor and status == active:
+                    status = quarantined
+                out[row["id"]] = (status, trust)
+        return out
 
     # -- embedder identity --------------------------------------------------
     def get_embedder_identity(self, *, scope: Scope) -> Optional[EmbedderIdentity]:

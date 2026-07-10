@@ -41,8 +41,11 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   "~±20% cap") is **resolved** to a single story — a bounded multiplicative trust
   factor capped near ±20%, QUARANTINED excluded (ADR-0021) — still future work to
   implement.
-- `sqlite-vec` acceleration (§5): vector search is currently an exact pure-Python
-  cosine scan. The adapter contract is unchanged; only the index backend is pending.
+- `sqlite-vec` acceleration (§5): vector search is an exact **cached** cosine scan —
+  decoded vectors are held per scope and scored with numpy when numpy is already
+  loaded, pure Python otherwise (ADR-0030). Exact top-k, no ANN, still O(N·dim).
+  A backend served by a real vector index advertises `CAP_VECTOR_INDEX`; SQLite
+  does not. The adapter contract is unchanged; only the index backend is pending.
 - The RRF **interleave** alternative (§7); real **LongMemEval/LoCoMo** gates (only a
   keyword smoke fixture exists); the Node/`npx` MCP wrapper, the REST API,
   DB-schema/row ingestion, and the TS client.

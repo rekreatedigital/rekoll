@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 
 import pytest
 
@@ -632,6 +633,36 @@ def test_auto_backend_rides_a_resident_numpy():
 def test_unknown_backend_is_rejected_loudly():
     with pytest.raises(ValueError, match="unknown vector_backend"):
         SQLiteAdapter(":memory:", vector_backend="hnsw")
+
+
+def test_numpy_backend_fails_fast_when_numpy_is_absent(monkeypatch):
+    """A store that only reveals a missing numpy under query load reveals it in
+    production. `sys.modules[name] = None` is the stdlib way to make `import
+    name` raise, so this is what a box without the [embeddings] extra sees."""
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    with pytest.raises(ImportError):
+        SQLiteAdapter(":memory:", vector_backend="numpy")
+
+
+def test_auto_falls_back_to_pure_python_when_numpy_is_absent(monkeypatch):
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    a = SQLiteAdapter(":memory:")
+    assert a._numpy() is None
+    a.add(records=[_rec(i) for i in range(5)])
+    _assert_same(a, exact=True, scope=SCOPE, embedding=_vec(1), k=3)
+    a.close()
+
+
+def test_full_conformance_suite_passes_on_both_backends(backend):
+    """`auto` resolves to numpy or pure Python depending on what else the process
+    has imported. Neither is allowed to be the only one the contract holds for."""
+    from rekoll import conformance
+    from rekoll.embedding import StubEmbedder
+
+    passed = conformance.run_all(
+        lambda: SQLiteAdapter(":memory:", vector_backend=backend), StubEmbedder()
+    )
+    assert len(passed) == len(conformance.ALL_CHECKS)
 
 
 def test_sqlite_adapter_does_not_advertise_a_vector_index():
