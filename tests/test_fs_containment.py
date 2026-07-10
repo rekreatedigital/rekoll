@@ -92,6 +92,37 @@ def test_junction_dir_escape_is_not_walked_into_by_core(tmp_path):
     assert "secret-marker" not in text, "junction escaped the ingestion root"
     assert "safe-marker" in text, "the legitimate in-root file must still ingest"
     assert stats["files"] == 1  # only note.md; the junction subtree is not descended
+    # skipped==0 is what makes WALK-level containment observable: if os.walk
+    # DESCENDED the junction and only the per-file check caught the outside
+    # file, skipped would be 1 — and a junction to a huge tree (think C:\)
+    # would be walked and stat-ed file by file: an availability hole. The
+    # out-of-tree directory must be pruned BEFORE descent, not cleaned up
+    # after.
+    assert stats["skipped"] == 0, "outside dir was descended and skipped file-by-file"
+    mem.close()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_junction_dir_escape_is_not_walked_even_under_follow_symlinks(tmp_path):
+    # follow_symlinks=True opts into reading linked FILES — it must never
+    # extend to descending an out-of-tree DIRECTORY (the ingest_path docstring
+    # promises "directory links are never descended, even under
+    # follow_symlinks=True"). This path has exactly ONE guard: _walk's
+    # real-path containment pruning — the per-file containment check is
+    # disabled under follow_symlinks — so if _walk ever loses that pruning,
+    # the H1 junction escape reopens precisely here. (Regression guard: a
+    # pyvenv.cfg venv-detection edit once REPLACED the containment check
+    # instead of sitting alongside it; caught in review by this repro.)
+    root = _planted_escape_tree(tmp_path, _make_junction_or_skip)
+    mem = _mem()
+    stats = mem.ingest_path(str(root), follow_symlinks=True)
+    text = _all_text(mem)
+    assert "secret-marker" not in text, (
+        "junction escape reopened under follow_symlinks=True"
+    )
+    assert "safe-marker" in text
+    assert stats["files"] == 1  # only note.md — the outside tree is never entered
+    assert stats["skipped"] == 0  # pruned at directory level, never descended
     mem.close()
 
 
@@ -105,6 +136,9 @@ def test_symlink_dir_escape_is_not_walked_into_by_core(tmp_path):
     assert "secret-marker" not in text, "symlinked dir escaped the ingestion root"
     assert "safe-marker" in text
     assert stats["files"] == 1
+    # Same dir-level-pruning contract as the junction case (POSIX-visible):
+    # the outside tree is never descended, so nothing is skipped file-by-file.
+    assert stats["skipped"] == 0
     mem.close()
 
 
