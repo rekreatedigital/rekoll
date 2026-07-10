@@ -50,7 +50,7 @@ from .firewall import (
 from .ledger import RecallLedger
 from .memory import HealthReport, Memory, RecallResult
 from .reranking import CrossEncoderReranker, Reranker
-from .retrieval import hybrid_search, rrf_fuse
+from .retrieval import FusedResult, hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
 from .model import Kind, MemoryRecord, Provenance, Scalar, Scope, Status, TrustTier
 
@@ -101,6 +101,7 @@ __all__ = [
     "chunk_markdown",
     "chunk_file",
     "hybrid_search",
+    "FusedResult",
     "rrf_fuse",
     "Reranker",
     "CrossEncoderReranker",

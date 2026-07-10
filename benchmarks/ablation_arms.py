@@ -11,18 +11,25 @@ what latency cost, as candidate depth grows?
 
 CONFIG ENUMERATION (Lane 1c, declared here in the harness BEFORE any run) —
 the full 2x2x2 grid over (vector leg, lexical leg, cross-encoder reranker) has
-8 raw combos. ``hybrid_search`` has NO ``use_lexical`` lever (by design: the
-lexical leg runs whenever the adapter advertises CAP_LEXICAL), so:
+8 raw combos. When these results were frozen, ``hybrid_search`` had no
+``use_lexical`` lever (the lexical leg ran whenever the adapter advertised
+CAP_LEXICAL), so:
 
 - ``lexical-only`` / ``lexical-only+rerank`` use the shipped lever:
   ``hybrid_search(use_vector=False)``.
 - ``vector-only`` / ``vector-only+rerank`` are HARNESS-COMPOSED (product source
-  is read-only; no lever is added): ``adapter.vector_query`` called directly
+  was read-only; no lever was added): ``adapter.vector_query`` called directly
   with the SAME query sanitation (``sanitize_unicode`` + ``MAX_QUERY_CHARS``)
   and the SAME candidate pool as the product path, then truncated/reranked to
   k. Documented divergence: the product's tamper-verify and quarantine filters
   are skipped — both are no-ops on this freshly ingested OWNER-only bench
   corpus (every record verifies; nothing is quarantined).
+
+  NEEDING this composition is what issue #33 reported, and the lever now
+  EXISTS: ``hybrid_search(use_lexical=False)`` runs vector-only on the public
+  path. The harness deliberately keeps the composed call so the frozen numbers
+  above stay bit-reproducible from this file; a future re-run should switch to
+  the lever (and would then also gain tamper-verify + quarantine filtering).
 - ``hybrid-rrf`` / ``hybrid-rrf+rerank`` are the shipped default path.
 - vector-off AND lexical-off is DEFINED-EMPTY by product contract (ADR-0024:
   "honestly empty rather than a garbage ranking" — retrieval.py returns
