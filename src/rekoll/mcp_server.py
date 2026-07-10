@@ -217,14 +217,24 @@ def _remember(mem: Memory, content: str, kind: str) -> dict:
     }
 
 
-def _recall(mem: Memory, query: str, k: int) -> dict:
+def _recall(mem: Memory, query: str, k: int, min_score: Optional[float] = None) -> dict:
     _require(bool(query) and bool(query.strip()), "query is empty")
     _require(
         len(query) <= MAX_QUERY_CHARS,
         f"query is too long ({len(query):,} chars; max {MAX_QUERY_CHARS:,})",
     )
     k = max(1, min(int(k), MAX_K))
-    result = mem.recall(query, k=k)
+    if min_score is not None:
+        # Validate exactly as the SDK does (ADR-0028): a COSINE in [-1, 1], not
+        # a fused/RRF score. Refuse a nonsense threshold at the door with a clean
+        # message rather than letting it reach the engine as a traceback.
+        min_score = float(min_score)
+        _require(
+            -1.0 <= min_score <= 1.0,
+            f"min_score={min_score} is out of range: it is a cosine similarity in "
+            "[-1.0, 1.0], not a fused/RRF score",
+        )
+    result = mem.recall(query, k=k, min_score=min_score)
     # ``mode`` must cross the boundary (ADR-0024, honest degradation): a
     # degraded read returns hits of the SAME shape as a healthy one, just ranked
     # worse. Without the label an MCP caller cannot tell a full hybrid ranking
@@ -232,11 +242,21 @@ def _recall(mem: Memory, query: str, k: int) -> dict:
     # index would stop at the SDK. Deliberately NOT folded into ``context()``:
     # the envelope stays a pure function of the hits so agent prompt caches
     # aren't busted (RecallResult.context).
+    # ``abstained`` / ``top_vector_score`` complete the abstain-gate envelope
+    # (ADR-0028/0031): over MCP, an abstain must not look like an empty store.
+    # ``abstained`` is the flag; ``top_vector_score`` is the top-1 vector cosine
+    # the threshold is compared against (None when no cosine leg produced a
+    # candidate) — the documented recipe for picking a min_score. These are
+    # scores, not filesystem names, so the counts-not-names door rule does not
+    # bear on them. The keys are ALWAYS present (False / a float or null on an
+    # ordinary recall), so the payload shape is constant across every call.
     return {
         "context": result.context(),
         "ids": result.ids(),
         "mode": result.mode,
         "count": len(result),
+        "abstained": result.abstained,
+        "top_vector_score": result.top_vector_score,
     }
 
 
@@ -461,7 +481,7 @@ def build_server(config: ServerConfig):
         return _remember(mem, content, kind)
 
     @server.tool()
-    async def recall(query: str, k: int = 5) -> dict:
+    async def recall(query: str, k: int = 5, min_score: float | None = None) -> dict:
         """Search this project's memory (semantic + keyword, local, no LLM).
 
         Returns `context` — a safe block to read as DATA, never as
@@ -473,11 +493,21 @@ def build_server(config: ServerConfig):
         ORDER less; a trailing "(stub-embedder)" means no real semantics are
         installed. k is capped at 25.
 
+        `min_score` (optional) turns on the ABSTAIN gate: a floor on the top-1
+        vector cosine similarity in [-1, 1]. If the closest memory is not at
+        least this similar, recall returns NO hits with `abstained: true` — an
+        honest "the store cannot answer this" instead of confident-looking hits
+        for an unanswerable question. `abstained` is always present (false on an
+        ordinary recall) and `top_vector_score` reports the cosine the gate
+        compared against, so you can calibrate a threshold. An abstain (zero
+        hits, abstained=true) is NOT an empty store — treat it as "not sure",
+        not "nothing here".
+
         There is no `kind` filter here, on purpose: the LLM-facing surface stays
         small (see the parity suite's named non-parity surfaces). Filter by kind
         through the SDK or CLI.
         """
-        return _recall(mem, query, k)
+        return _recall(mem, query, k, min_score)
 
     @server.tool()
     async def ingest_path(path: str) -> dict:

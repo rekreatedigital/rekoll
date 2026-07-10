@@ -174,7 +174,9 @@ def test_recall_returns_envelope_ids_and_mode_only():
     mem = _mem()
     _remember(mem, "we chose Postgres over BigQuery for cost", "raw_fact")
     out = _recall(mem, "why postgres", 3)
-    assert set(out) == {"context", "ids", "mode", "count"}
+    assert set(out) == {
+        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+    }
     assert ENVELOPE_HEADER in out["context"]
     assert "Postgres" in out["context"]
     assert out["count"] == len(out["ids"]) and all(i.startswith("rk_") for i in out["ids"])
@@ -182,9 +184,38 @@ def test_recall_returns_envelope_ids_and_mode_only():
     # told which pipeline produced this ranking. _mem() pins the stub, so it
     # must not be passed off as real semantic search.
     assert out["mode"] == "vector+lexical (stub-embedder)"
+    # An ordinary recall did not abstain (ADR-0028/0031, issue #47).
+    assert out["abstained"] is False
+    assert isinstance(out["top_vector_score"], float)
     # ...but the mode never contaminates the envelope: `context` stays a pure
     # function of the hits (agent prompt caches).
     assert out["mode"] not in out["context"]
+
+
+def test_recall_min_score_abstains_over_the_door():
+    """Issue #47: the abstain gate (ADR-0028) is reachable over MCP. A threshold
+    nothing clears returns zero hits with abstained=true and a mode that names
+    the gate — an honest 'cannot answer', never an empty-store lie."""
+    mem = _mem()
+    _remember(mem, "we chose Postgres over BigQuery for cost", "raw_fact")
+    # Without the gate: an ordinary, non-abstained recall.
+    plain = _recall(mem, "why postgres", 3)
+    assert plain["abstained"] is False and plain["count"] >= 1
+    # With a threshold nothing clears: abstain.
+    gated = _recall(mem, "why postgres", 3, 0.99)
+    assert gated["abstained"] is True
+    assert gated["ids"] == [] and gated["count"] == 0
+    assert "abstained" in gated["mode"]
+    assert gated["top_vector_score"] < 0.99
+
+
+def test_recall_min_score_out_of_range_is_refused_at_the_door():
+    """min_score is validated exactly like the SDK's — a cosine in [-1, 1], not
+    a fused score — with a clean door error, not a traceback."""
+    mem = _mem()
+    _remember(mem, "small fact", "raw_fact")
+    with pytest.raises(ValueError, match="cosine similarity in"):
+        _recall(mem, "small fact", 5, 42.0)
 
 
 def test_recall_caps_query_and_clamps_k():
