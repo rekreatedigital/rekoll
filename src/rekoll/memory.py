@@ -377,7 +377,20 @@ class Memory:
             self.embedder = get_embedder(embedder)
         else:
             self.embedder = embedder or _auto_embedder()
-        self.reranker = _auto_reranker() if reranker == "auto" else reranker
+        # Reranker resolution is DYNAMIC, not frozen here (ADR-0029). Under the
+        # default reranker='auto' the cross-encoder attaches ONLY when the scope
+        # is degraded to lexical-only by an embedder mismatch — its one measured
+        # win (MRR +0.158, p=2.6e-03) — and stays OFF in normal hybrid, where the
+        # ablation found +60% read latency for no detectable lift. The live
+        # decision is the ``reranker`` property, which re-reads _identity_state
+        # every access (so a runtime reindex() clearing a mismatch turns it back
+        # off) and constructs the auto model lazily — never at import, and never
+        # in normal hybrid. An explicit reranker= is honored verbatim, including
+        # None. Resolving 'auto' here would freeze the wrong choice: _identity_
+        # state is not computed until below, and reindex() can flip it later.
+        self._reranker_auto = reranker == "auto"
+        self._reranker = None if self._reranker_auto else reranker
+        self._auto_reranker_resolved = False
         #: Process-local was-it-used ledger: which ids each recall surfaced.
         self.ledger = RecallLedger()
 
@@ -411,6 +424,39 @@ class Memory:
                 f"Or open a separate scope for the new embedder.",
                 stacklevel=2,
             )
+
+    @property
+    def reranker(self):
+        """The reranker a recall would use RIGHT NOW — a DYNAMIC decision (ADR-0029).
+
+        An explicit ``reranker=`` passed to the constructor is returned verbatim,
+        including ``None``: explicit intent is never second-guessed. Under the
+        default ``reranker='auto'`` the cross-encoder attaches ONLY when this
+        scope is degraded to lexical-only by an embedder mismatch (ADR-0024) —
+        the one place the ablation found it measurably helps (MRR +0.158,
+        p=2.6e-03) — and is OFF in normal hybrid, where it cost +60% read
+        latency for no detectable quality lift (issue #37).
+
+        The value is re-read every access, so it is never frozen at construction:
+        a scope that starts mismatched and is repaired by :meth:`reindex` stops
+        reranking with no rebuild. The auto model is constructed lazily the first
+        time a degraded scope asks for it (then memoized) — never at import, and
+        never in normal hybrid, so the zero-dep default path stays cost-free.
+
+        Read-only: the resolved reranker follows the scope's live state, so it is
+        not a settable attribute — pass ``reranker=`` to the constructor instead.
+        """
+        if not self._reranker_auto:
+            return self._reranker
+        if self._identity_state != "mismatch":
+            return None
+        if not self._auto_reranker_resolved:
+            # Lazy + memoized: the model loads at most once, and only in a scope
+            # that is actually degraded — the +60% latency is never paid, and no
+            # heavy import happens, on the normal hybrid path.
+            self._reranker = _auto_reranker()
+            self._auto_reranker_resolved = True
+        return self._reranker
 
     # -- write --------------------------------------------------------------
     def remember(
@@ -994,6 +1040,7 @@ class Memory:
         embedded = 0
         retrievable = 0
         stale: list[str] = []
+        tampered: list[str] = []  # stale AND content-hash fails: direct-DB tampering
         probe_errors = 0
         for record in active:
             has_vector = record.embedding is not None
@@ -1018,6 +1065,17 @@ class Memory:
             retrievable += int(found)
             if not (has_vector and found):
                 stale.append(record.id)
+                # WHY it is stale decides the note (issue #24). A content-hash
+                # mismatch means the stored row was edited outside the write path
+                # (ADR-0019): read-time verification WITHHELD it from the probe —
+                # ingestion is not dead, the row is tampered. health() already
+                # holds the record, so record.verify() classifies this with no
+                # extra retrieval plumbing. Tamper takes precedence over a missing
+                # vector: re-embedding cannot repair a tampered row (its content
+                # no longer matches its hash), so a record that is BOTH unembedded
+                # AND tampered is reported as tampered — re-ingest or delete it.
+                if not record.verify():
+                    tampered.append(record.id)
         if probe_errors:
             notes.append(
                 f"{probe_errors} retrievability probe(s) raised — the search path "
@@ -1029,7 +1087,17 @@ class Memory:
                 "call Memory.reindex() to re-embed this scope with the current embedder"
             )
         ok = not stale and self._identity_state != "mismatch"
-        if stale:
+        # Two distinct causes, two distinct notes (issue #24) — never point a
+        # `rekoll doctor` reader at "ingestion may be dead" when the real cause
+        # is content-hash verification withholding a tampered row. Tamper first
+        # (more actionable): those ids need re-ingest/delete, not a reindex.
+        if tampered:
+            notes.append(
+                "newest record(s) failed content-hash verification — possible "
+                "direct-DB tampering (ADR-0019); re-ingest or delete them"
+            )
+        dead = [rid for rid in stale if rid not in set(tampered)]
+        if dead:
             notes.append(
                 "newest record(s) not fully indexed — ingestion/embedding may be dead"
             )

@@ -52,6 +52,10 @@ EMPTY_SCOPE_NOTE = "empty scope — nothing to check"
 DEAD_INGEST_NOTE = (
     "newest record(s) not fully indexed — ingestion/embedding may be dead"
 )
+TAMPER_NOTE = (
+    "newest record(s) failed content-hash verification — possible "
+    "direct-DB tampering (ADR-0019); re-ingest or delete them"
+)
 ADR_0024_NOTE = (
     "embedder identity mismatch — vector leg refused (ADR-0024); "
     "call Memory.reindex() to re-embed this scope with the current embedder"
@@ -297,11 +301,72 @@ def test_health_on_a_tampered_newest_record_reads_not_ok(tmp_path):
     assert report.embedded == 1  # the pre-tamper vector is still stored
     assert report.retrievable == 0
     assert report.stale_ids == (victim.id,)
-    assert report.notes == (DEAD_INGEST_NOTE,)
+    # The NOTE now names the real cause (issue #24): the row failed content-hash
+    # verification (ADR-0019), it is NOT dead ingestion — embedded == checked, so
+    # "ingestion/embedding may be dead" would misdirect a `rekoll doctor` reader.
+    assert report.notes == (TAMPER_NOTE,)
     # The probe surfaces the tamper warning too — degradation, never silence.
     assert any(
         "failed content-hash verification" in str(w.message) for w in caught
     )
+    mem.close()
+
+
+def test_health_on_a_record_that_is_both_unembedded_and_tampered_reads_tampered(tmp_path):
+    """Both-cause case (issue #24): a newest record that is UNEMBEDDED *and*
+    tampered. Tamper takes precedence — re-embedding cannot repair a row whose
+    content no longer matches its hash, so the honest note is the tamper note,
+    not the dead-ingest note. embedded == 0 proves it is also unembedded, which
+    is exactly why a naive "any-stale -> dead ingest" note would misfire here."""
+    db = str(tmp_path / "both.db")
+    mem = Memory(path=db, embedder=StubEmbedder(), reranker=None)
+    # A record with a valid content-hash but NO vector (embedding pass "died")...
+    dead = MemoryRecord.create(
+        scope=Scope(),
+        kind=Kind.RAW_FACT,
+        content="the newest fact whose embedding pass silently died",
+        provenance=Provenance(source_uri="test://both"),
+        trust_tier=TrustTier.OWNER,
+    )
+    mem.adapter.add(records=[dead])
+    # ...then tampered on disk so its content no longer matches its stored hash.
+    _tamper_on_disk(db, dead.id, "the newest fact was rewritten by an attacker")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = mem.health(n=1)
+    assert report.ok is False
+    assert report.checked == 1
+    assert report.embedded == 0  # genuinely unembedded...
+    assert report.retrievable == 0
+    assert report.stale_ids == (dead.id,)
+    assert report.notes == (TAMPER_NOTE,)  # ...but reported as tampered, not dead
+    mem.close()
+
+
+def test_health_reports_tamper_and_dead_ingest_notes_separately(tmp_path):
+    """A mixed newest sample — one tampered record and one genuinely-dead
+    (unembedded, untampered) record — surfaces BOTH notes, each naming only its
+    own cause. This is the discriminating counter to a single blanket note."""
+    db = str(tmp_path / "mixed.db")
+    mem = Memory(path=db, embedder=StubEmbedder(), reranker=None)
+    dead = MemoryRecord.create(
+        scope=Scope(),
+        kind=Kind.RAW_FACT,
+        content="a genuinely unembedded fact — the embedding leg died",
+        provenance=Provenance(source_uri="test://dead"),
+        trust_tier=TrustTier.OWNER,
+    )  # valid hash, no vector, NOT tampered -> dead-ingest bucket
+    mem.adapter.add(records=[dead])
+    victim = mem.remember("a properly embedded fact that will be tampered")
+    _tamper_on_disk(db, victim.id, "this embedded fact was rewritten on disk")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = mem.health(n=2)
+    assert report.ok is False
+    assert report.checked == 2
+    assert set(report.stale_ids) == {dead.id, victim.id}
+    # Tamper note first (more actionable), dead-ingest note second — both present.
+    assert report.notes == (TAMPER_NOTE, DEAD_INGEST_NOTE)
     mem.close()
 
 
