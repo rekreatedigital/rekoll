@@ -122,6 +122,19 @@ to withhold.
 
 - Agents can, for the first time, be told "I don't know" by the memory layer,
   and can tell that apart from "I am empty" and from "I am degraded."
+- **`adapter.distance_metric` stops being decorative.** The gate thresholds the
+  vector score *as a cosine* on the strength of that declaration, and
+  `StorageAdapter` defaults it to `"cosine"` — so a backend scoring on another
+  scale that never overrides the default would have a plausible-looking number
+  compared against a cosine-calibrated threshold. The conformance suite now
+  verifies the claim (`assert_distance_metric_honest`): if an adapter says
+  `"cosine"`, a record scored against its own embedding must come back as
+  exactly 1.0, and every score must lie in [-1, 1]. Third-party adapters that
+  were quietly wrong will now fail conformance. That is the point.
+- The gate always reads **exactly the set the search is about to return**. With
+  `include_quarantined=True` (forensics), quarantined hits will surface, so
+  their cosines legitimately hold the gate open. With the default surfacing
+  filter they cannot, so a quarantined near-match cannot bluff the gate.
 - The read path stays **zero-LLM and zero-write** (ADR-0007). The gate is a
   comparison of two floats. An abstain surfaces no ids, so it credits nothing to
   the was-it-used ledger — which is correct: nothing was surfaced to be used.
@@ -150,6 +163,10 @@ to withhold.
   empty envelope, indistinguishable from an empty store's. Callers gating on
   `min_score` must read `abstained` / `mode`. `Memory.context()` takes no
   `min_score` and so can never abstain.
+- **The `unavailable` warnings fire once per call site**, not once per call —
+  that is Python's default warning filter, not a Rekoll choice. This is why the
+  per-call contract is `RecallResult.mode` / `gate`, which are recomputed and
+  truthful on *every* recall, warning or not. Never branch on the warning.
 - **AUC 0.931 is a labeled diagnostic on one fixture, one embedder, one corpus
   size.** It establishes that the signal exists and is strong. It is not a
   product SLA, and 0.70 is not a default — the gate ships **off**.

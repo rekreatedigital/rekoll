@@ -265,6 +265,57 @@ def assert_vector_query_ranks(make: AdapterFactory, embedder: Embedder) -> None:
     adapter.close()
 
 
+def assert_distance_metric_honest(make: AdapterFactory, embedder: Embedder) -> None:
+    """``distance_metric`` must describe what ``vector_query`` actually returns.
+
+    This attribute stopped being decorative in ADR-0028. ``recall(min_score=...)``
+    thresholds the vector leg's top-1 score **as a cosine similarity**, and it
+    does so exactly when the adapter declares ``distance_metric == "cosine"``.
+    ``StorageAdapter`` DEFAULTS that attribute to ``"cosine"``, so a backend that
+    ranks by an unnormalized dot product (a vector's self-score is then
+    ``||v||^2``) or by any similarity on another scale, and simply never
+    overrides the default, would have a plausible-looking number silently
+    compared against a cosine-calibrated threshold — precisely the bluff
+    ADR-0028 exists to stop.
+
+    So the claim is verified, not trusted. A cosine has one property the common
+    alternatives do not share: a vector's similarity to ITSELF is exactly 1.0,
+    and every score lies in [-1, 1].
+
+    (A backend returning a raw *distance*, where smaller means closer, already
+    fails ``assert_vector_query_ranks``, which pins "higher score = more
+    similar". This check closes the remaining gap: the score's SCALE.)
+    """
+    adapter = make()
+    metric = getattr(adapter, "distance_metric", None)
+    assert isinstance(metric, str) and metric, (
+        "adapter must declare a non-empty distance_metric naming how vector_query scores"
+    )
+    text = "database migration rollback plan"
+    target = _rec(_SCOPE_A, text, embedder=embedder)
+    other = _rec(_SCOPE_A, "lunch menu tacos and salad", embedder=embedder)
+    adapter.add(records=[target, other])
+
+    # Query with the target's OWN embedding: a cosine must score it exactly 1.0.
+    hits = adapter.vector_query(scope=_SCOPE_A, embedding=embedder.embed([text])[0], k=2).hits
+    assert hits, "vector_query returned nothing for a stored record's own embedding"
+    top = hits[0]
+    assert top.record.id == target.id, "a record's own embedding must rank it first"
+
+    if metric == "cosine":
+        assert abs(top.score - 1.0) < 1e-6, (
+            f"adapter declares distance_metric='cosine' but scored a record "
+            f"against its OWN embedding as {top.score!r}, not 1.0. Either that "
+            f"score is not a cosine similarity, or distance_metric is wrong. "
+            f"recall(min_score=...) thresholds this number as a cosine (ADR-0028)."
+        )
+        for hit in hits:
+            assert -1.0 - 1e-9 <= hit.score <= 1.0 + 1e-9, (
+                f"distance_metric='cosine' but a score fell outside [-1, 1]: {hit.score!r}"
+            )
+    adapter.close()
+
+
 def assert_where_honesty(make: AdapterFactory, embedder: Embedder) -> None:
     adapter = make()
     active = _rec(_SCOPE_A, "active fact", embedder=embedder, status=Status.ACTIVE)
@@ -348,6 +399,7 @@ ALL_CHECKS = (
     assert_metadata_scalar_roundtrip,
     assert_embedder_identity,
     assert_vector_query_ranks,
+    assert_distance_metric_honest,
     assert_where_honesty,
     assert_delete,
     assert_delete_scope_isolation,
