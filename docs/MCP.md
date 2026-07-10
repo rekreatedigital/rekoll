@@ -49,10 +49,29 @@ the working directory; that's how it knows which project's memory to open.
 | Tool | What it does |
 | --- | --- |
 | `remember` | Save one memory (a fact, decision, or event). Screened by the injection firewall first. |
-| `recall` | Search memory (semantic + keyword, local, no LLM). Returns a safe context block + record ids. |
-| `ingest_path` | Index a file or folder (code + docs) — only inside the project root. |
+| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `{context, ids, mode, count}` — a safe context block, the record ids in rank order, and `mode` (below). |
+| `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `{files, chunks, skipped, filtered, total}`; `filtered` counts names excluded unread (vendored venvs, lockfiles, credential-shaped names). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
-| `status` | Show the store location, scope, recallable memory count, and write-trust policy. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
+| `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
+
+### `mode` — telling a degraded index from a healthy one
+
+`recall` and `status` both return `mode`, the honest-degradation string
+(ADR-0024). It names the retrieval pipeline that actually **ran**:
+
+| `mode` | What it means |
+| --- | --- |
+| `vector+lexical+rerank` | Full hybrid ranking. Trust the order. |
+| `vector+lexical (stub-embedder)` | No real semantics installed (`pip install "rekoll[embeddings]"`). |
+| `lexical-only: embedder mismatch` | The embedding model changed, so the vector leg is **refused**. Hits are keyword-ranked — trust their *order* less. Recover with `Memory.reindex()`. |
+
+This matters because a degraded read returns hits of the **same shape** as a
+healthy one, just ranked worse — and `embedder` names the embedder the server is
+*holding*, which a mismatch leaves unchanged (it is the *stored* identity that
+differs). Without `mode`, a calling agent cannot tell the two apart.
+
+`mode` rides beside the context block, never inside it: the envelope stays a pure
+function of the hits, so a degradation notice can't bust an agent's prompt cache.
 
 ## 4. The trust model, in one paragraph
 

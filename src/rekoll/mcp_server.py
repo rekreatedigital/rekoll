@@ -307,22 +307,36 @@ def _assert_no_symlink_escape(root: Path, target: Path) -> None:
                 )
 
 
+# Every key of ``Memory.ingest_path``'s result that may cross to the calling
+# model. An ALLOWLIST, not a passthrough: the core is free to grow its result
+# with operator-facing detail, and a new key must never reach an LLM just
+# because someone added it upstream.
+#
+# All four counts must cross, for one reason — the core reports ingest detail
+# through ``warnings``, and warnings NEVER cross stdio. Without them a caller
+# sees ``{files: 0, chunks: 0}`` and cannot tell "empty folder" from "every
+# file was skipped or filtered":
+#   skipped  — tried and passed over (link/junction, oversize, over-chunk-cap,
+#              undecodable, unreadable)
+#   filtered — excluded unread by the filename filter, e.g. a vendored venv,
+#              lockfiles, credential-shaped names (ADR-0027). A lockfile-heavy
+#              repo otherwise ingests "inexplicably small" (ADR-0027 §5).
+# Counts only: never the NAMES of what was skipped or filtered — the server's
+# filesystem layout is not the model's business (L-mcp-rootleak).
+#
+# tests/test_mcp_server_honesty.py pins this set against the core's own keys, so
+# the next key added upstream fails loudly here instead of being dropped in
+# silence. If you add one, decide — don't drift.
+_INGEST_RESULT_KEYS = ("files", "chunks", "skipped", "filtered", "total")
+
+
 def _ingest_path(mem: Memory, root: Path, path: str) -> dict:
     target = _contained_path(root, path)
     _assert_no_symlink_escape(root, target)  # defense-in-depth over the core skip
     # follow_symlinks stays False explicitly: the MCP boundary must never read a
     # link out of its root, regardless of any future change to the core default.
     stats = mem.ingest_path(str(target), follow_symlinks=False)
-    # ``skipped`` must cross the boundary: the core signals skips (links/
-    # junctions, oversize, over-chunk-cap, undecodable) via warnings, which
-    # never cross stdio — without the count, a caller ingesting a tree of
-    # skipped files sees {files: 0, chunks: 0} with no explanation.
-    return {
-        "files": stats["files"],
-        "chunks": stats["chunks"],
-        "skipped": stats["skipped"],
-        "total": stats["total"],
-    }
+    return {key: stats[key] for key in _INGEST_RESULT_KEYS}
 
 
 def _forget(mem: Memory, ids: list[str]) -> dict:
@@ -455,10 +469,19 @@ def build_server(config: ServerConfig):
         """Index a file or folder into memory (code + docs, chunked).
 
         Relative paths resolve against the server's project root; anything
-        outside that root is refused. Returns files/chunks counts, a `skipped`
-        count — files passed over unread (symlinks/junctions, files over the
-        size limit, documents over the per-file chunk cap, undecodable bytes)
-        — and the new store total.
+        outside that root is refused. Returns files/chunks counts, the new store
+        `total`, and two counts that explain a small result:
+
+        - `skipped` — tried and passed over (symlinks/junctions, files over the
+          size limit, documents over the per-file chunk cap, undecodable bytes).
+        - `filtered` — excluded unread by the filename filter: vendored
+          virtualenvs, lockfiles, and credential-shaped names. A repo with a
+          committed venv or many lockfiles ingests far fewer files than it
+          holds, and this is why.
+
+        A folder that reports `files: 0` with a large `filtered` was indexed
+        correctly — it was mostly things memory should not hold. Point
+        ingest_path at a single file to index it regardless of the filter.
         """
         return _ingest_path(mem, config.root, path)
 

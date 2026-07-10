@@ -11,9 +11,11 @@ kept in their own file):
 
 2. Tool RESULTS don't silently under-report: ``ingest_path`` must surface the
    core's ``skipped`` count (symlinks/junctions, oversize files, over-chunk-cap
-   documents, undecodable bytes). The core signals skips with ``warnings`` —
-   which never cross stdio — so without the count an MCP caller ingesting a
-   tree of skipped files sees ``{files: 0, chunks: 0}`` with no explanation.
+   documents, undecodable bytes) AND its ``filtered`` count (names excluded
+   unread — vendored venvs, lockfiles, credential-shaped names; ADR-0027). The
+   core signals both with ``warnings`` — which never cross stdio — so without
+   the counts an MCP caller ingesting such a tree sees ``{files: 0, chunks: 0}``
+   with no explanation. Counts only, never names.
 
 3. Tool RESULTS say HOW they were produced: ``recall`` and ``status`` carry
    ``mode``, the honest-degradation string (ADR-0024). A degraded read (vector
@@ -140,7 +142,7 @@ def test_symlink_escape_error_names_entry_without_absolute_prefix(tmp_path):
     assert str(root) not in msg and str(tmp_path) not in msg
 
 
-# -- 2. results: the skipped count crosses the boundary --------------------------
+# -- 2. results: the skipped AND filtered counts cross the boundary ---------------
 
 def test_ingest_path_surfaces_the_cores_skipped_count(tmp_path):
     mem = _mem()
@@ -151,9 +153,54 @@ def test_ingest_path_surfaces_the_cores_skipped_count(tmp_path):
     (docs / "bad.md").write_bytes(b"\xff\xfe\xfa not utf-8 \xff")  # undecodable -> skipped
 
     out = _ingest_path(mem, root, "docs")
-    assert set(out) == {"files", "chunks", "skipped", "total"}
+    assert set(out) == {"files", "chunks", "skipped", "filtered", "total"}
     assert out["files"] == 1 and out["chunks"] >= 1
     assert out["skipped"] == 1  # the model is told, not left to infer from silence
+
+
+def test_ingest_path_surfaces_the_cores_filtered_count(tmp_path):
+    """``filtered`` (ADR-0027: names excluded unread — vendored venvs, lockfiles,
+    credential-shaped names) must cross too. The core announces it through
+    ``warnings``, which never reach an MCP caller; without the count a
+    lockfile-heavy repo ingests "inexplicably small" (ADR-0027 §5) and the model
+    cannot tell that from a broken ingest.
+    """
+    mem = _mem()
+    root = tmp_path.resolve()
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    (docs / "package-lock.json").write_text('{"lockfileVersion": 3}', encoding="utf-8")
+    (docs / "credentials.json").write_text('{"api_key": "sk-not-a-real-key"}', encoding="utf-8")
+
+    # The core warns in-process (the SDK's half of the contract); the warning
+    # never crosses stdio, which is exactly why the count below has to.
+    with pytest.warns(UserWarning, match="look like credentials"):
+        out = _ingest_path(mem, root, "docs")
+    assert out["files"] == 1 and out["skipped"] == 0
+    assert out["filtered"] == 2  # the lockfile and the credentials file, unread
+    # Counts, never names: the server's filesystem layout is not the model's
+    # business (L-mcp-rootleak), and "which file looked like a credential" is
+    # exactly the detail an injected instruction would want back.
+    assert "credentials" not in json.dumps(out)
+    assert "package-lock" not in json.dumps(out)
+
+
+def test_ingest_path_filter_keeps_secrets_out_of_recallable_memory(tmp_path):
+    """The filtered credential file is not merely uncounted — it is never read,
+    so it can never be recalled through any door."""
+    mem = _mem()
+    root = tmp_path.resolve()
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    (docs / "credentials.json").write_text('{"api_key": "sk-not-a-real-key"}', encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="look like credentials"):
+        _ingest_path(mem, root, "docs")
+    hits = _recall(mem, "api_key sk credentials", 5)
+    assert "sk-not-a-real-key" not in hits["context"]
+    assert "api_key" not in hits["context"]
 
 
 def test_ingest_path_carries_every_key_the_core_reports(tmp_path):
@@ -237,6 +284,27 @@ def test_status_exposes_the_degradation_that_the_embedder_name_hides(tmp_path):
     assert healthy_status["mode"] == HEALTHY_MODE
     assert degraded_status["mode"] == DEGRADED_MODE
     degraded.close()
+
+
+def test_mode_string_leaks_no_paths_model_names_or_config_hashes(tmp_path):
+    """``mode`` is a new field on the LLM-facing surface, so it inherits property
+    #1: it must describe the PIPELINE, never the deployment. The mismatch
+    *warning* names both embedders and their config hashes — none of that may
+    ride out on the wire (L-mcp-rootleak)."""
+    for mem in (_mem(), _degraded_mem(tmp_path)):
+        for value in (_recall(mem, "anything", 3)["mode"], _status(mem, _cfg(tmp_path))["mode"]):
+            assert not any(ch in value for ch in "/\\"), value  # no paths
+            assert "dim=" not in value and "config=" not in value  # no identity internals
+            assert str(tmp_path) not in value
+            # A closed vocabulary: legs, the stub marker, and the mismatch reason.
+            leftover = (
+                value.replace("vector", "").replace("lexical-only", "")
+                .replace("lexical", "").replace("rerank", "").replace("none", "")
+                .replace("(stub-embedder)", "").replace(": embedder mismatch", "")
+                .replace("+", "").replace(" ", "")
+            )
+            assert leftover == "", f"unexpected content in mode string: {value!r} -> {leftover!r}"
+        mem.close()
 
 
 def test_mode_never_contaminates_the_context_envelope(tmp_path):
@@ -331,17 +399,22 @@ def _run_server_session(tmp: Path, fn, *, db: str = "mem.db", env: dict | None =
 
 
 @requires_mcp
-def test_e2e_ingest_path_reports_skipped_over_the_wire(tmp_path):
+def test_e2e_ingest_path_reports_skipped_and_filtered_over_the_wire(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
     (docs / "bad.md").write_bytes(b"\xff\xfe\xfa not utf-8 \xff")  # undecodable -> skipped
+    (docs / "package-lock.json").write_text('{"lockfileVersion": 3}', encoding="utf-8")  # filtered
 
     async def fn(session):
         return _payload(await session.call_tool("ingest_path", {"path": "docs"}))
 
-    out = _run_server_session(tmp_path, fn)
+    out = _run_server_session(tmp_path, fn, env=_stub_pinned_env(tmp_path))
     assert out["files"] == 1 and out["skipped"] == 1
+    # The core announces filtering with a warning; warnings never cross stdio.
+    # This count is the ONLY way the calling model learns the folder held more.
+    assert out["filtered"] == 1
+    assert "package-lock" not in json.dumps(out)  # counts, never names
 
 
 @requires_mcp

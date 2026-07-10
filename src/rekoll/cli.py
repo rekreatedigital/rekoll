@@ -400,7 +400,16 @@ def cmd_recall(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Report on the store WITHOUT building an embedder — opening ``Memory()``
     would load (and on first use download) a model and stamp an embedder
-    identity onto the scope; a status read must do neither."""
+    identity onto the scope; a status read must do neither.
+
+    This is why ``status`` prints no ``mode``, while MCP's ``status`` tool does:
+    the mode string is a property of a live ``Memory`` (it depends on the
+    embedder you are holding vs. the one the scope stored), and the MCP server
+    already holds one. Resolving an embedder here just to name the pipeline
+    would trade a cheap, side-effect-free read for a model download. Use
+    ``rekoll doctor`` (which reports ``Memory.health().mode``) or
+    ``rekoll recall --json``; both legitimately open a ``Memory``.
+    """
     if not _require_store(args):
         return 1
     if _refuse_foreign_store(args.path):

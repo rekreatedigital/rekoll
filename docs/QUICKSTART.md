@@ -53,6 +53,18 @@ Useful flags:
   rekoll forget $(rekoll recall "old decision" --ids)
   ```
 
+- `rekoll recall "query" --json` — one JSON object for scripts and agents:
+  `{context, ids, mode, count}` (the same shape the MCP `recall` tool returns).
+  `mode` names the search that actually ran — `vector+lexical+rerank` is a full
+  hybrid ranking, while `lexical-only: embedder mismatch` means the semantic leg
+  is switched off and you should trust the *order* less. It still prints the
+  object (and still exits `1`, like `grep`) when nothing matched, so a script
+  can always read `mode`. Run `rekoll doctor` if `mode` surprises you.
+
+  ```bash
+  rekoll recall "why postgres" --json | python -c "import json,sys; d=json.load(sys.stdin); print(d['mode'], d['ids'])"
+  ```
+
 - `rekoll remember --kind directive "always use tabs"` — kinds are
   `raw_fact` (default), `observation`, `directive`, `episode`.
 - Ingested files are screened at `unverified` trust by default — the firewall
