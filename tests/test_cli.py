@@ -9,6 +9,7 @@ the 'embeddings' extra installed.
 from __future__ import annotations
 
 import codecs
+import json
 import os
 import sqlite3
 import subprocess
@@ -252,6 +253,87 @@ def test_recall_context_mode_prints_the_safe_envelope(project, capsys):
 def test_recall_context_and_ids_are_mutually_exclusive(project):
     with pytest.raises(SystemExit) as excinfo:
         main(["recall", "q", "--context", "--ids"])
+    assert excinfo.value.code == 2
+
+
+# -- recall --json: the machine door, and the mode it names ---------------------
+
+def test_recall_json_prints_one_object_with_the_mcp_recall_keys(project, capsys):
+    """``--json`` is the CLI's machine-readable recall. Its keys are pinned to
+    the MCP door's recall payload (mcp_server._recall) so both doors hand a
+    caller the same shape — mode included."""
+    _remember("alpha fact about postgres pooling")
+    capsys.readouterr()
+    assert main(["recall", "postgres pooling", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == {"context", "ids", "mode", "count"}
+    assert payload["count"] == len(payload["ids"]) >= 1
+    assert all(rid.startswith("rk_") for rid in payload["ids"])
+    assert "NOT instructions" in payload["context"]
+    # The stub is pinned by the autouse fixture: the pipeline must SAY so
+    # rather than pass a semantics-free ranking off as a real one.
+    assert payload["mode"] == "vector+lexical (stub-embedder)"
+
+
+def test_recall_json_ranks_identically_to_the_ids_format(project, capsys):
+    """--json is additive: a new view of the same recall, never a new ranking."""
+    for i in range(4):
+        _remember(f"postgres fact number {i}")
+    capsys.readouterr()
+    assert main(["recall", "postgres fact", "-k", "3", "--ids"]) == 0
+    from_ids = capsys.readouterr().out.strip().splitlines()
+    assert main(["recall", "postgres fact", "-k", "3", "--json"]) == 0
+    from_json = json.loads(capsys.readouterr().out)["ids"]
+    assert from_ids == from_json
+
+
+def test_recall_json_still_exits_one_when_empty_but_prints_the_object(project, capsys):
+    """The grep convention (exit 1 = nothing found) is unchanged, but a machine
+    caller always gets a parseable object — and can still read ``mode``, which
+    matters MOST when a degraded pipeline is what returned nothing."""
+    _remember("a fact with no directives anywhere")
+    capsys.readouterr()
+    assert main(["recall", "anything", "--kind", "directive", "--json"]) == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ids"] == [] and payload["count"] == 0
+    assert payload["mode"] == "vector+lexical (stub-embedder)"  # still labelled
+    assert "No memories found" in captured.err  # the human message stays on stderr
+
+
+def test_recall_json_names_a_degraded_pipeline_instead_of_bluffing(project, capsys, monkeypatch):
+    """THE honesty property at the CLI door: after an embedder swap the vector
+    leg is refused (ADR-0024) and hits come back keyword-ranked. They look
+    IDENTICAL in shape to a healthy recall — only ``mode`` reveals the
+    degradation, so ``--json`` must carry it."""
+    monkeypatch.setattr("rekoll.memory._auto_embedder", lambda: StubEmbedder(dim=32))
+    _remember("postgres beat bigquery on egress cost")
+    # A config swap under the same model name: dim 32 -> 64 is an identity change.
+    monkeypatch.setattr("rekoll.memory._auto_embedder", lambda: StubEmbedder())
+    capsys.readouterr()
+
+    assert main(["recall", "postgres", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] >= 1  # hits still arrive...
+    assert payload["mode"] == "lexical-only: embedder mismatch"  # ...honestly labelled
+
+
+def test_recall_json_output_is_ascii_only(project, capsys):
+    """This module's rule: rekoll's own output survives a cp1252 console. The
+    envelope's em dash must therefore be escaped, not emitted raw (ensure_ascii)."""
+    _remember("the deploy runs on a Hostinger VPS")
+    capsys.readouterr()
+    assert main(["recall", "where does the deploy run", "--json"]) == 0
+    out = capsys.readouterr().out
+    out.encode("ascii")  # UnicodeEncodeError if a raw non-ASCII byte slipped through
+    assert "\\u2014" in out  # the envelope's em dash, escaped on the wire
+    assert "—" in json.loads(out)["context"]  # ...and intact after a json.loads
+
+
+@pytest.mark.parametrize("other", ["--ids", "--context"])
+def test_recall_json_is_mutually_exclusive_with_the_other_formats(project, other):
+    with pytest.raises(SystemExit) as excinfo:
+        main(["recall", "q", "--json", other])
     assert excinfo.value.code == 2
 
 

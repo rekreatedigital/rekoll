@@ -170,14 +170,21 @@ def test_remember_at_trusted_source_does_not_quarantine_injection():
 
 # -- recall: safe envelope out, never raw records ------------------------------
 
-def test_recall_returns_envelope_and_ids_only():
+def test_recall_returns_envelope_ids_and_mode_only():
     mem = _mem()
     _remember(mem, "we chose Postgres over BigQuery for cost", "raw_fact")
     out = _recall(mem, "why postgres", 3)
-    assert set(out) == {"context", "ids", "count"}
+    assert set(out) == {"context", "ids", "mode", "count"}
     assert ENVELOPE_HEADER in out["context"]
     assert "Postgres" in out["context"]
     assert out["count"] == len(out["ids"]) and all(i.startswith("rk_") for i in out["ids"])
+    # Honest degradation crosses the boundary (ADR-0024): the calling model is
+    # told which pipeline produced this ranking. _mem() pins the stub, so it
+    # must not be passed off as real semantic search.
+    assert out["mode"] == "vector+lexical (stub-embedder)"
+    # ...but the mode never contaminates the envelope: `context` stays a pure
+    # function of the hits (agent prompt caches).
+    assert out["mode"] not in out["context"]
 
 
 def test_recall_caps_query_and_clamps_k():
@@ -387,6 +394,11 @@ def test_status_reports_pinned_scope_and_write_policy(tmp_path):
     assert out["write_trust"] == "unverified"
     assert out["firewall"] == "on"
     assert "directive" not in out["writable_kinds"]
+    # status names the pipeline recall WILL run, so an agent can see a degraded
+    # index at session start rather than infer it from the embedder name (which
+    # a mismatch leaves unchanged — the STORED identity is what differs).
+    assert out["embedder"] == "stub-hash"
+    assert out["mode"] == "vector+lexical (stub-embedder)"
 
 
 def test_status_count_never_surfaces_quarantined_records(tmp_path):

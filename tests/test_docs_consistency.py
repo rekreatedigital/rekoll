@@ -87,3 +87,75 @@ def test_design_and_readme_name_every_shipped_tool():
     # vocabulary and the never-shipped `mem` CLI registration.
     assert "`memory_status`" not in design
     assert "mem mcp" not in design
+
+
+# -- MCP tool RESULTS: the keys an agent reads, and the docs that list them -------
+#
+# The tool NAMES were pinned above; their RESULT payloads were not, and they
+# drifted exactly as this file predicts a documented surface will. docs/MCP.md
+# described recall as returning "a context block + record ids" while the code
+# returned three keys (`count` was never documented), and issue #25 found that
+# `mode` — the honest-degradation contract — crossed no door at all. ADR-0027
+# then grew `ingest_path` a `filtered` key that the MCP door silently dropped.
+#
+# So: snapshot the payload keys against the code, and require docs/MCP.md to
+# name each one. Adding a key to a tool result is fine — it is a DOCUMENTED,
+# LLM-FACING surface, so the docs edit lands in the same PR.
+
+PINNED_MCP_RECALL_KEYS = {"context", "ids", "mode", "count"}
+PINNED_MCP_STATUS_KEYS = {
+    "memories", "scope", "store", "write_trust", "writable_kinds",
+    "embedder", "mode", "firewall", "version",
+}
+PINNED_MCP_INGEST_KEYS = {"files", "chunks", "skipped", "filtered", "total"}
+
+
+def _live_payload_keys() -> tuple[set, set]:
+    """``recall`` / ``status`` result keys, from the real tool bodies.
+
+    The bodies are plain functions (that is why they live outside
+    ``build_server``), so this needs no ``mcp`` extra — it runs on the default
+    CI matrix, where doc drift would otherwise go unnoticed.
+    """
+    from rekoll import Memory, TrustTier
+    from rekoll.embedding import StubEmbedder
+
+    mem = Memory(path=":memory:", project="docs", embedder=StubEmbedder(),
+                 reranker=None, default_trust=TrustTier.UNVERIFIED)
+    try:
+        mem.remember("we chose Postgres over BigQuery for cost")
+        config = mcp_server.ServerConfig(
+            path=":memory:", tenant="default", project="docs", agent="default",
+            trust=TrustTier.UNVERIFIED, root=REPO,
+        )
+        return set(mcp_server._recall(mem, "why postgres", 3)), set(mcp_server._status(mem, config))
+    finally:
+        mem.close()
+
+
+def test_mcp_tool_result_keys_are_pinned():
+    recall_keys, status_keys = _live_payload_keys()
+    assert recall_keys == PINNED_MCP_RECALL_KEYS
+    assert status_keys == PINNED_MCP_STATUS_KEYS
+    assert set(mcp_server._INGEST_RESULT_KEYS) == PINNED_MCP_INGEST_KEYS
+
+
+def test_mcp_md_documents_every_recall_and_ingest_result_key():
+    """docs/MCP.md enumerates these two payloads explicitly, so every key an
+    agent can read must appear there. (``status``'s keys are self-describing
+    prose in the same table; its snapshot above is the tripwire.)"""
+    mcp_md = _read("docs/MCP.md")
+    for key in PINNED_MCP_RECALL_KEYS | PINNED_MCP_INGEST_KEYS:
+        assert f"`{key}`" in mcp_md, (
+            f"docs/MCP.md never names the `{key}` key that an MCP tool returns — "
+            "an agent reads this payload; document it in the same PR that adds it"
+        )
+
+
+def test_mcp_md_explains_the_degraded_mode_an_agent_must_act_on():
+    """`mode` is only useful if the doc says what the degraded value MEANS —
+    the whole point of issue #25 is that a degraded ranking is otherwise
+    indistinguishable from a healthy one."""
+    mcp_md = _read("docs/MCP.md")
+    assert "lexical-only: embedder mismatch" in mcp_md
+    assert "ADR-0024" in mcp_md

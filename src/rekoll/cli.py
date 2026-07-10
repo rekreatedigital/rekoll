@@ -24,6 +24,7 @@ import argparse
 import codecs
 import errno
 import importlib.util
+import json
 import os
 import sqlite3
 import sys
@@ -333,6 +334,22 @@ def cmd_forget(args: argparse.Namespace) -> int:
 # recall
 # ---------------------------------------------------------------------------
 
+def _recall_payload(result) -> dict:
+    """The machine-readable view of one recall.
+
+    Deliberately the SAME four keys the MCP door's ``recall`` tool returns
+    (``mcp_server._recall``), so a shell script and an MCP agent read one shape
+    through either door — including ``mode``, the honest-degradation string
+    (ADR-0024) that names the pipeline which actually ran.
+    """
+    return {
+        "context": result.context(),
+        "ids": result.ids(),
+        "mode": result.mode,
+        "count": len(result),
+    }
+
+
 def cmd_recall(args: argparse.Namespace) -> int:
     if not _require_store(args):
         return 1
@@ -345,8 +362,19 @@ def cmd_recall(args: argparse.Namespace) -> int:
         )
     finally:
         mem.close()
-    if not len(result):
-        _err(f"No memories found for: {args.query}")
+    empty = not len(result)
+    if empty:
+        _err(f"No memories found for: {args.query}")  # the grep convention, both formats
+    if args.json:
+        # Printed even when empty: a machine caller always gets one parseable
+        # object, and can still read `mode` -- which matters MOST when a
+        # degraded pipeline is what returned nothing. The exit code is
+        # unchanged (1 = no results), so `recall --json || handle` still works.
+        # json.dumps defaults to ensure_ascii=True, which this module wants:
+        # recalled content may hold characters a cp1252 console cannot encode.
+        _out(json.dumps(_recall_payload(result)))
+        return 1 if empty else 0
+    if empty:
         return 1
     if args.context:
         _out(result.context())
@@ -372,7 +400,16 @@ def cmd_recall(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     """Report on the store WITHOUT building an embedder — opening ``Memory()``
     would load (and on first use download) a model and stamp an embedder
-    identity onto the scope; a status read must do neither."""
+    identity onto the scope; a status read must do neither.
+
+    This is why ``status`` prints no ``mode``, while MCP's ``status`` tool does:
+    the mode string is a property of a live ``Memory`` (it depends on the
+    embedder you are holding vs. the one the scope stored), and the MCP server
+    already holds one. Resolving an embedder here just to name the pipeline
+    would trade a cheap, side-effect-free read for a model download. Use
+    ``rekoll doctor`` (which reports ``Memory.health().mode``) or
+    ``rekoll recall --json``; both legitimately open a ``Memory``.
+    """
     if not _require_store(args):
         return 1
     if _refuse_foreign_store(args.path):
@@ -697,18 +734,25 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "recall", parents=[shared],
         help="search your memories",
-        description="Hybrid semantic + keyword search. Exit code 1 when nothing is found.",
+        description=(
+            "Hybrid semantic + keyword search. Exit code 1 when nothing is found "
+            "(--json still prints its object in that case)."
+        ),
     )
     p.add_argument("query", help="what to look for")
     p.add_argument("-k", type=_positive_int, default=5, metavar="N",
                    help="how many results (default: %(default)s)")
     p.add_argument("--kind", choices=_KIND_CHOICES, default=None,
                    help="only this kind of memory")
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--context", action="store_true",
-                      help="print the safe, LLM-ready context envelope instead of a list")
-    mode.add_argument("--ids", action="store_true",
-                      help="print matching ids only, one per line (pipe into 'rekoll forget')")
+    fmt = p.add_mutually_exclusive_group()
+    fmt.add_argument("--context", action="store_true",
+                     help="print the safe, LLM-ready context envelope instead of a list")
+    fmt.add_argument("--ids", action="store_true",
+                     help="print matching ids only, one per line (pipe into 'rekoll forget')")
+    fmt.add_argument("--json", action="store_true",
+                     help="print one JSON object {context, ids, mode, count}; 'mode' names "
+                          "the retrieval pipeline that ran (e.g. 'lexical-only: embedder "
+                          "mismatch' when semantic search is degraded)")
     p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser(
