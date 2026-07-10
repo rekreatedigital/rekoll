@@ -16,10 +16,25 @@ import warnings
 
 import pytest
 
+from dataclasses import dataclass
+
 from rekoll import Kind, MemoryRecord, Provenance, Scope, StubEmbedder, TrustTier
-from rekoll.adapters.base import CAP_LEXICAL
+from rekoll.adapters.base import CAP_LEXICAL, QueryHit
 from rekoll.adapters.sqlite import SQLiteAdapter
-from rekoll.retrieval import hybrid_search
+from rekoll.retrieval import hybrid_search, rrf_fuse
+
+
+@dataclass
+class _FakeRecord:
+    id: str
+
+
+def _hit(rid: str) -> QueryHit:
+    return QueryHit(record=_FakeRecord(rid), score=0.0)
+
+
+def _hits(rids) -> list[QueryHit]:
+    return [_hit(r) for r in rids]
 
 
 class _SpyAdapter:
@@ -200,3 +215,79 @@ def test_warning_names_the_default_pool_so_the_caller_can_act(store):
         hybrid_search(db, scope=scope, query="postgres", embedder=emb, k=10, candidates=100)
     msg = next(str(w.message) for w in caught if "candidates=100" in str(w.message))
     assert "60" in msg, f"warning should name the 6*k default pool: {msg}"
+
+
+# -- #36, cont.: the warning is a FUSION warning, so it needs two legs ----------
+#
+# RRF's score is 1/(rrf_k + rank + 1), strictly decreasing in rank. Fusing ONE
+# ranked list therefore reproduces that list's order exactly, and a deeper pool
+# cannot change a single-leg search's top-k. Warning there would be a false
+# alarm -- and use_lexical=False (#33) makes single-leg searches first-class.
+# These tests pin the mechanism so the warning can never be widened back.
+class _LexicalOff:
+    """Capability shim: same adapter, CAP_LEXICAL reported off."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def supports(self, capability):
+        return False if capability == CAP_LEXICAL else self._inner.supports(capability)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _warned(fn, **kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fn(**kwargs)
+    return [w for w in caught if "candidates" in str(w.message)]
+
+
+def test_single_list_rrf_is_order_preserving_at_any_depth():
+    """The mechanism, in isolation: one leg + deeper pool == same top-k."""
+    ranked = [_hit(f"d{i}") for i in range(200)]
+    shallow = [h.record.id for h in rrf_fuse([ranked[:30]], top=30)][:5]
+    deep = [h.record.id for h in rrf_fuse([ranked[:200]], top=200)][:5]
+    assert shallow == deep == ["d0", "d1", "d2", "d3", "d4"]
+
+
+def test_two_list_rrf_lets_a_deep_pool_promote_a_tail_document():
+    """...and why two legs DO degrade: ``z`` is 25th in one list and 40th in the
+    other. At pool 30 it scores from one list only and misses the top-5; at pool
+    200 it scores from both and takes rank 1, displacing a document ranked high
+    in a single list. This is the 0.901 -> 0.760 degradation, mechanically."""
+    a = [f"a{i}" for i in range(25)] + ["z"] + [f"a{i}" for i in range(25, 199)]
+    b = [f"b{i}" for i in range(40)] + ["z"] + [f"b{i}" for i in range(40, 199)]
+
+    shallow = [h.record.id for h in rrf_fuse([_hits(a[:30]), _hits(b[:30])], top=30)][:5]
+    deep = [h.record.id for h in rrf_fuse([_hits(a[:200]), _hits(b[:200])], top=200)][:5]
+    assert "z" not in shallow
+    assert deep[0] == "z", "the tail document must reach rank 1 at depth"
+
+
+def test_vector_only_deep_pool_does_not_warn(store):
+    """A refused lexical leg cannot suffer a fusion effect. No false alarm."""
+    db, scope, emb = store
+    assert not _warned(hybrid_search, adapter=db, scope=scope, query="postgres",
+                       embedder=emb, k=5, candidates=200, use_lexical=False)
+
+
+def test_lexical_only_deep_pool_does_not_warn(store):
+    db, scope, emb = store
+    assert not _warned(hybrid_search, adapter=db, scope=scope, query="postgres",
+                       embedder=emb, k=5, candidates=200, use_vector=False)
+
+
+def test_vector_only_adapter_deep_pool_does_not_warn(store):
+    """An adapter with no lexical capability is single-leg by construction."""
+    db, scope, emb = store
+    assert not _warned(hybrid_search, adapter=_LexicalOff(db), scope=scope,
+                       query="postgres", embedder=emb, k=5, candidates=200)
+
+
+def test_two_legs_deep_pool_still_warns(store):
+    """The control: the one configuration the warning is actually about."""
+    db, scope, emb = store
+    assert _warned(hybrid_search, adapter=db, scope=scope, query="postgres",
+                   embedder=emb, k=5, candidates=200)

@@ -188,12 +188,20 @@ def hybrid_search(
     ``candidates`` sizes the pool each leg retrieves and RRF fuses (default
     ``6*k``). It is a **reranker-feeding knob, NOT a recall knob**: a reranker
     rescores the whole pool, so a deeper pool gives it more to find. Without a
-    reranker there is nothing to rescore — RRF simply fuses two longer ranked
-    lists whose tails are noise, and that noise reaches the top-k. Raising
-    ``candidates`` with no reranker therefore *lowers* quality (measured
-    paraphrase recall@5 on a 1,000-doc corpus: 0.901 at pool 30, 0.870 at 50,
-    0.823 at 100, 0.760 at 200) and warns. Note a reranker rescues depth but
-    does not beat a shallow pool: pool 200 + reranker recovers only to 0.849.
+    reranker there is nothing to rescore, and fusing two *longer* ranked lists
+    lets a document ranked poorly in BOTH out-score one ranked high in only one
+    — the noisy tail reaches the top-k. Raising ``candidates`` with no reranker
+    therefore *lowers* quality (measured paraphrase recall@5 on a 1,000-doc
+    corpus: 0.901 at pool 30, 0.870 at 50, 0.823 at 100, 0.760 at 200), and
+    warns. A reranker rescues depth but does not beat a shallow pool: pool 200
+    + reranker recovers only to 0.849.
+
+    That degradation is a **fusion** effect and needs two legs. RRF's score,
+    ``1/(rrf_k + rank + 1)``, is strictly decreasing in rank, so fusing a single
+    ranked list reproduces its order exactly: on a one-leg search (``use_vector``
+    or ``use_lexical`` refused, or an adapter with no lexical capability) a
+    deeper pool changes only how much is read, never the top-k. No warning is
+    raised there, because there is nothing to warn about.
 
     ``use_vector=False`` refuses the vector leg entirely — the query is never
     embedded and ``vector_query`` is never called. Callers use this for honest
@@ -246,15 +254,30 @@ def hybrid_search(
     query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
     default_pool = max(k * 6, k)
     pool = candidates or default_pool
-    if candidates is not None and candidates > default_pool and reranker is None:
+    # The depth footgun is a FUSION effect, and only fires when two legs fuse.
+    # RRF's score, 1/(rrf_k + rank + 1), is strictly decreasing in rank, so
+    # fusing ONE ranked list reproduces that list's order exactly: a deeper pool
+    # cannot change a single-leg search's top-k, only how much it reads. What
+    # degrades quality is a document sitting deep in BOTH lists out-scoring one
+    # ranked high in only one — impossible with a single leg. Warning there
+    # would be a false alarm, and ``use_lexical=False`` (#33) makes single-leg
+    # searches a first-class thing to do.
+    fuses_two_legs = use_vector and use_lexical and adapter.supports(CAP_LEXICAL)
+    if (
+        candidates is not None
+        and candidates > default_pool
+        and reranker is None
+        and fuses_two_legs
+    ):
         warnings.warn(
             f"[rekoll] candidates={candidates} exceeds the default pool of "
             f"{default_pool} (6*k, k={k}) and no reranker is attached. "
-            f"`candidates` FEEDS A RERANKER; it is not a recall knob. Under "
-            f"RRF-only ranking a deeper pool admits more of each leg's noisy "
-            f"tail into the top-k and MEASURABLY DEGRADES quality (measured "
-            f"paraphrase recall@5: 0.901 at pool 30 -> 0.760 at pool 200). "
-            f"Attach a reranker, or leave `candidates` unset (issue #36).",
+            f"`candidates` FEEDS A RERANKER; it is not a recall knob. Fusing "
+            f"two deeper ranked lists lets a document ranked poorly in BOTH "
+            f"out-score one ranked high in only one, so the noisy tail reaches "
+            f"the top-k and quality MEASURABLY DEGRADES (measured paraphrase "
+            f"recall@5: 0.901 at pool 30 -> 0.760 at pool 200). Attach a "
+            f"reranker, or leave `candidates` unset (issue #36).",
             stacklevel=2,
         )
     # An adapter whose vector leg does not rank by cosine cannot be gated: the
@@ -313,7 +336,14 @@ def _evaluate_gate(
     metric: str,
     top_vector_score: Optional[float],
 ) -> str:
-    """Decide the abstain gate's verdict (ADR-0028). Pure; warns on misuse."""
+    """Decide the abstain gate's verdict (ADR-0028).
+
+    Warns (it is not pure) when the caller asked for a gate that cannot run: the
+    two ``unavailable`` cases a caller can actually fix. Python's default filter
+    shows such a warning once per call site, so the PER-CALL contract is the
+    returned verdict — which ``Memory`` folds into ``RecallResult.mode`` on every
+    single recall, warning or not.
+    """
     if min_score is None:
         return GATE_OFF
     if not use_vector:
