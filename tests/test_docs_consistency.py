@@ -102,12 +102,17 @@ def test_design_and_readme_name_every_shipped_tool():
 # name each one. Adding a key to a tool result is fine — it is a DOCUMENTED,
 # LLM-FACING surface, so the docs edit lands in the same PR.
 
-PINNED_MCP_RECALL_KEYS = {"context", "ids", "mode", "count"}
+PINNED_MCP_RECALL_KEYS = {
+    "context", "ids", "mode", "count", "abstained", "top_vector_score",
+}
 PINNED_MCP_STATUS_KEYS = {
     "memories", "scope", "store", "write_trust", "writable_kinds",
     "embedder", "mode", "firewall", "version",
 }
-PINNED_MCP_INGEST_KEYS = {"files", "chunks", "skipped", "filtered", "total"}
+PINNED_MCP_INGEST_KEYS = {
+    "files", "chunks", "skipped", "filtered",
+    "secrets_skipped", "secrets_stored", "total",
+}
 
 
 def _live_payload_keys() -> tuple[set, set]:

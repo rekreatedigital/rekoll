@@ -266,13 +266,18 @@ def test_recall_json_prints_one_object_with_the_mcp_recall_keys(project, capsys)
     capsys.readouterr()
     assert main(["recall", "postgres pooling", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert set(payload) == {"context", "ids", "mode", "count"}
+    assert set(payload) == {
+        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+    }
     assert payload["count"] == len(payload["ids"]) >= 1
     assert all(rid.startswith("rk_") for rid in payload["ids"])
     assert "NOT instructions" in payload["context"]
     # The stub is pinned by the autouse fixture: the pipeline must SAY so
     # rather than pass a semantics-free ranking off as a real one.
     assert payload["mode"] == "vector+lexical (stub-embedder)"
+    # An ordinary recall did not abstain; top_vector_score is the populated cosine.
+    assert payload["abstained"] is False
+    assert isinstance(payload["top_vector_score"], float)
 
 
 def test_recall_json_ranks_identically_to_the_ids_format(project, capsys):
@@ -299,6 +304,33 @@ def test_recall_json_still_exits_one_when_empty_but_prints_the_object(project, c
     assert payload["ids"] == [] and payload["count"] == 0
     assert payload["mode"] == "vector+lexical (stub-embedder)"  # still labelled
     assert "No memories found" in captured.err  # the human message stays on stderr
+
+
+def test_recall_min_score_abstains_and_says_why(project, capsys):
+    """Issue #47: --min-score reaches the abstain gate (ADR-0028) through the
+    CLI. A threshold nothing clears returns zero hits (exit 1), the --json
+    payload carries abstained=true + the gated mode, and the human line says
+    'Abstained' — never the misleading 'No memories found' of an empty store."""
+    _remember("alpha fact about postgres pooling")
+    capsys.readouterr()
+    # 0.99 is far above any stub top-1 cosine, so the gate refuses.
+    assert main(["recall", "postgres pooling", "--min-score", "0.99", "--json"]) == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["abstained"] is True
+    assert payload["ids"] == [] and payload["count"] == 0
+    assert "abstained" in payload["mode"]
+    assert payload["top_vector_score"] < 0.99
+    assert "Abstained" in captured.err and "not an empty store" in captured.err
+    assert "No memories found" not in captured.err
+
+
+def test_recall_min_score_out_of_range_is_rejected_at_parse_time(project, capsys):
+    """A cosine floor is validated like the SDK's: a fused/RRF-shaped number is
+    refused with a clean message, not a traceback (ADR-0028)."""
+    with pytest.raises(SystemExit):
+        main(["recall", "anything", "--min-score", "42"])
+    assert "cosine similarity in [-1.0, 1.0]" in capsys.readouterr().err
 
 
 def test_recall_json_names_a_degraded_pipeline_instead_of_bluffing(project, capsys, monkeypatch):
@@ -364,6 +396,32 @@ def test_ingest_file_reports_counts(project, capsys):
     assert "Indexing" in captured.err  # progress goes to stderr, result to stdout
     capsys.readouterr()
     assert main(["recall", "syn ack handshake"]) == 0
+
+
+def test_ingest_direct_credentials_file_warns_that_a_secret_was_stored(project, capsys):
+    """Issue #41: pointing `rekoll ingest` straight at a credential-shaped file
+    bypasses the filename filter and STORES it. The result must say so — a
+    warning line on stderr (a count, never the name) — so the operator isn't left
+    with a silently-recallable secret. stdout stays the machine-readable result."""
+    (project / "credentials.json").write_text(
+        '{"api_key": "sk-not-a-real-key"}', encoding="utf-8"
+    )
+    assert main(["ingest", "credentials.json"]) == 0
+    captured = capsys.readouterr()
+    assert "Indexed 1 file" in captured.out
+    # The warning is on stderr, and carries a COUNT, not the filename.
+    assert "STORED as memory" in captured.err
+    assert "credential-shaped" in captured.err
+    assert "credentials.json" not in captured.out  # never the name on the result line
+
+
+def test_ingest_normal_file_prints_no_secret_warning(project, capsys):
+    """The secret warning fires ONLY when a secret was actually stored — a normal
+    ingest is silent about it (the discriminating negative of the case above)."""
+    (project / "notes.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    assert main(["ingest", "notes.md"]) == 0
+    captured = capsys.readouterr()
+    assert "STORED as memory" not in captured.err
 
 
 def test_ingest_directory_walks_and_counts_files(project, capsys):

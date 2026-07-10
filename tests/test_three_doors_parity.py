@@ -232,12 +232,15 @@ def _cli_ids(store, query: str, *, k: int = K, kind: str | None = None) -> list[
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
-def _cli_json(store, query: str, *, k: int = K, kind: str | None = None) -> dict:
+def _cli_json(
+    store, query: str, *, k: int = K, kind: str | None = None,
+    min_score: float | None = None,
+) -> dict:
     """Door 2, machine format: ``python -m rekoll recall --json`` -> one object.
 
-    Exit code 1 ("No memories found") is the CLI's documented empty result and
-    still prints the object — so the payload, and its ``mode``, is readable in
-    exactly the case a caller most needs it.
+    Exit code 1 ("No memories found", or an abstain) is the CLI's documented
+    empty result and still prints the object — so the payload, its ``mode``, and
+    ``abstained`` are readable in exactly the case a caller most needs them.
     """
     cmd = [
         sys.executable, "-m", "rekoll", "recall", query,
@@ -245,6 +248,8 @@ def _cli_json(store, query: str, *, k: int = K, kind: str | None = None) -> dict
     ]
     if kind is not None:
         cmd += ["--kind", kind]
+    if min_score is not None:
+        cmd += ["--min-score", str(min_score)]
     proc = subprocess.run(
         cmd, capture_output=True, encoding="utf-8", errors="replace",
         env=store.env, cwd=str(store.root), timeout=120,
@@ -282,11 +287,12 @@ def _payload(result) -> dict:
     return json.loads(text)
 
 
-def _mcp_recall_bulk(store, calls: list[tuple[str, int]]):
+def _mcp_recall_bulk(store, calls: list[tuple[str, int]], *, min_score: float | None = None):
     """Door 3: the REAL server over stdio, driven by the official MCP client.
 
     Configured via REKOLL_MCP_* env vars (path/project/root) — the documented
     deployment surface — pointing at the same store file and project scope.
+    ``min_score``, when given, is applied to every call (the abstain gate).
     Returns ({(query, k): recall_payload}, status_payload).
     """
     pytest.importorskip("mcp")
@@ -320,8 +326,11 @@ def _mcp_recall_bulk(store, calls: list[tuple[str, int]]):
                     await session.initialize()
                     out = {}
                     for query, k in calls:
+                        args = {"query": query, "k": k}
+                        if min_score is not None:
+                            args["min_score"] = min_score
                         out[(query, k)] = _payload(
-                            await session.call_tool("recall", {"query": query, "k": k})
+                            await session.call_tool("recall", args)
                         )
                     status = _payload(await session.call_tool("status", {}))
                     return out, status
@@ -489,11 +498,71 @@ def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
     mcp_payload = mcp_out[(query, K)]
     cli_payload = _cli_json(store, query)
 
-    assert set(cli_payload) == set(mcp_payload) == {"context", "ids", "mode", "count"}
+    assert set(cli_payload) == set(mcp_payload) == {
+        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+    }
     assert cli_payload["ids"] == mcp_payload["ids"]
     assert cli_payload["mode"] == mcp_payload["mode"]
     assert cli_payload["count"] == mcp_payload["count"]
     assert cli_payload["context"] == mcp_payload["context"]  # one envelope, one renderer
+    assert cli_payload["abstained"] == mcp_payload["abstained"]  # abstain gate (ADR-0028/0031)
+    assert cli_payload["top_vector_score"] == mcp_payload["top_vector_score"]
+
+
+# The abstain gate is a COSINE floor; on the stub corpus every top-1 cosine is
+# well under 0.99, so this threshold refuses every query deterministically —
+# across processes and machines — without depending on a specific score.
+ABSTAIN_MIN_SCORE = 0.99
+
+
+def test_abstain_reads_as_abstained_through_sdk_and_cli(store, sdk):
+    """Issue #47 (SDK<->CLI leg, runs on the no-extra path): the abstain gate
+    (ADR-0028) is reachable and HONEST through the CLI, not only the SDK. An
+    abstain is zero hits that says WHY — abstained=true + a mode that names the
+    gate — and is never confusable with an empty store (the contrast below)."""
+    query = QUERIES[0]
+
+    sdk_res = sdk.recall(query, k=K, min_score=ABSTAIN_MIN_SCORE)
+    assert sdk_res.abstained is True and len(sdk_res) == 0
+    assert "abstained" in sdk_res.mode
+
+    cli = _cli_json(store, query, min_score=ABSTAIN_MIN_SCORE)
+    assert cli["abstained"] is True
+    assert cli["ids"] == [] and cli["count"] == 0
+    assert "abstained" in cli["mode"]
+    assert cli["mode"] == sdk_res.mode  # both doors name the same gated pipeline
+    # top_vector_score is the cosine the gate compared against — populated, and
+    # equal across doors (deterministic stub), and below the threshold.
+    assert cli["top_vector_score"] == sdk_res.top_vector_score
+    assert cli["top_vector_score"] < ABSTAIN_MIN_SCORE
+
+    # The discriminating contrast: WITHOUT the gate the same query is a normal,
+    # non-empty recall that is NOT abstained. Abstain != empty store.
+    plain = _cli_json(store, query)
+    assert plain["abstained"] is False and plain["count"] > 0
+
+
+def test_abstain_crosses_every_door(store, sdk):
+    """Issue #47 (all three doors; skips cleanly without the mcp extra): an
+    abstained recall reads as abstained through SDK, CLI, AND the real MCP stdio
+    server — never as an empty store — and every door names the same gated
+    pipeline. This is the three-doors twin of the mode pin (issue #25)."""
+    query = QUERIES[0]
+    mcp_out, _ = _mcp_recall_bulk(store, [(query, K)], min_score=ABSTAIN_MIN_SCORE)
+    mcp = mcp_out[(query, K)]
+
+    sdk_res = sdk.recall(query, k=K, min_score=ABSTAIN_MIN_SCORE)
+    cli = _cli_json(store, query, min_score=ABSTAIN_MIN_SCORE)
+
+    for name, payload in (("cli", cli), ("mcp", mcp)):
+        assert payload["abstained"] is True, f"{name} did not abstain"
+        assert payload["ids"] == [] and payload["count"] == 0, f"{name} returned hits"
+        assert "abstained" in payload["mode"], f"{name} mode does not name the gate"
+
+    # One gated pipeline, named identically at every door.
+    assert sdk_res.mode == cli["mode"] == mcp["mode"]
+    assert sdk_res.abstained is True and len(sdk_res) == 0
+    assert cli["top_vector_score"] == mcp["top_vector_score"] == sdk_res.top_vector_score
 
 
 def test_three_doors_agree_at_nondefault_k(store, sdk):

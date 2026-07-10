@@ -301,6 +301,19 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         f"({stats['chunks']} chunk{'s' if stats['chunks'] != 1 else ''}). "
         f"The store now holds {stats['total']} memories."
     )
+    # Credential-shaped files ingested anyway (a direct path bypasses the
+    # filename filter, #29/#41). The core already warns via ``warnings``, but a
+    # CLI user should see it on the result line too, not only if warnings render
+    # — counts, never names (the names are printed nowhere). stderr keeps stdout
+    # (the machine-readable result) stable.
+    if stats.get("secrets_stored", 0) > 0:
+        n = stats["secrets_stored"]
+        _err(
+            f"rekoll: warning: {n} credential-shaped file{'s' if n != 1 else ''} "
+            f"(name suggests .env / credentials / private key) {'were' if n != 1 else 'was'} "
+            "STORED as memory — now recallable and carried by any export. "
+            "Review, then `rekoll forget <id>` to remove."
+        )
     return 0
 
 
@@ -337,16 +350,21 @@ def cmd_forget(args: argparse.Namespace) -> int:
 def _recall_payload(result) -> dict:
     """The machine-readable view of one recall.
 
-    Deliberately the SAME four keys the MCP door's ``recall`` tool returns
+    Deliberately the SAME keys the MCP door's ``recall`` tool returns
     (``mcp_server._recall``), so a shell script and an MCP agent read one shape
     through either door — including ``mode``, the honest-degradation string
-    (ADR-0024) that names the pipeline which actually ran.
+    (ADR-0024) that names the pipeline which actually ran, and ``abstained`` /
+    ``top_vector_score``, the abstain-gate envelope (ADR-0028/0031): an abstain
+    is zero hits that is NOT an empty store, and it says so here rather than
+    looking identical to a miss.
     """
     return {
         "context": result.context(),
         "ids": result.ids(),
         "mode": result.mode,
         "count": len(result),
+        "abstained": result.abstained,
+        "top_vector_score": result.top_vector_score,
     }
 
 
@@ -358,13 +376,24 @@ def cmd_recall(args: argparse.Namespace) -> int:
         return 1
     try:
         result = mem.recall(
-            args.query, k=args.k, kind=Kind(args.kind) if args.kind else None
+            args.query, k=args.k, kind=Kind(args.kind) if args.kind else None,
+            min_score=args.min_score,
         )
     finally:
         mem.close()
     empty = not len(result)
     if empty:
-        _err(f"No memories found for: {args.query}")  # the grep convention, both formats
+        if result.abstained:
+            # An abstain is NOT an empty store (ADR-0028): the gate refused
+            # because nothing was similar enough. Say so — and name the mode —
+            # so the human isn't told "not found" when the truth is "not sure".
+            # Exit code stays 1 (the no-results convention), the message says why.
+            _err(
+                f"Abstained: no memory cleared --min-score={args.min_score} "
+                f"(this is not an empty store; {result.mode})"
+            )
+        else:
+            _err(f"No memories found for: {args.query}")  # the grep convention, both formats
     if args.json:
         # Printed even when empty: a machine caller always gets one parseable
         # object, and can still read `mode` -- which matters MOST when a
@@ -662,6 +691,22 @@ def _positive_int(value: str) -> int:
     return n
 
 
+def _cosine_threshold(value: str) -> float:
+    """Validate --min-score exactly as the SDK does (ADR-0028): a COSINE in
+    [-1.0, 1.0], not a fused/RRF score. Rejected at parse time so the abstain
+    gate refuses a nonsense threshold with a clean message, not a traceback."""
+    try:
+        f = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a number in [-1.0, 1.0] (got {value!r})")
+    if not -1.0 <= f <= 1.0:
+        raise argparse.ArgumentTypeError(
+            f"min_score={value} is out of range: it is a cosine similarity in "
+            "[-1.0, 1.0], not a fused/RRF score"
+        )
+    return f
+
+
 def _scope_part(value: str) -> str:
     """Reject at parse time what Scope would reject with a traceback later."""
     if not value or "/" in value or "\x00" in value:
@@ -744,15 +789,22 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="how many results (default: %(default)s)")
     p.add_argument("--kind", choices=_KIND_CHOICES, default=None,
                    help="only this kind of memory")
+    p.add_argument("--min-score", type=_cosine_threshold, default=None, metavar="COSINE",
+                   help="abstain gate (ADR-0028): return NO hits (exit 1) unless the "
+                        "closest memory's top-1 vector cosine is at least this value — an "
+                        "honest 'I don't know' instead of confident-looking hits for a "
+                        "question the store can't answer. A cosine in [-1.0, 1.0]; measure "
+                        "a threshold from your corpus (--json reports 'top_vector_score')")
     fmt = p.add_mutually_exclusive_group()
     fmt.add_argument("--context", action="store_true",
                      help="print the safe, LLM-ready context envelope instead of a list")
     fmt.add_argument("--ids", action="store_true",
                      help="print matching ids only, one per line (pipe into 'rekoll forget')")
     fmt.add_argument("--json", action="store_true",
-                     help="print one JSON object {context, ids, mode, count}; 'mode' names "
-                          "the retrieval pipeline that ran (e.g. 'lexical-only: embedder "
-                          "mismatch' when semantic search is degraded)")
+                     help="print one JSON object {context, ids, mode, count, abstained, "
+                          "top_vector_score}; 'mode' names the retrieval pipeline that ran "
+                          "(e.g. 'lexical-only: embedder mismatch' when degraded), and "
+                          "'abstained' is true when --min-score refused the query")
     p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser(

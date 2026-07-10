@@ -153,7 +153,10 @@ def test_ingest_path_surfaces_the_cores_skipped_count(tmp_path):
     (docs / "bad.md").write_bytes(b"\xff\xfe\xfa not utf-8 \xff")  # undecodable -> skipped
 
     out = _ingest_path(mem, root, "docs")
-    assert set(out) == {"files", "chunks", "skipped", "filtered", "total"}
+    assert set(out) == {
+        "files", "chunks", "skipped", "filtered",
+        "secrets_skipped", "secrets_stored", "total",
+    }
     assert out["files"] == 1 and out["chunks"] >= 1
     assert out["skipped"] == 1  # the model is told, not left to infer from silence
 
@@ -223,6 +226,50 @@ def test_ingest_path_carries_every_key_the_core_reports(tmp_path):
         f"{sorted(core_keys)} — carry the new key across the boundary (or decide, "
         "in mcp_server._ingest_path, that the calling model must not see it)"
     )
+
+
+def test_mcp_folder_ingest_surfaces_secrets_skipped_over_the_wire(tmp_path):
+    """Issue #41 (Case A): a folder ingest that EXCLUDED a credential-shaped file
+    reports it as a COUNT in the wire payload — the core's warning cannot cross
+    stdio, so this count is the only signal. Never the name."""
+    root = tmp_path.resolve()
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    (docs / "credentials.json").write_text('{"api_key": "sk-not-a-real-key"}', encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="look like credentials"):
+        payload = _ingest_path(_mem(), root, "docs")
+
+    assert payload["secrets_skipped"] == 1
+    assert payload["secrets_stored"] == 0
+    assert payload["files"] == 1  # only good.md was read
+    # Counts only — the filename never crosses the boundary.
+    assert "credentials" not in json.dumps(payload)
+
+
+def test_mcp_direct_path_ingest_surfaces_secrets_stored_over_the_wire(tmp_path):
+    """Issue #41 (Case B): pointing ingest_path straight at a credential file
+    bypasses the filter (explicit intent) and STORES it — exactly the path an
+    injected 'index ./credentials.json' instruction takes. Pre-fix, the wire
+    payload was byte-identical to a normal file's; now secrets_stored says so.
+    Still a count, never the name."""
+    root = tmp_path.resolve()
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "credentials.json").write_text('{"api_key": "sk-not-a-real-key"}', encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="STORED"):
+        payload = _ingest_path(_mem(), root, "docs/credentials.json")
+
+    assert payload["secrets_stored"] == 1
+    assert payload["files"] == 1
+    # A normal file's payload has secrets_stored == 0 — the two are now distinct.
+    (docs / "good.md").write_text("# Note\n\nThe deploy runs nightly.", encoding="utf-8")
+    normal = _ingest_path(_mem(), root, "docs/good.md")
+    assert normal["secrets_stored"] == 0
+    # Counts only — the filename never crosses the boundary.
+    assert "credentials" not in json.dumps(payload)
 
 
 # -- 3. results: the retrieval mode crosses the boundary -------------------------
@@ -441,9 +488,12 @@ def test_e2e_degraded_mode_reaches_the_calling_model_over_the_wire(tmp_path):
     # The server auto-resolves StubEmbedder() (dim=64) under the shim => mismatch.
     recall, status = _run_server_session(tmp_path, fn, env=_stub_pinned_env(tmp_path))
 
-    assert set(recall) == {"context", "ids", "mode", "count"}
+    assert set(recall) == {
+        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+    }
     assert recall["count"] >= 1 and "Postgres" in recall["context"]  # looks healthy...
     assert recall["mode"] == DEGRADED_MODE  # ...and says otherwise
+    assert recall["abstained"] is False  # no gate was requested
     assert status["mode"] == DEGRADED_MODE
     assert status["embedder"] == "stub-hash"  # the name alone would have hidden it
 
