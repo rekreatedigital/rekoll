@@ -84,6 +84,7 @@ def hybrid_search(
     candidates: Optional[int] = None,
     include_quarantined: bool = False,
     use_vector: bool = True,
+    use_lexical: bool = True,
 ) -> QueryResult:
     """Vector + (optional) lexical search fused by RRF, then optionally reranked.
 
@@ -100,28 +101,60 @@ def hybrid_search(
     (direct-DB tampering) is demoted to QUARANTINED in memory and warned about
     (ADR-0019).
 
+    ``candidates`` sizes the pool each leg retrieves and RRF fuses (default
+    ``6*k``). It is a **reranker-feeding knob, NOT a recall knob**: a reranker
+    rescores the whole pool, so a deeper pool gives it more to find. Without a
+    reranker there is nothing to rescore — RRF simply fuses two longer ranked
+    lists whose tails are noise, and that noise reaches the top-k. Raising
+    ``candidates`` with no reranker therefore *lowers* quality (measured
+    paraphrase recall@5 on a 1,000-doc corpus: 0.901 at pool 30, 0.870 at 50,
+    0.823 at 100, 0.760 at 200) and warns. Note a reranker rescues depth but
+    does not beat a shallow pool: pool 200 + reranker recovers only to 0.849.
+
     ``use_vector=False`` refuses the vector leg entirely — the query is never
     embedded and ``vector_query`` is never called. Callers use this for honest
     lexical-only degradation when the scope's stored vectors are not comparable
-    to the current embedder (embedder-identity mismatch, ADR-0024). With no
-    lexical capability either, the result is honestly empty rather than a
-    garbage ranking.
+    to the current embedder (embedder-identity mismatch, ADR-0024).
+
+    ``use_lexical=False`` is its mirror: the lexical leg is refused even on an
+    adapter that advertises ``CAP_LEXICAL``, and ``lexical_query`` is never
+    called. Callers use it for a vector-only run — an ablation arm, or a scope
+    whose FTS index is corrupt/misbehaving — without dropping to
+    ``adapter.vector_query`` directly, which would bypass this function's query
+    sanitization, tamper verification and quarantine filtering (#33).
+
+    With BOTH legs refused (or ``use_vector=False`` on an adapter with no
+    lexical capability) the result is honestly empty rather than a garbage
+    ranking.
     """
     query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
-    pool = candidates or max(k * 6, k)
+    default_pool = max(k * 6, k)
+    pool = candidates or default_pool
+    if candidates is not None and candidates > default_pool and reranker is None:
+        warnings.warn(
+            f"[rekoll] candidates={candidates} exceeds the default pool of "
+            f"{default_pool} (6*k, k={k}) and no reranker is attached. "
+            f"`candidates` FEEDS A RERANKER; it is not a recall knob. Under "
+            f"RRF-only ranking a deeper pool admits more of each leg's noisy "
+            f"tail into the top-k and MEASURABLY DEGRADES quality (measured "
+            f"paraphrase recall@5: 0.901 at pool 30 -> 0.760 at pool 200). "
+            f"Attach a reranker, or leave `candidates` unset (issue #36).",
+            stacklevel=2,
+        )
     lists: list[Iterable[QueryHit]] = []
     if use_vector:
         query_vec = embedder.embed([query])[0]
         lists.append(
             adapter.vector_query(scope=scope, embedding=query_vec, k=pool, kind=kind, where=where).hits
         )
-    if adapter.supports(CAP_LEXICAL):
+    if use_lexical and adapter.supports(CAP_LEXICAL):
         lists.append(
             adapter.lexical_query(scope=scope, text=query, k=pool, kind=kind, where=where).hits
         )
     if not lists:
-        # No vector leg (refused) AND no lexical capability: honestly empty
-        # rather than a garbage ranking (ADR-0024).
+        # No vector leg (refused) AND no lexical leg (refused, or the adapter
+        # has no lexical capability): honestly empty rather than a garbage
+        # ranking (ADR-0024).
         return QueryResult(hits=())
     fused = _verify_hits(rrf_fuse(lists, k=rrf_k, top=pool))
     if not include_quarantined:
