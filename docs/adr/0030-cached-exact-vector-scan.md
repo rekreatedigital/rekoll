@@ -110,25 +110,32 @@ same ids, same order, same scores — at every store size.
 ## Consequences
 
 Measured on Ryzen 7 7800X3D (8C/16T), 32 GB, Win 11, Python 3.12.6, numpy 2.5.0,
-dim=384, k=8, warmup=10, reps=60 — reproduce with
-`python benchmarks/vector_scan_bench.py --n 1000 10000`:
+dim=384, k=8, warmup=20, reps=120 — reproduce with
+`python benchmarks/vector_scan_bench.py --n 1000 10000 --reps 120 --warmup 20`:
 
 | N | arm | p50 ms | p95 ms | cold ms | speedup |
 | ---: | --- | ---: | ---: | ---: | ---: |
-| 1,000 | legacy (brute force) | 119.25 | 129.95 | 118.70 | 1.0× |
-| 1,000 | python (cached) | 16.38 | 20.46 | 16.09 | 7.3× |
-| 1,000 | numpy (cached) | **1.29** | 1.40 | 2.94 | **92.7×** |
-| 10,000 | legacy (brute force) | 1206.15 | 1242.78 | 1211.93 | 1.0× |
-| 10,000 | python (cached) | 156.81 | 177.60 | 163.91 | 7.7× |
-| 10,000 | numpy (cached) | **4.51** | 6.61 | 8.88 | **267.7×** |
+| 1,000 | legacy (brute force) | 131.82 | 177.05 | 127.41 | 1.0× |
+| 1,000 | python (cached) | 16.70 | 21.11 | 17.59 | 7.9× |
+| 1,000 | numpy (cached) | **1.70** | 2.37 | 2.51 | **77.6×** |
+| 10,000 | legacy (brute force) | 1239.28 | 1478.98 | 1392.97 | 1.0× |
+| 10,000 | python (cached) | 160.98 | 220.47 | 155.51 | 7.7× |
+| 10,000 | numpy (cached) | **4.35** | 5.10 | 9.83 | **284.6×** |
+
+Run-to-run variance on this (desktop, non-isolated) box is roughly ±20% on the
+legacy arm, so the speedup ratios move by a few percent between runs; the orders
+of magnitude do not.
 
 `cold` is the first query after a write. It is ~equal to `p50` for the
 pure-Python path (the surgical cache update means no rebuild) and slightly
-higher for numpy (the per-dim matrix is rebuilt from the cached arrays).
+higher for numpy (the per-dim matrix is rebuilt from the cached arrays). An
+earlier draft that simply *invalidated* the whole cache on write made `cold`
+169 ms at 1k — worse than the 127 ms it replaced — which is why the in-place
+update in (2) is load-bearing rather than an optimization.
 
 End-to-end `Memory.recall()` at 1k with fastembed/bge-small, no reranker:
-**171.9 ms → 24.1 ms p50** (7.1×); recall-immediately-after-a-write is 25.9 ms,
-so the write/read cycle carries no cache penalty.
+**171.9–236.8 ms → 24.4 ms p50** (7–10×); recall-immediately-after-a-write is
+25.8 ms, so the write/read cycle carries no cache penalty.
 
 **What this does not fix.** Reads are still O(N·dim). At 100k the numpy scan is
 ~45 ms and the pure-Python one ~1.5 s, and beyond the cache budget both revert
