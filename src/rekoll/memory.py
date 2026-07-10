@@ -19,6 +19,7 @@ degradation via ``RecallResult.mode`` (ADR-0024).
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import warnings
 from dataclasses import dataclass
@@ -77,9 +78,44 @@ DEFAULT_INCLUDE_EXT = {
     ".json", ".cfg", ".ini", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java",
 }
 DEFAULT_SKIP_DIRS = {
-    ".git", ".venv", "venv", "__pycache__", ".rekoll", "node_modules",
-    "dist", "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".git", ".venv", "venv", "env", "__pycache__", ".rekoll", "node_modules",
+    "dist", "build", "site-packages", ".pytest_cache", ".mypy_cache", ".ruff_cache",
 }
+
+# Filename-level ingest filter (ADR-0027) — the glob twin of DEFAULT_SKIP_DIRS.
+# Applied by the directory WALK only: pointing ingest_path straight at one file
+# is explicit intent and is never blocked. Two tiers, different intents:
+#
+# - Lockfiles are machine-generated dependency pins — in real JS repos they were
+#   53-74% of all stored chunks for zero recall value (issue #28). Skipped
+#   silently, like any other non-content file.
+# - Secret-named files (a real Google OAuth credentials.json was chunked,
+#   embedded, and stored as an ordinary retrievable record — issue #29) are
+#   skipped AND warned: the skip must be visible, and ingesting one anyway
+#   (via override or direct file path) is warned too — never silent.
+#
+# Both lists are defaults for the ``skip_files`` parameter: pass your own set
+# to replace them, or ``skip_files=set()`` to disable filename filtering.
+DEFAULT_SKIP_LOCKFILES = frozenset({
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock",
+    "Cargo.lock", "bun.lockb", "Gemfile.lock", "composer.lock",
+})
+DEFAULT_SKIP_SECRETS = frozenset({
+    "credentials.json", "id_rsa", "id_ed25519", "*.pem", "*.key",
+    ".env", "service-account*.json", "token.pickle",
+})
+DEFAULT_SKIP_FILES = DEFAULT_SKIP_LOCKFILES | DEFAULT_SKIP_SECRETS
+
+
+def _matches_any(name: str, patterns: Iterable[str]) -> bool:
+    """Case-insensitively glob-match a bare filename against ``patterns``.
+
+    ``fnmatchcase`` on lowered strings keeps behavior identical across
+    platforms (plain ``fnmatch`` is case-sensitive on POSIX only), and these
+    well-known names are conventions, not case-exact identifiers.
+    """
+    lowered = name.lower()
+    return any(fnmatch.fnmatchcase(lowered, pat.lower()) for pat in patterns)
 
 # health() retrievability probe. FULL content (capped) — a short head slice made
 # the probe blind on near-duplicate corpora (e.g. a repo ingest where chunks
@@ -500,15 +536,31 @@ class Memory:
         *,
         include_ext: Optional[Iterable[str]] = None,
         skip_dirs: Optional[Iterable[str]] = None,
+        skip_files: Optional[Iterable[str]] = None,
         trust: Optional[TrustTier] = None,
         batch: int = 256,
         follow_symlinks: bool = False,
     ) -> dict:
         """Index a file or directory (code + docs).
 
-        Returns ``{files, chunks, skipped, total}`` — ``skipped`` counts files
-        passed over (symlink, over ``max_file_bytes``, over
-        ``max_chunks_per_doc``, undecodable, or unreadable).
+        Returns ``{files, chunks, skipped, filtered, total}`` — ``skipped``
+        counts files passed over (symlink, over ``max_file_bytes``, over
+        ``max_chunks_per_doc``, undecodable, or unreadable); ``filtered``
+        counts walk candidates excluded by the filename filter (see below).
+
+        Filtering is one two-level system (ADR-0027). Directory level:
+        ``skip_dirs`` (default ``DEFAULT_SKIP_DIRS``) prunes directories by
+        NAME, and any directory containing a ``pyvenv.cfg`` is pruned as a
+        virtualenv regardless of its name. File level: ``skip_files`` is a set
+        of case-insensitive filename globs (default ``DEFAULT_SKIP_FILES`` =
+        machine-generated lockfiles + well-known secrets files). Pass
+        ``skip_files=None`` (the default) for the default list, your own set to
+        replace it, or an empty set to disable filename filtering. The filter
+        applies to the directory WALK only — pointing ``path`` straight at a
+        single file is explicit intent and is never blocked. Skipping a
+        secret-named file emits one warning naming what was skipped; ingesting
+        one (by override or direct path) also warns — never silent
+        (issue #29).
 
         Linked files are skipped unless ``follow_symlinks=True``: a planted link
         in a third-party tree can point anywhere on disk (e.g. ``~/.ssh/id_rsa``),
@@ -525,6 +577,10 @@ class Memory:
         """
         include = set(include_ext) if include_ext else DEFAULT_INCLUDE_EXT
         skip = set(skip_dirs) if skip_dirs else DEFAULT_SKIP_DIRS
+        # ``is None`` (not falsy) on purpose: skip_files=set() means "no
+        # filename filtering", which a falsy check would silently turn back
+        # into the defaults (ADR-0027).
+        skip_names = DEFAULT_SKIP_FILES if skip_files is None else set(skip_files)
         trust = DEFAULT_INGEST_TRUST if trust is None else trust
         root = Path(path).expanduser()
         if not follow_symlinks and _redirects_out(root):
@@ -539,14 +595,25 @@ class Memory:
                 "the intended tree. Pass follow_symlinks=True to read it.",
                 stacklevel=2,
             )
-            return {"files": 0, "chunks": 0, "skipped": 1, "total": self.count()}
+            return {"files": 0, "chunks": 0, "skipped": 1, "filtered": 0, "total": self.count()}
         root_real = _real_path(root)
-        targets = [root] if root.is_file() else list(self._walk(root, include, skip))
+        single_file = root.is_file()
+        targets = [root] if single_file else list(self._walk(root, include, skip))
         files = 0
         chunks = 0
         skipped = 0
+        filtered = 0
+        secrets_skipped: list[str] = []
+        secrets_ingested: list[str] = []
         pending: list[MemoryRecord] = []
         for fp in targets:
+            if not single_file and _matches_any(fp.name, skip_names):
+                # Filename filter (ADR-0027): walk candidates only — a single
+                # file passed as ``path`` is explicit intent, never blocked.
+                filtered += 1
+                if _matches_any(fp.name, DEFAULT_SKIP_SECRETS):
+                    secrets_skipped.append(fp.relative_to(root).as_posix())
+                continue
             try:
                 if not follow_symlinks and (
                     fp.is_symlink() or not _within(root_real, fp)
@@ -573,7 +640,7 @@ class Memory:
             except (UnicodeDecodeError, OSError):
                 skipped += 1
                 continue
-            rel = fp.name if root.is_file() else fp.relative_to(root).as_posix()
+            rel = fp.name if single_file else fp.relative_to(root).as_posix()
             pieces = chunk_file(rel, text)
             if len(pieces) > self._max_chunks_per_doc:
                 # Chunk-count explosion (bytes don't bound work, ADR-0018):
@@ -584,6 +651,10 @@ class Memory:
             if not pieces:
                 continue
             files += 1
+            if _matches_any(fp.name, DEFAULT_SKIP_SECRETS):
+                # Reached via an explicit override or a direct file path — the
+                # ingest proceeds (explicit intent), but never silently (#29).
+                secrets_ingested.append(rel)
             # Same whole-document screen as ingest_text: a boundary-split
             # marker trips no per-chunk screen (L-chunk-split).
             split_hits = (
@@ -613,7 +684,30 @@ class Memory:
                     pending = []
         if pending:
             self._embed_and_store(pending)
-        return {"files": files, "chunks": chunks, "skipped": skipped, "total": self.count()}
+        if secrets_skipped:
+            shown = ", ".join(sorted(secrets_skipped))
+            warnings.warn(
+                f"[rekoll] ingest_path skipped {len(secrets_skipped)} file(s) "
+                f"that look like credentials or private keys: {shown}. Secrets "
+                "do not belong in a memory store — they would be embedded, "
+                "retrievable, and travel with any export. To ingest one anyway, "
+                "point ingest_path at the file directly, or pass skip_files= "
+                "without its name.",
+                stacklevel=2,
+            )
+        if secrets_ingested:
+            shown = ", ".join(sorted(secrets_ingested))
+            warnings.warn(
+                f"[rekoll] ingest_path STORED {len(secrets_ingested)} file(s) "
+                f"whose name suggests credentials or private keys: {shown}. "
+                "They are now retrievable records and will travel with any "
+                "export. Use forget() on their records if this was unintended.",
+                stacklevel=2,
+            )
+        return {
+            "files": files, "chunks": chunks, "skipped": skipped,
+            "filtered": filtered, "total": self.count(),
+        }
 
     def forget(self, *ids: str) -> int:
         """Delete memories by id; returns how many were removed."""
@@ -1136,7 +1230,12 @@ class Memory:
                 if d in skip or d.endswith(".egg-info"):
                     continue
                 full = os.path.join(dirpath, d)
-                if not _within(root_real, full):
+                if os.path.isfile(os.path.join(full, "pyvenv.cfg")):
+                    # A virtualenv by STRUCTURE: ``python -m venv X`` drops
+                    # ``pyvenv.cfg`` at X's root whatever X is called, so this
+                    # catches every venv a name list would miss ("env",
+                    # "myvenv", ...) — issue #27's ~500x ingest blow-up. The
+                    # name entries in DEFAULT_SKIP_DIRS remain as a fast path.
                     continue
                 real = os.path.normcase(os.path.realpath(full))
                 if real in seen:
