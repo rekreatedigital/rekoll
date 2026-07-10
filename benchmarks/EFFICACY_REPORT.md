@@ -166,10 +166,9 @@ timing puts ~97% of a no-rerank read in the brute-force vector scan → issue
 | #33 | LOW-MED | no `use_lexical` lever on `hybrid_search` | **fixed** — PR #44 |
 | #24 | LOW | `health()` misattributes a tampered newest record to dead ingestion | open — final fix lane |
 
-The measurements in this report predate the fix wave. A full re-baseline
-(compare_arms + ablation + dogfood, and re-derived raise-only gate floors)
-follows the final lane, since #37 changes the default configuration the
-numbers are measured under.
+The measurements in §§1–5 predate the fix wave and are kept as the historical
+pre-fix record. The post-fix re-baseline is §9; where a number moved, §9 is
+authoritative.
 
 ## 8. Reproduce everything
 
@@ -191,3 +190,67 @@ harnesses; seeds 20260707; bootstrap 10k resamples; env Python 3.12.6 /
 Windows 11 / CPU (latency: Ryzen 7 7800X3D, 32 GB). The default
 `pip install rekoll` is DELIBERATELY non-semantic (stub) — semantic recall
 requires the `[embeddings]` extra.
+
+## 9. Post-fix-wave re-baseline (2026-07-11, main @ `cc1728f`)
+
+The fix wave closed all ten routed findings (§7) across five PRs
+(#39/#40/#44/#42/#48). Two of them change what these numbers are measured
+under, so the evidence pack was re-run in full and reproduced by the conductor:
+**#42** (ADR-0030) made the vector scan a cached exact scan, and **#37**
+(ADR-0029) flipped the shipped default from auto-rerank-on to
+**no-rerank-in-hybrid** (rerank auto-attaches only in degraded lexical-only
+mode). Same config card as above except the **default read is now
+`vector+lexical` (no rerank)**.
+
+**Recall quality — UNCHANGED, bit-for-bit.** The perf work was mandated not to
+move ranking, and it didn't. compare_arms and the 7-config ablation at the
+pre-registered decision size (corpus=1000) reproduced §1/§5 to the digit:
+stub 0.396 / BM25 0.703 / FastEmbed-hybrid **0.901** [0.828,0.964] paraphrase;
+ablation arms all identical (vector-only 0.859, hybrid 0.901, hybrid+rerank
+0.880, …). The ratcheted real-embedder CI gate stays green and its raise-only
+floors are **unchanged** (recall@5 ≥ 0.86, MRR ≥ 0.81) — nothing improved in the
+gated metrics to ratchet, by design.
+
+**Read latency — the headline change.** End-to-end recall p50 at the shipped
+default, corpus=1000 (latency env: Ryzen 7 7800X3D, Win 11, warmup 10):
+
+| read | v1 (pre-fix) | post-fix (§9) | change |
+|---|---|---|---|
+| default recall (pool 30, **new default = no rerank**) | 249 ms (v1 default was auto-rerank) | **16.2 ms** p50 (18.8 p95) | **~15× faster** |
+| no-rerank pool 30 (like-for-like) | 156 ms | 16.2 ms | ~9.6× |
+| depth sweep no-rerank | 156→(deeper) | 23.8 / 42.0 / 67.4 ms at 50 / 100 / 200 | scan no longer dominates |
+
+The ~97%-of-latency brute-force scan (§5, issue #35) is gone; a 1k default read
+went from a sixth of a second to ~16 ms. The #36 deep-pool footgun still holds
+(no-rerank recall@5 0.901→0.760 across pool 30→200) and now **warns**.
+
+**Real-repo dogfood — the #27 headline, proven end-to-end.** Re-run zero-config
+under the new default (mode `vector+lexical` on every repo):
+
+| repo | v1 | post-fix | note |
+|---|---|---|---|
+| rekreate-ai-chat, **zero-config** | **6/10 — FAIL** (drowned in `env/`) | **10/10** | **47 records / 2.3 s** (was ~9,106 / 20+ min) — #27 fixed |
+| rekreate-ai-chat, `--noenv` (manual) | 10/10 | 10/10 | zero-config now equals hand-filtered |
+| jeff-app-for-iphone | 10/10 | 10/10 | |
+| Trading-Logging-Automation | 10/10 | 10/10 | ingest shows `secrets_skipped=1` — #41 signal visible |
+| powered-by-people-website | 9/10 | 8/10 | see note |
+
+Total 48/50 (the once-drowned repo now passes). Scope isolation re-confirmed:
+**76 cross-scope recalls, 0 leaks, 0 count mismatches.** The single ingest that
+excluded a credential-shaped file surfaced it as a `secrets_skipped` count
+(#29/#41), not silently.
+
+*Honest note on the website 9→8:* the two misses (`ServicesSection.tsx`,
+`ScrollToTop.tsx`) are NOT the same as v1's one miss, and the repo is a LIVE
+(unfrozen) checkout that moved between runs. Tested for cause rather than
+assumed: re-running both queries with an explicit reranker attached leaves both
+golds unranked (rank None with rerank ON *and* OFF), so the #37 no-rerank
+default did **not** cause the drop — it is repo drift plus a genuine
+definition-vs-usage recall gap, and it re-confirms #37's finding that the
+reranker buys no recovery here. Not a regression introduced by the wave.
+
+**Bottom line:** the wave made reads ~15× faster and fixed the zero-config
+drowning that was the program's headline product finding, with recall quality
+held bit-identical and honesty surfaces (mode, abstain, secrets counts, tamper
+notes) now crossing every door — all conductor-reproduced, suite 617→849, zero
+regressions.
