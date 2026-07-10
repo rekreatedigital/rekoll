@@ -78,7 +78,10 @@ existing callers.
    recipe": run ungated, look at the score on queries you know are answerable
    and on queries you know are not, put `min_score` between them. Copying 0.70
    from this ADR is not the recipe — that number belongs to one embedder and one
-   corpus.
+   corpus. On a 4-document scope with the same embedder, 0.70 **false-abstains**
+   an answerable query whose top-1 cosine is 0.694, while a threshold read off
+   `top_vector_score` (0.569) separates the classes perfectly. The test
+   `test_real_embedder_separates_answerable_from_unanswerable` pins this.
 
 6. **`min_score` is validated as a cosine** (`-1.0 <= min_score <= 1.0`), which
    rejects the most likely misuse outright: passing a fused score someone read

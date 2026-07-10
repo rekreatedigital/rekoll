@@ -340,6 +340,44 @@ def test_abstain_credits_nothing_to_the_ledger():
     mem.close()
 
 
+def test_real_embedder_separates_answerable_from_unanswerable():
+    """Ties the gate to the evidence it was built on (AUC 0.931 was measured with
+    fastembed bge-small-en-v1.5, NOT with the stub).
+
+    Also pins the ADR's loudest caveat: the threshold must be chosen from your
+    own data. On this small corpus the issue's 0.70 FALSE-ABSTAINS an answerable
+    query, while a threshold read off ``top_vector_score`` separates cleanly.
+    """
+    pytest.importorskip("fastembed")
+    from rekoll.embedding import FastEmbedEmbedder
+
+    mem = Memory(path=":memory:", embedder=FastEmbedEmbedder(), reranker=None)
+    for text in (
+        "The deploy pipeline runs nightly against the staging cluster.",
+        "Postgres connection pooling is capped at 40 concurrent connections.",
+        "Invoices are archived to cold storage after seven years.",
+        "Rust's borrow checker rejects aliased mutable references.",
+    ):
+        mem.remember(text)
+
+    answerable = ["When does the release to staging happen?", "How long do we keep old invoices?"]
+    unanswerable = ["Who won the 1994 world chess championship?",
+                    "What is the melting point of tungsten carbide?"]
+
+    hot = [mem.recall(q, k=5).top_vector_score for q in answerable]
+    cold = [mem.recall(q, k=5).top_vector_score for q in unanswerable]
+    assert min(hot) > max(cold), "top-1 cosine must separate the two classes"
+
+    # Ungated, every unanswerable query gets k confident-looking hits: the bug.
+    assert all(len(mem.recall(q, k=5)) == 4 for q in unanswerable)
+
+    # Gated at a threshold read off the data: refuses exactly the right ones.
+    chosen = (min(hot) + max(cold)) / 2
+    assert not any(mem.recall(q, k=5, min_score=chosen).abstained for q in answerable)
+    assert all(mem.recall(q, k=5, min_score=chosen).abstained for q in unanswerable)
+    mem.close()
+
+
 def test_gate_reads_only_surfacable_cosines():
     """A quarantined record must not hold the gate open on its own similarity.
 
