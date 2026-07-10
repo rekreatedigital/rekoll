@@ -8,9 +8,12 @@ Rekoll ships three doors over one engine:
    official MCP client (src/rekoll/mcp_server.py).
 
 The parity contract pinned here: for the same (store, query, k, kind, scope,
-embedder, reranker), every door returns the SAME ordered top-k id list. A rank
-flip or a membership diff between doors would mean the doors run *different*
-pipelines — the exact bug class this file exists to catch.
+embedder, reranker), every door returns the SAME ordered top-k id list AND
+NAMES the same pipeline that produced it (``RecallResult.mode``, ADR-0024). A
+rank flip or a membership diff between doors would mean the doors run
+*different* pipelines — the exact bug class this file exists to catch. A mode
+that is absent, or disagrees, at one door means an agent behind that door
+cannot tell a full hybrid ranking from a degraded lexical-only one (issue #25).
 
 Determinism pins (parity is about PIPELINE identity, not semantic quality):
 
@@ -35,14 +38,21 @@ Environments:
    (``pytest.importorskip("mcp")``).
  - a venv with the 'mcp' extra: all three doors run.
 
+Where each door reports its mode:
+
+ - SDK — ``RecallResult.mode`` (and ``HealthReport.mode``).
+ - CLI — ``rekoll recall --json`` -> ``{context, ids, mode, count}``; also
+   ``rekoll doctor``'s freshness line, which renders ``Memory.health().mode``.
+   The human-facing recall formats (default list, ``--ids``, ``--context``)
+   stay byte-for-byte as they were: mode is opt-in, for machines.
+ - MCP — the ``recall`` result payload AND the ``status`` tool.
+
 Known, NAMED non-parity surfaces (asserted/documented here, by design):
 
- - MCP ``recall`` has no ``kind`` filter (smaller LLM-facing surface), so
-   kind-filtered parity is SDK<->CLI only.
- - MCP does not expose ``RecallResult.mode`` (the honest-degradation string);
-   its ``status`` tool reports the embedder identity name only. Pipeline-mode
-   parity for the MCP door is therefore asserted via the embedder identity plus
-   id-list identity, not a mode string.
+ - MCP ``recall`` has no ``kind`` filter (a deliberately smaller LLM-facing
+   surface), so kind-filtered parity is SDK<->CLI only. This is decided, not
+   drifted: it is documented at the tool itself, in ``mcp_server.recall``'s
+   docstring, which points a filtering caller at the SDK or CLI.
 """
 
 from __future__ import annotations
@@ -222,6 +232,30 @@ def _cli_ids(store, query: str, *, k: int = K, kind: str | None = None) -> list[
     return [line for line in proc.stdout.splitlines() if line.strip()]
 
 
+def _cli_json(store, query: str, *, k: int = K, kind: str | None = None) -> dict:
+    """Door 2, machine format: ``python -m rekoll recall --json`` -> one object.
+
+    Exit code 1 ("No memories found") is the CLI's documented empty result and
+    still prints the object — so the payload, and its ``mode``, is readable in
+    exactly the case a caller most needs it.
+    """
+    cmd = [
+        sys.executable, "-m", "rekoll", "recall", query,
+        "--json", "-k", str(k), "--path", store.db, "--project", PROJECT,
+    ]
+    if kind is not None:
+        cmd += ["--kind", kind]
+    proc = subprocess.run(
+        cmd, capture_output=True, encoding="utf-8", errors="replace",
+        env=store.env, cwd=str(store.root), timeout=120,
+    )
+    assert proc.returncode in (0, 1), (
+        f"CLI recall --json failed (rc={proc.returncode}) for {query!r}:\n{proc.stderr}"
+    )
+    assert "rekoll: warning:" not in proc.stderr, proc.stderr  # a silent degradation
+    return json.loads(proc.stdout)
+
+
 def _cli_doctor_mode(store) -> str:
     """The CLI's own report of the pipeline it runs, from ``rekoll doctor``'s
     freshness line (``Memory.health().mode`` — the same honest-degradation
@@ -355,12 +389,35 @@ def test_sdk_and_cli_agree_on_empty_result(store, sdk):
 
 
 def test_cli_reports_the_same_pipeline_mode_as_the_sdk(store, sdk):
-    """Mode-string parity, SDK<->CLI: the CLI's doctor freshness line renders
-    ``Memory.health().mode`` — pin it to the SDK's ``RecallResult.mode`` for the
-    same store, so the two doors NAME the same pipeline, not just rank alike."""
+    """Mode-string parity, SDK<->CLI, at BOTH of the CLI's mode surfaces:
+    ``recall --json`` (the read itself) and ``doctor``'s freshness line (which
+    renders ``Memory.health().mode``). Pin both to the SDK's
+    ``RecallResult.mode`` for the same store, so the doors NAME the same
+    pipeline, not just rank alike."""
     sdk_mode = sdk.recall(QUERIES[0], k=1).mode
     assert sdk_mode == EXPECTED_MODE
+    assert _cli_json(store, QUERIES[0])["mode"] == sdk_mode
     assert _cli_doctor_mode(store) == sdk_mode
+
+
+def test_cli_json_is_a_new_view_of_the_same_recall_not_a_new_ranking(store, sdk):
+    """``--json`` is additive: identical ids to ``--ids`` and to the SDK, plus
+    the mode the other formats never printed."""
+    for query in QUERIES[:3]:
+        payload = _cli_json(store, query)
+        assert payload["ids"] == _cli_ids(store, query) == _sdk_ids(sdk, query)
+        assert payload["count"] == len(payload["ids"])
+        assert payload["mode"] == EXPECTED_MODE
+
+
+def test_cli_json_reports_mode_even_when_nothing_matched(store, sdk):
+    """The degraded-and-empty case is the one a machine caller most needs to
+    read: no directives are stored, so the door returns zero hits, exit 1 — and
+    STILL names the pipeline that found nothing."""
+    payload = _cli_json(store, QUERIES[0], kind="directive")
+    assert payload["ids"] == [] and payload["count"] == 0
+    assert payload["mode"] == EXPECTED_MODE
+    assert _sdk_ids(sdk, QUERIES[0], kind=Kind.DIRECTIVE) == []
 
 
 # -- all three doors (requires the 'mcp' extra; skips cleanly without it) ----------
@@ -388,14 +445,55 @@ def test_three_doors_return_identical_ordered_ids_over_real_stdio(store, sdk):
     for query in QUERIES:
         payload = mcp_out[(query, K)]
         assert payload["count"] == len(payload["ids"])
+        # Every MCP recall NAMES its pipeline, not just the ranking it produced.
+        assert payload["mode"] == EXPECTED_MODE
 
-    # Pipeline-identity over the MCP wire: mode is not exposed (named gap), so
-    # pin what IS: the pinned scope and the resolved embedder identity — the
-    # same "stub-hash" the SDK door runs (an identity mismatch would have
-    # degraded ranking and broken the tables above anyway).
+    # Pipeline-identity over the MCP wire: the pinned scope, the resolved
+    # embedder identity, and the mode string the other two doors report.
     assert status["scope"] == f"default/{PROJECT}/default"
     assert status["embedder"] == EXPECTED_EMBEDDER
+    assert status["mode"] == EXPECTED_MODE
     assert status["memories"] == store.total  # nothing quarantined => counts agree
+
+
+def test_mode_crosses_every_door(store, sdk):
+    """THE issue-#25 pin: the honest-degradation string is readable through ALL
+    THREE doors, in every place a caller would look for it — so an agent behind
+    any door can tell a full hybrid ranking from a degraded one.
+
+    Five witnesses to one pipeline. Before this, only the first two existed.
+    """
+    query = QUERIES[0]
+    mcp_out, status = _mcp_recall_bulk(store, [(query, K)])
+
+    witnesses = {
+        "sdk.recall().mode": sdk.recall(query, k=K).mode,
+        "sdk.health().mode": sdk.health().mode,
+        "cli recall --json": _cli_json(store, query)["mode"],
+        "cli doctor": _cli_doctor_mode(store),
+        "mcp recall": mcp_out[(query, K)]["mode"],
+        "mcp status": status["mode"],
+    }
+    print("\nmode across doors:\n" + "\n".join(f"    {d:<20} {m!r}" for d, m in witnesses.items()))
+    disagree = {d: m for d, m in witnesses.items() if m != EXPECTED_MODE}
+    assert not disagree, f"doors disagree about the pipeline they run: {disagree}"
+
+
+def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
+    """The two machine doors return the SAME four keys, so a caller can move a
+    script from the CLI to MCP (or an agent the other way) without reshaping
+    what it reads. Divergence here is how the mode gap crept in the first time.
+    """
+    query = QUERIES[0]
+    mcp_out, _ = _mcp_recall_bulk(store, [(query, K)])
+    mcp_payload = mcp_out[(query, K)]
+    cli_payload = _cli_json(store, query)
+
+    assert set(cli_payload) == set(mcp_payload) == {"context", "ids", "mode", "count"}
+    assert cli_payload["ids"] == mcp_payload["ids"]
+    assert cli_payload["mode"] == mcp_payload["mode"]
+    assert cli_payload["count"] == mcp_payload["count"]
+    assert cli_payload["context"] == mcp_payload["context"]  # one envelope, one renderer
 
 
 def test_three_doors_agree_at_nondefault_k(store, sdk):
