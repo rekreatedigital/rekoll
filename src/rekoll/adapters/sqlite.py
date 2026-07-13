@@ -143,6 +143,12 @@ def _fts_query(text: str) -> Optional[str]:
     return " OR ".join(f'"{t}"' for t in unique)
 
 
+#: Upper bound on a stored embedding's dimension (ADR-0018 style resource bound).
+#: No production text embedder exceeds a few thousand dims (OpenAI 3072, Voyage
+#: 1536, large open models ~4096); 65536 is far beyond any real model yet still
+#: bounds the O(dim) decode+norm cost of a tampered/corrupt cell.
+_MAX_EMBEDDING_DIM = 65_536
+
 VECTOR_BACKENDS = ("auto", "numpy", "python")
 
 #: How many decoded vectors the scan cache may hold across all (table, scope)
@@ -194,6 +200,11 @@ def _decode_embedding(raw: object) -> array:
         raise ValueError(f"corrupt embedding cell (not decodable JSON): {exc}") from None
     if not isinstance(decoded, (list, tuple)) or not decoded:
         raise ValueError("corrupt embedding cell: not a non-empty numeric array")
+    if len(decoded) > _MAX_EMBEDDING_DIM:
+        # A tampered cell with a huge dim (e.g. 5M floats) decodes in O(dim) time +
+        # memory and, being one row, escapes the vector-COUNT cache budget. No real
+        # embedder exceeds a few thousand dims; cap it as corrupt (defense in depth).
+        raise ValueError(f"corrupt embedding cell: dim {len(decoded)} over cap {_MAX_EMBEDDING_DIM}")
     try:
         vec = array("d", decoded)
     except (TypeError, ValueError, OverflowError) as exc:

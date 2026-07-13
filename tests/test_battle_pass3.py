@@ -231,3 +231,39 @@ def test_forged_header_on_nonstandard_line_separator_is_defeated(sep):
     # U+2028/U+2029/CR normalize to \n then rewrite to [marker]; VT/FF are stripped
     # so the header glues to the preceding text (never a standalone forged line).
     assert _ENVELOPE_HEADER_RE.search(out) is None
+
+
+# ---- FINAL-PASS: lone-surrogate crash (R8 completion) + embedding dim cap ----
+# A lone surrogate (invalid UTF-8) in record content or a recall query crashed with
+# a deferred UnicodeEncodeError deep in the byte-size check / content-hash / embedder
+# / SQLite write. The first R8 fix only covered Scope; content and query were not.
+
+@pytest.mark.parametrize("screen_on", [True, False])
+def test_lone_surrogate_in_content_does_not_crash_write(screen_on):
+    m = Memory(path=_db(), embedder="stub", reranker=None, screen=screen_on)
+    rec = m.remember("surrogate \ud800 attempt with postgres deploy")
+    assert rec.verify()                       # content_hash matches stored content
+    assert "\ud800" not in rec.content        # invalid scalar dropped
+    m.ingest_text("doc with \ud800 in it and more prose", name="d.txt")  # no crash
+
+
+def test_lone_surrogate_in_query_does_not_crash_read():
+    m = Memory(path=_db(), embedder="stub", reranker=None)
+    m.remember("postgres over bigquery for cost")
+    m.recall("why \ud800 postgres", k=3)      # no crash
+
+
+def test_lone_surrogate_content_still_recalls_the_rest():
+    m = Memory(path=_db(), embedder="stub", reranker=None)
+    m.remember("keep\ud800this postgres fact")
+    got = m.recall("keep this postgres fact", k=1).records()[0]
+    assert got.verify() and "\ud800" not in got.content
+
+
+def test_huge_dimension_embedding_is_rejected_as_corrupt():
+    import json
+    from rekoll.adapters.sqlite import _decode_embedding, _MAX_EMBEDDING_DIM
+    # A legit-size vector decodes; an over-cap one is rejected as corrupt.
+    assert len(_decode_embedding(json.dumps([0.1] * 384))) == 384
+    with pytest.raises(ValueError):
+        _decode_embedding("[" + ",".join(["0.001"] * (_MAX_EMBEDDING_DIM + 1)) + "]")

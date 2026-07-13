@@ -190,6 +190,14 @@ class MemoryRecord:
         **kwargs: object,
     ) -> "MemoryRecord":
         kind = Kind(kind)  # coerce BEFORE addressing: kind is part of the id (ADR-0026)
+        # Drop lone surrogates (Cs): they are invalid UTF-8 and would crash the
+        # SQLite write / embedder / hash with a deferred UnicodeEncodeError. This
+        # is the universal content choke point, so it covers the screen=False path
+        # too (the firewall strips them on the screened path). A no-op for all
+        # valid content; normalize_content strips them for the hash regardless, so
+        # the stored content and its content_hash stay consistent.
+        if any(unicodedata.category(ch) == "Cs" for ch in content):
+            content = "".join(ch for ch in content if unicodedata.category(ch) != "Cs")
         chash = _content_hash(content)
         rid = record_id(scope.key(), provenance.source_uri, kind.value, chash)
         return cls(

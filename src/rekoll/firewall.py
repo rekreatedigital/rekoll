@@ -202,10 +202,12 @@ _INVISIBLE_EXTRA = frozenset(
 )
 
 # Vertical line separators Python's ``re`` (?m)^ does NOT treat as a line boundary
-# (only '\n' does): U+2028 LINE SEPARATOR, U+2029 PARAGRAPH SEPARATOR, VT, FF, CR.
-# Normalized to '\n' on the read-side detection copy so a forged header/index line
-# can't hide from the anchored neutralizer regexes. Single char → single char.
-_VERTICAL_WS = str.maketrans({0x2028: "\n", 0x2029: "\n", 0x0B: "\n", 0x0C: "\n", 0x0D: "\n"})
+# (only '\n' does) yet a viewer renders as a break: U+2028 LINE SEPARATOR, U+2029
+# PARAGRAPH SEPARATOR, and a lone CR. Normalized to '\n' on the read-side copy so a
+# forged header/index line can't hide from the anchored neutralizer regexes.
+# (VT/FF are category Cc — ``sanitize_unicode`` strips them upstream, which glues a
+# forged header to the adjacent text; they never reach this map.) 1 char → 1 char.
+_VERTICAL_WS = str.maketrans({0x2028: "\n", 0x2029: "\n", 0x0D: "\n"})
 
 # Cross-script homoglyphs (Cyrillic / Greek look-alikes) folded to their Latin
 # twin. NFKC does NOT fold these, so without this map a single Cyrillic 'о' in
@@ -270,13 +272,18 @@ def _strip_invisible(text: str) -> str:
     LRO/RLO/LRI/RLI/FSI/PDI/LRM/RLM/ALM), and SOFT HYPHEN — by *category*, so a
     new invisible codepoint can't be smuggled past a hardcoded allow-list.
 
+    Also drops lone surrogates (Cs): they are not valid Unicode scalar values and
+    crash ``str.encode('utf-8')`` deep in the content-hash (ids.py) and the
+    embedder — a deferred UnicodeEncodeError on write OR on a recall query. They
+    can never be legitimate stored text, so strip them here at the boundary.
+
     Applied to STORED content, so it does NOT drop ``_INVISIBLE_EXTRA`` (emoji /
     CJK variation selectors etc. that carry meaning); those are stripped only on
     the detection copy (``_marker_scan``) and the read-side render.
     """
     return "".join(
         ch for ch in text
-        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc")
+        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc", "Cs")
     )
 
 
@@ -541,10 +548,11 @@ def _neutralize_delimiters(text: str) -> str:
     # Detection/render hygiene applied to the working copy (NOT to stored content):
     #  - drop Default_Ignorable invisibles so a zero-width-split header/tag ("</sy͏
     #    stem>") is still neutralized in the rendered frame;
-    #  - normalize every vertical line separator Python's (?m)^ does NOT treat as a
-    #    boundary (U+2028/U+2029 Zl/Zp, VT, FF, and a lone/CRLF CR) to '\n', so a
-    #    forged header or [n]-index on such a line can't hide from the anchored
-    #    regexes below (CRLF is collapsed first so it doesn't become a blank line).
+    #  - normalize the vertical line separators Python's (?m)^ does NOT treat as a
+    #    boundary (U+2028/U+2029 Zl/Zp and a lone/CRLF CR) to '\n', so a forged
+    #    header or [n]-index on such a line can't hide from the anchored regexes
+    #    below (CRLF is collapsed first so it doesn't become a blank line; VT/FF are
+    #    already gone — sanitize_unicode strips them as Cc, gluing the header).
     out = _strip_default_ignorable(out).replace("\r\n", "\n").translate(_VERTICAL_WS)
     # Neutralize the envelope's own section headers regardless of the leading
     # markup used to forge them (#, **bold**, setext ===/---, blockquote >, bullets,
