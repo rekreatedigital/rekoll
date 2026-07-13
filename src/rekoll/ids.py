@@ -23,8 +23,14 @@ def normalize_content(content: str) -> str:
     NFC-normalize unicode, collapse CRLF/CR to LF, and strip surrounding
     whitespace. NFC also neutralizes some homoglyph/compatibility tricks at the
     addressing layer (the firewall does the heavier normalization in P2).
+
+    Lone surrogates (Cs) are dropped: they are not valid Unicode scalars and would
+    raise UnicodeEncodeError at ``.encode('utf-8')`` in ``content_hash`` below.
+    The firewall's ``sanitize_unicode`` already strips them on the screened path;
+    this covers a ``screen=False`` write that vouches for its own (invalid) bytes.
     """
-    text = unicodedata.normalize("NFC", content)
+    text = "".join(ch for ch in content if unicodedata.category(ch) != "Cs")
+    text = unicodedata.normalize("NFC", text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     return text.strip()
 

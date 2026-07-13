@@ -41,6 +41,43 @@ _KIND_TABLE = {
 
 _ALLOWED_WHERE_KEYS = {"status", "min_trust"}
 
+
+def _validate_where(
+    where: Optional[Mapping[str, object]]
+) -> tuple[object, Optional[int]]:
+    """Validate a query ``where`` filter and coerce ``min_trust`` to int at the door.
+
+    A read must not crash on a caller's bad filter value. ``min_trust`` that is not
+    int-coercible — a str, NaN, inf, or a list — used to raise a raw
+    ValueError/OverflowError/TypeError from deep inside the vector scan
+    (unconditionally) or mid-row in the lexical leg (data-dependent). Surface ONE
+    clear ValueError at the entry instead. Returns ``(status_filter, min_trust)``.
+    """
+    if not where:
+        return None, None
+    if not isinstance(where, Mapping):
+        # A list/tuple/set of key names passes the ``set(where) - allowed`` check
+        # (its ELEMENTS are the allowed keys) then crashes on ``where.get(...)``
+        # with an uncaught AttributeError. Reject non-Mapping filters cleanly.
+        raise ValueError(f"where must be a mapping, got {type(where).__name__}")
+    bad = set(where) - _ALLOWED_WHERE_KEYS
+    if bad:
+        raise ValueError(
+            f"unsupported where keys {sorted(bad)}; "
+            f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
+        )
+    raw = where.get("min_trust")
+    if raw is None:
+        min_trust: Optional[int] = None
+    else:
+        try:
+            min_trust = int(raw)  # bool/valid-float ok; str/NaN/inf/list -> raise
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(
+                f"where['min_trust'] must be an int-coercible trust level, got {raw!r}"
+            ) from None
+    return where.get("status"), min_trust
+
 _INSERT_COLUMNS = (
     "id, human_id, scope_key, kind, content, content_hash, source_id, "
     "prov_source_uri, prov_adapter_name, prov_adapter_version, prov_ingest_run_id, "
@@ -106,6 +143,12 @@ def _fts_query(text: str) -> Optional[str]:
     return " OR ".join(f'"{t}"' for t in unique)
 
 
+#: Upper bound on a stored embedding's dimension (ADR-0018 style resource bound).
+#: No production text embedder exceeds a few thousand dims (OpenAI 3072, Voyage
+#: 1536, large open models ~4096); 65536 is far beyond any real model yet still
+#: bounds the O(dim) decode+norm cost of a tampered/corrupt cell.
+_MAX_EMBEDDING_DIM = 65_536
+
 VECTOR_BACKENDS = ("auto", "numpy", "python")
 
 #: How many decoded vectors the scan cache may hold across all (table, scope)
@@ -126,6 +169,55 @@ def _norm(vec: Sequence[float]) -> float:
     for y in vec:
         n += y * y
     return math.sqrt(n)
+
+
+def _decode_embedding(raw: object) -> array:
+    """Decode a stored embedding cell into an ``array('d')`` of finite floats, or
+    raise ``ValueError`` if the cell is corrupt.
+
+    Defense-in-depth for the READ path. ``MemoryRecord.verify`` hashes only the
+    CONTENT (ADR-0019), so a tampered or corrupted embedding column is invisible
+    to tamper-detection — yet ``json.loads`` accepts ``NaN``/``Infinity`` and
+    ``array('d', ...)`` raises a raw ``TypeError`` on a non-numeric / nested
+    value. Left unguarded, a valid-JSON-but-wrong-shape cell (``"garbage"``,
+    ``[[1,2]]``) CRASHED ``Memory.recall`` with an uncaught ``TypeError``, and a
+    ``NaN``/``Infinity`` cell silently poisoned the ADR-0028 abstain gate
+    (``NaN < min_score`` is False → GATE_PASS, so withheld content SURFACED).
+
+    Rekoll's contract is that a hand-edited/corrupt store fails VISIBLY rather
+    than returning silent-wrong results (tests/test_cli.py
+    ``test_recall_on_a_hand_edited_store_fails_cleanly``). So every corrupt shape
+    is funnelled to ONE clean ``ValueError`` — the CLI already turns that into a
+    clean exit 1, and an SDK caller gets a documented, catchable error instead of
+    a raw ``TypeError`` or a NaN that defeats the safety gate.
+    """
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError, RecursionError) as exc:
+        # RecursionError: a deeply nested JSON array/object ("[[[[...]]]]") blows
+        # the decoder's C stack — caught here so a tampered cell is one clean
+        # ValueError, never an uncaught RecursionError up through Memory.recall.
+        raise ValueError(f"corrupt embedding cell (not decodable JSON): {exc}") from None
+    if not isinstance(decoded, (list, tuple)) or not decoded:
+        raise ValueError("corrupt embedding cell: not a non-empty numeric array")
+    if len(decoded) > _MAX_EMBEDDING_DIM:
+        # A tampered cell with a huge dim (e.g. 5M floats) decodes in O(dim) time +
+        # memory and, being one row, escapes the vector-COUNT cache budget. No real
+        # embedder exceeds a few thousand dims; cap it as corrupt (defense in depth).
+        raise ValueError(f"corrupt embedding cell: dim {len(decoded)} over cap {_MAX_EMBEDDING_DIM}")
+    try:
+        vec = array("d", decoded)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"corrupt embedding cell (non-numeric): {exc}") from None
+    if not all(math.isfinite(x) for x in vec):
+        raise ValueError("corrupt embedding cell: contains NaN or Infinity")
+    # Reject a FINITE-but-overflowing vector: values so large their squares sum to
+    # inf give a non-finite L2 norm and a NaN cosine downstream (which would defeat
+    # the ADR-0028 abstain gate from finite inputs). Real embeddings are ~unit-norm;
+    # this rejects only tamper, at the same O(dim) cost as the finiteness scan.
+    if not math.isfinite(math.fsum(x * x for x in vec)):
+        raise ValueError("corrupt embedding cell: magnitude overflows the L2 norm")
+    return vec
 
 
 class _CachedVector:
@@ -318,8 +410,11 @@ class SQLiteAdapter(StorageAdapter):
             (skey,),
         ).fetchall()
         for row in rows:
+            # A corrupt/non-finite embedding raises ValueError here (tamper-
+            # visible): a hand-edited store fails cleanly rather than crashing the
+            # scan on array('d', ...) or feeding a NaN into the cosine + gate.
             entry.rows[row["id"]] = _CachedVector(
-                row["status"], row["trust_tier"], json.loads(row["embedding"])
+                row["status"], row["trust_tier"], _decode_embedding(row["embedding"])
             )
         self._scan_cache.pop(key, None)
         if len(entry.rows) <= self.vector_cache_max_vectors:
@@ -668,21 +763,13 @@ class SQLiteAdapter(StorageAdapter):
         kind: Optional[Kind] = None,
         where: Optional[Mapping[str, object]] = None,
     ) -> QueryResult:
-        if where:
-            bad = set(where) - _ALLOWED_WHERE_KEYS
-            if bad:
-                raise ValueError(
-                    f"unsupported where keys {sorted(bad)}; "
-                    f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
-                )
+        status_filter, min_trust = _validate_where(where)
         query_vec = [float(x) for x in embedding]
         qdim = len(query_vec)
         if k <= 0:
             return QueryResult(hits=())
         skey = scope.key()
         tables = [_KIND_TABLE[kind]] if kind is not None else list(_KIND_TABLE.values())
-        status_filter = where.get("status") if where else None
-        min_trust = None if not where or where.get("min_trust") is None else int(where["min_trust"])
         # qnorm accumulated exactly as embedding.cosine's `na` loop does.
         qn = 0.0
         for x in query_vec:
@@ -808,13 +895,7 @@ class SQLiteAdapter(StorageAdapter):
         kind: Optional[Kind] = None,
         where: Optional[Mapping[str, object]] = None,
     ) -> QueryResult:
-        if where:
-            bad = set(where) - _ALLOWED_WHERE_KEYS
-            if bad:
-                raise ValueError(
-                    f"unsupported where keys {sorted(bad)}; "
-                    f"allowed: {sorted(_ALLOWED_WHERE_KEYS)}"
-                )
+        status_filter, min_trust = _validate_where(where)
         if k <= 0:
             # Asking for nothing returns nothing. The bound below is checked
             # AFTER an append, which returned one phantom hit for k<=0 while
@@ -823,8 +904,6 @@ class SQLiteAdapter(StorageAdapter):
         match = _fts_query(text)
         if match is None:
             return QueryResult(hits=())
-        status_filter = where.get("status") if where else None
-        min_trust = where.get("min_trust") if where else None
         has_filter = status_filter is not None or min_trust is not None
         skey = scope.key()
         sql = "SELECT rid, bm25(fts) AS s FROM fts WHERE fts MATCH ? AND scope_key=?"
@@ -859,7 +938,7 @@ class SQLiteAdapter(StorageAdapter):
             status, trust = probe
             if status_filter is not None and status != status_filter:
                 continue
-            if min_trust is not None and trust < int(min_trust):
+            if min_trust is not None and trust < min_trust:
                 continue
             chosen.append((row["rid"], -float(row["s"])))  # bm25: lower is better
             if len(chosen) >= k:
@@ -950,7 +1029,11 @@ class SQLiteAdapter(StorageAdapter):
             chunk_index=row["prov_chunk_index"],
             derived_from=derived_from,
         )
-        embedding = tuple(json.loads(row["embedding"])) if row["embedding"] else None
+        # Decode the returned record's embedding through the same validated path
+        # (raises a clean ValueError on a corrupt/non-finite cell instead of
+        # building a garbage tuple that MemoryRecord's validator would reject with
+        # a confusing error) — tamper stays visible and uniform across legs.
+        embedding = tuple(_decode_embedding(row["embedding"])) if row["embedding"] else None
         dt_raw = row["declared_transformations"]
         declared = tuple(x for x in dt_raw.split(",") if x) if dt_raw else ()
         return MemoryRecord(

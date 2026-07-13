@@ -11,6 +11,7 @@ Design decisions embodied here (see docs/adr/):
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
@@ -88,6 +89,16 @@ class Scope:
         for part in (self.tenant, self.project, self.agent):
             if not part or "/" in part or "\x00" in part:
                 raise ValueError("scope parts must be non-empty and contain no '/' or NUL")
+            try:
+                part.encode("utf-8")
+            except UnicodeEncodeError:
+                # A lone UTF-16 surrogate (e.g. '\ud800') passes the checks above
+                # but is not UTF-8 encodable — it used to construct fine and then
+                # crash EVERY adapter call with a deferred UnicodeEncodeError when
+                # scope.key() bound to SQLite. Fail loudly at construction instead.
+                raise ValueError(
+                    "scope parts must be UTF-8 encodable (no lone surrogates)"
+                ) from None
 
     def key(self) -> str:
         return f"{self.tenant}/{self.project}/{self.agent}"
@@ -106,7 +117,15 @@ class Provenance:
     derived_from: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.source_uri:
+        # Require at least one VISIBLE char. `not self.source_uri` misses '   ',
+        # and `.strip()` misses zero-width / format (Cf) / control (Cc) strings
+        # (e.g. '​​', which sanitize_unicode reduces to '') — all of
+        # which are truthy but carry no provenance and round-tripped as a blank
+        # origin through the public facade.
+        if not any(
+            not ch.isspace() and unicodedata.category(ch) not in ("Cf", "Cc", "Cn")
+            for ch in self.source_uri
+        ):
             raise ValueError("provenance.source_uri is required")
 
 
@@ -171,6 +190,14 @@ class MemoryRecord:
         **kwargs: object,
     ) -> "MemoryRecord":
         kind = Kind(kind)  # coerce BEFORE addressing: kind is part of the id (ADR-0026)
+        # Drop lone surrogates (Cs): they are invalid UTF-8 and would crash the
+        # SQLite write / embedder / hash with a deferred UnicodeEncodeError. This
+        # is the universal content choke point, so it covers the screen=False path
+        # too (the firewall strips them on the screened path). A no-op for all
+        # valid content; normalize_content strips them for the hash regardless, so
+        # the stored content and its content_hash stay consistent.
+        if any(unicodedata.category(ch) == "Cs" for ch in content):
+            content = "".join(ch for ch in content if unicodedata.category(ch) != "Cs")
         chash = _content_hash(content)
         rid = record_id(scope.key(), provenance.source_uri, kind.value, chash)
         return cls(

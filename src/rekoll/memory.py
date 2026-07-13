@@ -117,6 +117,16 @@ def _matches_any(name: str, patterns: Iterable[str]) -> bool:
     lowered = name.lower()
     return any(fnmatch.fnmatchcase(lowered, pat.lower()) for pat in patterns)
 
+
+def _utf8_safe(text: str) -> str:
+    """Drop lone surrogates (invalid UTF-8) so ``.encode('utf-8')`` in the embedder
+    never crashes on host content. ``sanitize_unicode`` strips them on the screened
+    path; this guards the raw-content embed on the ``screen=False`` path (a host
+    may vouch for its own writes, but must not be able to crash a read/write with
+    an un-encodable string). Round-trips through surrogatepass so only the invalid
+    surrogate bytes are dropped; everything else is byte-identical."""
+    return text.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
+
 # health() retrievability probe. FULL content (capped) — a short head slice made
 # the probe blind on near-duplicate corpora (e.g. a repo ingest where chunks
 # share a license-header prefix): the discriminating tail tokens never entered
@@ -539,7 +549,10 @@ class Memory:
         Chunks are embedded + stored in bounded batches of ``batch``, so peak
         memory tracks the batch, never the document.
         """
-        n_bytes = len(text.encode("utf-8"))  # a BYTES limit — measure bytes, not chars
+        # A BYTES limit — measure bytes, not chars. ``surrogatepass`` so a lone
+        # surrogate (invalid UTF-8) in the input can't crash the size check before
+        # per-piece screening strips it (the screened path) — see ``_utf8_safe``.
+        n_bytes = len(text.encode("utf-8", "surrogatepass"))
         if n_bytes > self._max_file_bytes:
             raise ValueError(
                 f"document is {n_bytes:,} bytes, over the "
@@ -720,10 +733,7 @@ class Memory:
             if not pieces:
                 continue
             files += 1
-            if _matches_any(fp.name, DEFAULT_SKIP_SECRETS):
-                # Reached via an explicit override or a direct file path — the
-                # ingest proceeds (explicit intent), but never silently (#29).
-                secrets_ingested.append(rel)
+            is_secret_named = _matches_any(fp.name, DEFAULT_SKIP_SECRETS)
             # Same whole-document screen as ingest_text: a boundary-split
             # marker trips no per-chunk screen (L-chunk-split).
             split_hits = (
@@ -731,6 +741,7 @@ class Memory:
                 if self._screen and trust <= TrustTier.UNVERIFIED
                 else {}
             )
+            file_chunks = 0
             for i, piece in enumerate(pieces):
                 if self._screen and not sanitize_unicode(piece):
                     continue  # nothing survives screening (e.g. only zero-width chars)
@@ -748,9 +759,18 @@ class Memory:
                     _quarantine_split_marker(record, split_hits[i])
                 pending.append(record)
                 chunks += 1
+                file_chunks += 1
                 if len(pending) >= batch:
                     self._embed_and_store(pending)
                     pending = []
+            if is_secret_named and file_chunks:
+                # Count a credential-shaped file as STORED only if it produced >=1
+                # retrievable record (explicit override or direct path — never
+                # silently, #29). A file whose every chunk sanitizes to empty (e.g.
+                # all zero-width bytes) stores NOTHING; counting it made
+                # secrets_stored claim a retrievable credential exists when none
+                # does — the #41 honesty signal (and its warning) lied.
+                secrets_ingested.append(rel)
         if pending:
             self._embed_and_store(pending)
         if secrets_skipped:
@@ -1207,7 +1227,7 @@ class Memory:
         done = 0
         for start in range(0, len(records), batch):
             chunk = records[start : start + batch]
-            vectors = self.embedder.embed([r.content for r in chunk])
+            vectors = self.embedder.embed([_utf8_safe(r.content) for r in chunk])
             for record, vector in zip(chunk, vectors):
                 record.with_embedding(vector, name=name, dim=dim)
             # Upsert re-embedded rows BEFORE rebinding identity: while the stored
@@ -1323,7 +1343,7 @@ class Memory:
         else:
             to_embed = [r for r in records if r.embedding is None]
             if to_embed:
-                vectors = self.embedder.embed([r.content for r in to_embed])
+                vectors = self.embedder.embed([_utf8_safe(r.content) for r in to_embed])
                 name, dim = self.embedder.identity().name, self.embedder.dim
                 for record, vector in zip(to_embed, vectors):
                     record.with_embedding(vector, name=name, dim=dim)

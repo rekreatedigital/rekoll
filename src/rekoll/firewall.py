@@ -17,6 +17,7 @@ Two deterministic, zero-LLM choke points:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import re
 import unicodedata
@@ -143,9 +144,24 @@ _INJECTION_MARKERS = [
     re.compile(r"(?i)\bsystem\s+prompt\b"),
     re.compile(r"(?i)\b(?:reveal|show|print|repeat|display|expose|leak|disclose|dump|output|give\s+me|tell\s+me)\b[^.\n]{0,40}?\b(?:system\s+prompt|system\s+message|initial\s+(?:prompt|instructions?)|your\s+(?:instructions?|prompt|guidelines?|rules?|configuration)|the\s+prompt)"),
     re.compile(r"(?i)new\s+(?:instructions?|task|directive|system\s+prompt)\s*:"),
-    # -- Structural: forged role / channel tags -------------------------------
-    re.compile(r"(?i)</?(?:system|assistant|user|im_start|im_end|tool)>"),
-    re.compile(r"(?i)\[/?(?:system|inst|assistant)\]"),
+    # -- Structural: forged role / channel / tool tags ------------------------
+    # Bare-angle role AND turn/tool control tokens: ChatML-ish <system>..., Gemma
+    # <start_of_turn>/<end_of_turn>, and the XML function-calling frame
+    # <tool_call>/<function_call>/<tool_response> a Hermes/Qwen host executes.
+    re.compile(r"(?i)</?(?:system|assistant|user|im_start|im_end|tool|start_of_turn|end_of_turn|tool_call|tool_calls|function_call|tool_response|tool_result|tool_results|tool_outputs)>"),
+    # Bracket role AND Mistral v3 tool-channel control tokens ([TOOL_CALLS],
+    # [AVAILABLE_TOOLS], [TOOL_RESULTS]) a Mistral host parses as a tool frame.
+    re.compile(r"(?i)\[/?(?:system|inst|sys|assistant|tool_calls|available_tools|tool_results|tool_result|tool_call)\]"),
+    # Canonical piped model control tokens the BARE-angle form above misses. The
+    # plain "<im_start>" (no pipes) never appears in a real runtime; the tokens
+    # hosts honor as tokenizer-level role/channel switches are the piped
+    # ChatML/Phi/Harmony/Llama-3 form <|...|> (<|im_start|>, <|system|>, <|eot_id|>,
+    # <|start_header_id|>, <|endoftext|>, <|channel|>, <|message|>...) and DeepSeek's
+    # <|begin▁of▁sentence|> (NFKC folds the fullwidth pipe U+FF5C→'|'; the body may
+    # hold the word-sep U+2581). The body is [^\s<>|] so those exotic chars can't
+    # dodge it, bounded {1,60} → linear (ReDoS-gated). Plus Llama-2 <<SYS>>/<</SYS>>.
+    re.compile(r"<\|/?[^\s<>|]{1,60}\|>"),
+    re.compile(r"(?i)<</?sys>>"),
     # -- Multilingual "ignore/forget previous instructions" -------------------
     # Curated for the highest-traffic languages; each requires the adversarial
     # verb AND an instruction/rule object within a bounded gap, so benign prose
@@ -159,6 +175,39 @@ _INJECTION_MARKERS = [
 ]
 
 _KEEP_CONTROL = {"\t", "\n", "\r"}
+
+# Zero-width / invisible codepoints that are NOT category Cf or Cc, so the plain
+# category filter in ``_strip_invisible`` misses them. An attacker splits an
+# injection marker or a forged role tag mid-token with one of these (e.g.
+# "</sy͏stem>" or "ig͏nore all previous instructions"): it renders
+# invisibly — DISPLAYING as the live delimiter/marker — yet the codepoint's
+# category is Mn/Lo, not Cf/Cc. Unicode's Default_Ignorable_Code_Point property
+# covers this whole class, but ``unicodedata`` does not expose it, so this is the
+# curated concrete set (CGJ, Hangul fillers, Khmer inherent vowels, Mongolian free
+# variation selectors incl. U+180F FVS4 added in Unicode 15.0, and the two
+# variation-selector blocks).
+#
+# Stripped ONLY on the DETECTION copy (``_marker_scan``) and the read-side render
+# (``_neutralize_delimiters``), NEVER in ``sanitize_unicode`` (stored content):
+# these codepoints DO carry meaning a memory store must preserve — U+FE0F selects
+# the color-emoji form (❤️ vs ❤), and U+E0100+ are CJK ideographic variation
+# selectors (葛 surname-glyph variants). Stripping them from stored content
+# corrupted round-trip fidelity; the split-token attack is caught by stripping on
+# the detection/render copies alone.
+_INVISIBLE_EXTRA = frozenset(
+    [0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2065, 0x3164, 0xFFA0]
+    + list(range(0x180B, 0x1810))       # Mongolian free variation selectors 1-4 + MVS
+    + list(range(0xFE00, 0xFE10))       # variation selectors VS1-VS16
+    + list(range(0xE0100, 0xE01F0))     # variation selectors supplement VS17-VS256
+)
+
+# Vertical line separators Python's ``re`` (?m)^ does NOT treat as a line boundary
+# (only '\n' does) yet a viewer renders as a break: U+2028 LINE SEPARATOR, U+2029
+# PARAGRAPH SEPARATOR, and a lone CR. Normalized to '\n' on the read-side copy so a
+# forged header/index line can't hide from the anchored neutralizer regexes.
+# (VT/FF are category Cc — ``sanitize_unicode`` strips them upstream, which glues a
+# forged header to the adjacent text; they never reach this map.) 1 char → 1 char.
+_VERTICAL_WS = str.maketrans({0x2028: "\n", 0x2029: "\n", 0x0D: "\n"})
 
 # Cross-script homoglyphs (Cyrillic / Greek look-alikes) folded to their Latin
 # twin. NFKC does NOT fold these, so without this map a single Cyrillic 'о' in
@@ -176,6 +225,14 @@ _CONFUSABLES = str.maketrans({
     "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o",
     "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j",
     "ѕ": "s", "ԁ": "d", "ո": "n",
+    "ԛ": "q", "ӏ": "l",  # U+051B qa, U+04CF palochka
+    # Armenian → Latin (NFKC- and casefold-stable, so they slipped every marker:
+    # "ignօre all previous instructions" with U+0585 was NOT detected).
+    "օ": "o", "ս": "u",  # U+0585 oh, U+057D seh
+    # Coptic small letters + ESTIMATED SYMBOL → Latin (NFKC- and casefold-stable
+    # look-alikes; U+2C9F 'ⲟ' broke the "ignore" anchor undetected).
+    "ⲟ": "o", "ⲉ": "e", "ⲛ": "n", "ⲙ": "m", "ⲣ": "p",  # U+2C9F/2C89/2C9B/2C99/2CA3
+    "℮": "e",  # U+212E ESTIMATED SYMBOL
     # Greek → Latin
     "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
     "ρ": "p", "τ": "t", "υ": "u", "γ": "y", "χ": "x",
@@ -214,21 +271,42 @@ def _strip_invisible(text: str) -> str:
     Covers zero-width (ZWSP/ZWNJ/ZWJ/WJ/BOM), every bidi control (LRE/RLE/PDF/
     LRO/RLO/LRI/RLI/FSI/PDI/LRM/RLM/ALM), and SOFT HYPHEN — by *category*, so a
     new invisible codepoint can't be smuggled past a hardcoded allow-list.
+
+    Also drops lone surrogates (Cs): they are not valid Unicode scalar values and
+    crash ``str.encode('utf-8')`` deep in the content-hash (ids.py) and the
+    embedder — a deferred UnicodeEncodeError on write OR on a recall query. They
+    can never be legitimate stored text, so strip them here at the boundary.
+
+    Applied to STORED content, so it does NOT drop ``_INVISIBLE_EXTRA`` (emoji /
+    CJK variation selectors etc. that carry meaning); those are stripped only on
+    the detection copy (``_marker_scan``) and the read-side render.
     """
     return "".join(
         ch for ch in text
-        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc")
+        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc", "Cs")
     )
 
 
-def _marker_scan(text: str) -> str:
-    """Detection-only normalization: casefold + fold homoglyphs to Latin.
+def _strip_default_ignorable(text: str) -> str:
+    """Drop the ``_INVISIBLE_EXTRA`` (Default_Ignorable, non-Cf/Cc) codepoints.
 
-    Never stored — this is the string the injection markers are tested against,
-    so a homoglyph- or case-spoofed marker is still caught while the original
-    (possibly legitimately non-Latin) content is stored unchanged.
+    Detection/render-only: an attacker uses one of these to split a marker or role
+    tag mid-token so it renders as the live delimiter yet the category filter above
+    misses it. Never applied to stored content (see ``_INVISIBLE_EXTRA``).
     """
-    return text.casefold().translate(_CONFUSABLES)
+    return "".join(ch for ch in text if ord(ch) not in _INVISIBLE_EXTRA)
+
+
+def _marker_scan(text: str) -> str:
+    """Detection-only normalization: drop Default_Ignorable invisibles, casefold,
+    fold homoglyphs to Latin.
+
+    Never stored — this is the string the injection markers are tested against, so
+    a homoglyph-, case-, or zero-width-split marker is still caught while the
+    original (possibly legitimately non-Latin, emoji-bearing) content is stored
+    unchanged.
+    """
+    return _strip_default_ignorable(text).casefold().translate(_CONFUSABLES)
 
 
 @dataclass(frozen=True)
@@ -304,47 +382,68 @@ def _detection_text(text: str) -> str:
 
 
 def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
-    """Whole-document injection scan, attributed to the stored pieces.
+    """Marker scan attributed to the stored pieces, catching cross-boundary splits.
 
-    Chunking can SPLIT a marker across a piece boundary (heading/AST units have
-    no overlap; text overlap is finite): neither fragment then trips the
-    per-piece screen, yet the DOCUMENT carried the marker and a reader that
-    concatenates recalled chunks reconstructs it. This scans the whole document
-    once with the same marker set and maps every match span onto the pieces it
-    overlaps, so the ingest boundary can quarantine exactly those pieces.
+    Chunking can SPLIT a marker across a piece boundary (heading/AST units have no
+    overlap; text overlap is finite): neither fragment trips the per-piece screen,
+    yet a reader who CONCATENATES the stored pieces reconstructs the marker. This
+    scans the concatenation of the stored pieces — the faithful model of "what a
+    reader rejoins" — projected into detection coordinates, and maps every marker
+    span back onto the piece(s) it overlaps, so the ingest boundary quarantines
+    exactly those pieces.
 
-    Returns ``{piece_index: overlapping_marker_count}`` — empty for a clean
-    document. Deterministic, zero-LLM (ADR-0013). Document and pieces are both
-    projected into detection coordinates (``sanitize_unicode`` + casefold +
-    confusable fold) before matching, so offsets line up; pieces are located
-    with a strictly-forward cursor — every chunker emits document-ordered
-    substrings with strictly increasing start offsets (overlap trims the END,
-    never reorders starts), so a piece that does not appear at/after the
-    cursor cannot be located at all. Such a piece — reachable only for exotic
-    normalization boundary effects, and only when the document DOES contain a
-    marker — is counted as affected: fail closed. (No rescan-from-zero
-    fallback on purpose: it would let a crafted marker-bearing document buy an
-    O(document x pieces) scan; the forward-only cursor keeps this linear.)
+    Returns ``{piece_index: overlapping_marker_count}`` — empty for a clean set.
+    Deterministic, zero-LLM (ADR-0013).
+
+    Scanning the piece CONCATENATION (not the raw ``document``) is both more
+    correct and linear:
+      * More correct — the reader reconstructs from STORED pieces, so a marker the
+        chunker rejoins by dropping a boundary '\\n'/heading (present in neither the
+        raw doc nor any single piece) IS caught; and a marker living only in text
+        the chunker DROPPED (never stored, unreconstructable) is not falsely
+        flagged.
+      * Linear — each piece's span in the concatenation is known exactly as it is
+        built (offset-exact), so there is no per-piece ``str.find`` over the whole
+        document. The old raw-document scan located pieces with ``scan.find`` which
+        is O(N) per unfindable piece → O(pieces x N) quadratic (~73s at the 10MB
+        cap on a crafted doc). Overlap counting stays O(log spans) per piece via
+        bisect over sorted span starts/ends. ``document`` is accepted for API
+        stability; detection is defined by the stored pieces.
+
+    Pieces are joined with a SINGLE SPACE. Chunkers strip whitespace at their cut
+    points, so the canonical whitespace-split marker ("ignore" + a long space run +
+    "previous instructions") stores as "...ignore" | "previous instructions..." —
+    a "".join would give "ignoreprevious instructions" and miss the ``\\s+`` gap,
+    while a naive ``" ".join(recall.texts())`` reader reconstructs "ignore previous
+    instructions". One space satisfies every marker gap (``\\s+`` and the bounded
+    ``[^.\\n]`` gaps) without fabricating a word boundary that would merge a
+    mid-word split ("sys"|"tem" stays "sys tem", never "system").
     """
-    scan = _detection_text(document)
-    spans = [m.span() for p in _INJECTION_MARKERS for m in p.finditer(scan)]
+    # Project each piece once; keep only those with surviving detection text.
+    kept = [(i, t) for i, t in ((i, _detection_text(p)) for i, p in enumerate(pieces)) if t]
+    bounds: list[tuple[int, int, int]] = []  # (piece_index, start, end) in concat coords
+    cursor = 0
+    for i, t in kept:
+        bounds.append((i, cursor, cursor + len(t)))
+        cursor += len(t) + 1  # +1 for the single joining space (last one is harmless)
+    concat = " ".join(t for _, t in kept)
+    spans = [m.span() for p in _INJECTION_MARKERS for m in p.finditer(concat)]
     if not spans:
         return {}
+    # A piece [start,end) overlaps span (a,b) iff a<end and b>start; the complement
+    # is the two DISJOINT tails (b<=start) and (a>=end), so
+    #   overlapping = total - #(b<=start) - #(a>=end)
+    # via bisect over sorted span starts/ends — O(log spans) per piece.
+    starts_sorted = sorted(a for a, _ in spans)
+    ends_sorted = sorted(b for _, b in spans)
+    total = len(spans)
     affected: dict[int, int] = {}
-    cursor = 0
-    for i, piece in enumerate(pieces):
-        target = _detection_text(piece)
-        if not target:
-            continue  # nothing of this piece survives sanitization/storage
-        start = scan.find(target, cursor)
-        if start < 0:
-            affected[i] = 1  # unlocatable in a marker-bearing doc: fail closed
-            continue
-        end = start + len(target)
-        overlapping = sum(1 for a, b in spans if a < end and start < b)
+    for i, start, end in bounds:
+        before = bisect.bisect_right(ends_sorted, start)       # spans with b <= start
+        after = total - bisect.bisect_left(starts_sorted, end)  # spans with a >= end
+        overlapping = total - before - after
         if overlapping:
             affected[i] = overlapping
-        cursor = start + 1
     return affected
 
 
@@ -390,8 +489,15 @@ def screened_record(
     return record
 
 
+# Neutralize the envelope's own section headers regardless of the leading markup
+# used to forge them. The leading run is ANY non-alphanumeric characters (so a
+# bullet '•', arrow '→', quote, emoji, checkbox '- [ ] ', guillemet — not just
+# the '#'/'>'/'==='/'**' markdown decorations), optionally an ordered-list
+# enumerator ('1.'/'12)'). It stays HORIZONTAL ([^\n0-9A-Za-z], never spanning a
+# newline) so each line-start can't rescan following lines — linear, ReDoS-gated.
 _ENVELOPE_HEADER_RE = re.compile(
-    r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
+    r"(?im)^[^\n0-9A-Za-z]*(?:\d{1,4}[^\n0-9A-Za-z]*)?"
+    r"(?:trusted directives?|retrieved memor(?:y|ies))\b.*$"
 )
 # Read-side tag neutralizer. MUST cover the SAME forged role/channel vocabulary
 # the ingest markers flag (_INJECTION_MARKERS, structural section) — angle forms
@@ -404,8 +510,10 @@ _ENVELOPE_HEADER_RE = re.compile(
 # to the stable "[tag]" placeholder to keep the envelope cache-stable. All fixed
 # alternations — no quantifier backtracking, ReDoS-gated like the rest.
 _ROLE_TAG_RE = re.compile(
-    r"(?i)(?:</?(?:system|assistant|user|im_start|im_end|tool)>"
-    r"|\[/?(?:system|inst|assistant)\])"
+    r"(?i)(?:</?(?:system|assistant|user|im_start|im_end|tool|start_of_turn|end_of_turn|tool_call|tool_calls|function_call|tool_response|tool_result|tool_results|tool_outputs)>"
+    r"|\[/?(?:system|inst|sys|assistant|tool_calls|available_tools|tool_results|tool_result|tool_call)\]"
+    r"|<\|/?[^\s<>|]{1,60}\|>"        # piped ChatML/Phi/Harmony/Llama-3/DeepSeek tokens
+    r"|<</?sys>>)"                    # Llama-2 <<SYS>> / <</SYS>>
 )
 
 
@@ -437,9 +545,18 @@ def _neutralize_delimiters(text: str) -> str:
     data frame — the same defense the ingest markers use.
     """
     out = sanitize_unicode(text)
+    # Detection/render hygiene applied to the working copy (NOT to stored content):
+    #  - drop Default_Ignorable invisibles so a zero-width-split header/tag ("</sy͏
+    #    stem>") is still neutralized in the rendered frame;
+    #  - normalize the vertical line separators Python's (?m)^ does NOT treat as a
+    #    boundary (U+2028/U+2029 Zl/Zp and a lone/CRLF CR) to '\n', so a forged
+    #    header or [n]-index on such a line can't hide from the anchored regexes
+    #    below (CRLF is collapsed first so it doesn't become a blank line; VT/FF are
+    #    already gone — sanitize_unicode strips them as Cc, gluing the header).
+    out = _strip_default_ignorable(out).replace("\r\n", "\n").translate(_VERTICAL_WS)
     # Neutralize the envelope's own section headers regardless of the leading
-    # markup used to forge them (#, **bold**, setext ===/---, blockquote >),
-    # not only a '#'-anchored heading.
+    # markup used to forge them (#, **bold**, setext ===/---, blockquote >, bullets,
+    # enumerators), not only a '#'-anchored heading.
     out = _sub_folded(_ENVELOPE_HEADER_RE, "[marker]", out)
     out = _sub_folded(_ROLE_TAG_RE, "[tag]", out)
     # Defuse a forged evidence index so a stored string can't fake the renderer's
