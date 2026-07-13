@@ -7,6 +7,7 @@ combines the ranked lists without needing comparable raw scores.
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from typing import Iterable, Optional
@@ -375,4 +376,11 @@ def _evaluate_gate(
         # vectors during a mismatch, ADR-0024 §2, still reachable lexically):
         # there is nothing to score, so there is nothing to abstain FROM.
         return GATE_NO_VECTOR_CANDIDATES
+    if not math.isfinite(top_vector_score):
+        # FAIL CLOSED on a NaN/inf top score. A tampered/overflowing vector can
+        # make the cosine non-finite even from FINITE inputs (huge magnitudes
+        # overflow the norm); `NaN < min_score` is False, which would PASS content
+        # the gate must withhold. A score that isn't a real cosine cannot clear a
+        # cosine threshold — abstain.
+        return GATE_ABSTAIN
     return GATE_ABSTAIN if top_vector_score < min_score else GATE_PASS

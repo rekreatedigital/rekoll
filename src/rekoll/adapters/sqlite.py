@@ -55,6 +55,11 @@ def _validate_where(
     """
     if not where:
         return None, None
+    if not isinstance(where, Mapping):
+        # A list/tuple/set of key names passes the ``set(where) - allowed`` check
+        # (its ELEMENTS are the allowed keys) then crashes on ``where.get(...)``
+        # with an uncaught AttributeError. Reject non-Mapping filters cleanly.
+        raise ValueError(f"where must be a mapping, got {type(where).__name__}")
     bad = set(where) - _ALLOWED_WHERE_KEYS
     if bad:
         raise ValueError(
@@ -182,8 +187,11 @@ def _decode_embedding(raw: object) -> array:
     """
     try:
         decoded = json.loads(raw)
-    except (ValueError, TypeError) as exc:
-        raise ValueError(f"corrupt embedding cell (not JSON): {exc}") from None
+    except (ValueError, TypeError, RecursionError) as exc:
+        # RecursionError: a deeply nested JSON array/object ("[[[[...]]]]") blows
+        # the decoder's C stack — caught here so a tampered cell is one clean
+        # ValueError, never an uncaught RecursionError up through Memory.recall.
+        raise ValueError(f"corrupt embedding cell (not decodable JSON): {exc}") from None
     if not isinstance(decoded, (list, tuple)) or not decoded:
         raise ValueError("corrupt embedding cell: not a non-empty numeric array")
     try:
@@ -192,6 +200,12 @@ def _decode_embedding(raw: object) -> array:
         raise ValueError(f"corrupt embedding cell (non-numeric): {exc}") from None
     if not all(math.isfinite(x) for x in vec):
         raise ValueError("corrupt embedding cell: contains NaN or Infinity")
+    # Reject a FINITE-but-overflowing vector: values so large their squares sum to
+    # inf give a non-finite L2 norm and a NaN cosine downstream (which would defeat
+    # the ADR-0028 abstain gate from finite inputs). Real embeddings are ~unit-norm;
+    # this rejects only tamper, at the same O(dim) cost as the finiteness scan.
+    if not math.isfinite(math.fsum(x * x for x in vec)):
+        raise ValueError("corrupt embedding cell: magnitude overflows the L2 norm")
     return vec
 
 

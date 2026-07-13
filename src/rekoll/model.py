@@ -11,6 +11,7 @@ Design decisions embodied here (see docs/adr/):
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
@@ -116,10 +117,15 @@ class Provenance:
     derived_from: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.source_uri or not self.source_uri.strip():
-            # Whitespace-only ('   ', '\n\t') is truthy but carries no provenance;
-            # it satisfied the bare `not self.source_uri` guard and round-tripped
-            # as a blank origin through the public facade. Treat it as absent.
+        # Require at least one VISIBLE char. `not self.source_uri` misses '   ',
+        # and `.strip()` misses zero-width / format (Cf) / control (Cc) strings
+        # (e.g. '​​', which sanitize_unicode reduces to '') — all of
+        # which are truthy but carry no provenance and round-tripped as a blank
+        # origin through the public facade.
+        if not any(
+            not ch.isspace() and unicodedata.category(ch) not in ("Cf", "Cc", "Cn")
+            for ch in self.source_uri
+        ):
             raise ValueError("provenance.source_uri is required")
 
 
