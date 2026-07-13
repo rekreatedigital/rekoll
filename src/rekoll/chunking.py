@@ -106,7 +106,14 @@ def chunk_python(text: str, *, max_size: int = CODE_MAX) -> list[str]:
     """
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # SyntaxError: not valid Python -> fall back to text chunking (ADR-0012).
+        # ValueError: source with embedded NUL. RecursionError / MemoryError
+        # ("Parser stack overflowed - source too complex"): a hostile .py with a
+        # deeply nested expression (e.g. "x = " + "not "*6000 + "True") makes the
+        # CPython parser hit its recursion/stack bound. These were UNCAUGHT and
+        # aborted the ENTIRE ingest_path walk on one poisoned file; the parser
+        # bounds its own recursion, so recovering to text chunking is safe.
         return chunk_text(text)
     lines = text.splitlines(keepends=True)
     n_lines = len(lines)

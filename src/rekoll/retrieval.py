@@ -251,7 +251,13 @@ def hybrid_search(
             f"min_score={min_score} is out of range: it is a cosine similarity "
             f"in [-1.0, 1.0], not a fused/RRF score. See FusedResult."
         )
-    query = sanitize_unicode(query)[:MAX_QUERY_CHARS]
+    # Truncate BEFORE sanitizing (not after): sanitize_unicode does a full-string
+    # NFKC normalize + invisible-strip, so running it on the raw query first made
+    # read work unbounded in query size (a 20M-char query = ~2s) despite the cap —
+    # contradicting ADR-0018 ("truncated before search, never a DoS"). Bounding the
+    # sanitize input to MAX_QUERY_CHARS keeps it O(cap); re-slice as NFKC can grow a
+    # boundary char by a few codepoints.
+    query = sanitize_unicode(query[:MAX_QUERY_CHARS])[:MAX_QUERY_CHARS]
     default_pool = max(k * 6, k)
     pool = candidates or default_pool
     # The depth footgun is a FUSION effect, and only fires when two legs fuse.

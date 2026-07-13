@@ -88,6 +88,16 @@ class Scope:
         for part in (self.tenant, self.project, self.agent):
             if not part or "/" in part or "\x00" in part:
                 raise ValueError("scope parts must be non-empty and contain no '/' or NUL")
+            try:
+                part.encode("utf-8")
+            except UnicodeEncodeError:
+                # A lone UTF-16 surrogate (e.g. '\ud800') passes the checks above
+                # but is not UTF-8 encodable — it used to construct fine and then
+                # crash EVERY adapter call with a deferred UnicodeEncodeError when
+                # scope.key() bound to SQLite. Fail loudly at construction instead.
+                raise ValueError(
+                    "scope parts must be UTF-8 encodable (no lone surrogates)"
+                ) from None
 
     def key(self) -> str:
         return f"{self.tenant}/{self.project}/{self.agent}"
@@ -106,7 +116,10 @@ class Provenance:
     derived_from: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.source_uri:
+        if not self.source_uri or not self.source_uri.strip():
+            # Whitespace-only ('   ', '\n\t') is truthy but carries no provenance;
+            # it satisfied the bare `not self.source_uri` guard and round-tripped
+            # as a blank origin through the public facade. Treat it as absent.
             raise ValueError("provenance.source_uri is required")
 
 
