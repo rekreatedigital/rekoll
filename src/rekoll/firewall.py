@@ -17,6 +17,7 @@ Two deterministic, zero-LLM choke points:
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import re
 import unicodedata
@@ -145,7 +146,17 @@ _INJECTION_MARKERS = [
     re.compile(r"(?i)new\s+(?:instructions?|task|directive|system\s+prompt)\s*:"),
     # -- Structural: forged role / channel tags -------------------------------
     re.compile(r"(?i)</?(?:system|assistant|user|im_start|im_end|tool)>"),
-    re.compile(r"(?i)\[/?(?:system|inst|assistant)\]"),
+    re.compile(r"(?i)\[/?(?:system|inst|sys|assistant)\]"),
+    # Canonical model control tokens the BARE-angle form above misses. The plain
+    # "<im_start>" (no pipes) never appears in a real runtime; the tokens hosts
+    # actually honor as tokenizer-level role/channel switches are the piped
+    # ChatML/Phi/Harmony/Llama-3 form <|...|> (<|im_start|>, <|system|>,
+    # <|eot_id|>, <|start_header_id|>, <|endoftext|>, <|channel|>, <|message|>...)
+    # and Llama-2's double-angle <<SYS>>/<</SYS>>. Untrusted content carrying one
+    # is quarantined; a trusted record has them defanged on read (_ROLE_TAG_RE).
+    # The {1,40} single-char body is bounded → linear (ReDoS-gated, test_limits).
+    re.compile(r"<\|/?[a-z0-9_]{1,40}\|>"),
+    re.compile(r"(?i)<</?sys>>"),
     # -- Multilingual "ignore/forget previous instructions" -------------------
     # Curated for the highest-traffic languages; each requires the adversarial
     # verb AND an instruction/rule object within a bounded gap, so benign prose
@@ -159,6 +170,25 @@ _INJECTION_MARKERS = [
 ]
 
 _KEEP_CONTROL = {"\t", "\n", "\r"}
+
+# Zero-width / invisible codepoints that are NOT category Cf or Cc, so the
+# category filter in ``_strip_invisible`` misses them. An attacker splits an
+# injection marker or a forged role tag mid-token with one of these (e.g.
+# "</sy͏stem>" or "ig͏nore all previous instructions"): it renders
+# invisibly — DISPLAYING as the live delimiter/marker — yet evades both the
+# marker scan and the read-side neutralizer because the codepoint's category is
+# Mn/Lo, not Cf/Cc. Unicode's Default_Ignorable_Code_Point property covers this
+# whole class, but ``unicodedata`` does not expose it, so this is the curated
+# concrete set (CGJ, Hangul fillers, Khmer inherent vowels, Mongolian free
+# variation selectors, and the two variation-selector blocks). Stripped from the
+# stored/detection copy alike — none carries text meaning a memory store needs,
+# and any legitimate emoji variation is cosmetic next to a live-delimiter escape.
+_INVISIBLE_EXTRA = frozenset(
+    [0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180E, 0x2065, 0x3164, 0xFFA0]
+    + list(range(0x180B, 0x180E))       # Mongolian free variation selectors 1-3
+    + list(range(0xFE00, 0xFE10))       # variation selectors VS1-VS16
+    + list(range(0xE0100, 0xE01F0))     # variation selectors supplement VS17-VS256
+)
 
 # Cross-script homoglyphs (Cyrillic / Greek look-alikes) folded to their Latin
 # twin. NFKC does NOT fold these, so without this map a single Cyrillic 'о' in
@@ -176,6 +206,10 @@ _CONFUSABLES = str.maketrans({
     "а": "a", "в": "b", "е": "e", "к": "k", "м": "m", "н": "h", "о": "o",
     "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "і": "i", "ј": "j",
     "ѕ": "s", "ԁ": "d", "ո": "n",
+    "ԛ": "q", "ӏ": "l",  # U+051B qa, U+04CF palochka
+    # Armenian → Latin (NFKC- and casefold-stable, so they slipped every marker:
+    # "ignօre all previous instructions" with U+0585 was NOT detected).
+    "օ": "o", "ս": "u",  # U+0585 oh, U+057D seh
     # Greek → Latin
     "α": "a", "β": "b", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o",
     "ρ": "p", "τ": "t", "υ": "u", "γ": "y", "χ": "x",
@@ -217,7 +251,11 @@ def _strip_invisible(text: str) -> str:
     """
     return "".join(
         ch for ch in text
-        if ch in _KEEP_CONTROL or unicodedata.category(ch) not in ("Cf", "Cc")
+        if ch in _KEEP_CONTROL
+        or (
+            unicodedata.category(ch) not in ("Cf", "Cc")
+            and ord(ch) not in _INVISIBLE_EXTRA
+        )
     )
 
 
@@ -330,6 +368,19 @@ def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
     spans = [m.span() for p in _INJECTION_MARKERS for m in p.finditer(scan)]
     if not spans:
         return {}
+    # Count overlapping spans per piece in O(log spans), not O(spans). A marker-
+    # dense untrusted document within the ingest caps (<10MB, <25k chunks) makes
+    # BOTH the piece count and the span count scale with size, so the naive
+    # ``sum(1 for a,b in spans if a<end and start<b)`` per piece was O(pieces x
+    # spans) — quadratic, weaponizable (~minutes at the 10MB cap). A piece
+    # [start,end) overlaps (a,b) iff a<end and b>start; the complement is the two
+    # DISJOINT tails (b<=start) and (a>=end), so
+    #   overlapping = total - #(b<=start) - #(a>=end)
+    # via bisect over sorted span starts/ends. Result is identical to the naive
+    # count (equivalence-tested); total work is O((pieces+spans) log spans).
+    starts_sorted = sorted(a for a, _ in spans)
+    ends_sorted = sorted(b for _, b in spans)
+    total = len(spans)
     affected: dict[int, int] = {}
     cursor = 0
     for i, piece in enumerate(pieces):
@@ -341,7 +392,9 @@ def screen_pieces(document: str, pieces: Sequence[str]) -> dict[int, int]:
             affected[i] = 1  # unlocatable in a marker-bearing doc: fail closed
             continue
         end = start + len(target)
-        overlapping = sum(1 for a, b in spans if a < end and start < b)
+        before = bisect.bisect_right(ends_sorted, start)      # spans with b <= start
+        after = total - bisect.bisect_left(starts_sorted, end)  # spans with a >= end
+        overlapping = total - before - after
         if overlapping:
             affected[i] = overlapping
         cursor = start + 1
@@ -390,8 +443,15 @@ def screened_record(
     return record
 
 
+# Neutralize the envelope's own section headers regardless of the leading markup
+# used to forge them. The leading run is ANY non-alphanumeric characters (so a
+# bullet '•', arrow '→', quote, emoji, checkbox '- [ ] ', guillemet — not just
+# the '#'/'>'/'==='/'**' markdown decorations), optionally an ordered-list
+# enumerator ('1.'/'12)'). It stays HORIZONTAL ([^\n0-9A-Za-z], never spanning a
+# newline) so each line-start can't rescan following lines — linear, ReDoS-gated.
 _ENVELOPE_HEADER_RE = re.compile(
-    r"(?im)^[ \t>#*=_~-]*(?:trusted directives|retrieved memory)\b.*$"
+    r"(?im)^[^\n0-9A-Za-z]*(?:\d{1,3}[.)][^\n0-9A-Za-z]*)?"
+    r"(?:trusted directives|retrieved memory)\b.*$"
 )
 # Read-side tag neutralizer. MUST cover the SAME forged role/channel vocabulary
 # the ingest markers flag (_INJECTION_MARKERS, structural section) — angle forms
@@ -405,7 +465,9 @@ _ENVELOPE_HEADER_RE = re.compile(
 # alternations — no quantifier backtracking, ReDoS-gated like the rest.
 _ROLE_TAG_RE = re.compile(
     r"(?i)(?:</?(?:system|assistant|user|im_start|im_end|tool)>"
-    r"|\[/?(?:system|inst|assistant)\])"
+    r"|\[/?(?:system|inst|sys|assistant)\]"
+    r"|<\|/?[a-z0-9_]{1,40}\|>"      # piped ChatML/Phi/Harmony/Llama-3 tokens
+    r"|<</?sys>>)"                    # Llama-2 <<SYS>> / <</SYS>>
 )
 
 
