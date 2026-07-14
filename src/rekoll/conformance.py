@@ -333,6 +333,61 @@ def assert_where_honesty(make: AdapterFactory, embedder: Embedder) -> None:
     adapter.close()
 
 
+def assert_effective_status_gate_on_forged_row(make: AdapterFactory, embedder: Embedder) -> None:
+    """A stored row whose raw ``status`` column says ``active`` at QUARANTINED
+    trust is the pair ``MemoryRecord`` makes unrepresentable at construction
+    (``__post_init__`` rewrites ACTIVE→QUARANTINED at trust 0). It is still
+    reachable in a store — an older Rekoll, a caller that mutated ``.status``
+    after ``create()``, or a hand-edit — and EVERY read gate must classify it by
+    its EFFECTIVE status (quarantined), never the raw column.
+
+    An adapter that filters the raw column lets a quarantined memory surface
+    through a ``status='active'`` query while hiding it from a
+    ``status='quarantined'`` audit, and diverges its vector and lexical legs
+    (#45). The forged state is built through the PUBLIC record API only (mutate
+    ``.status`` post-construction), so this holds every backend to the rule
+    without reaching into its storage."""
+    adapter = make()
+    clean = _rec(_SCOPE_A, "a genuinely active fact", embedder=embedder, source="test://clean")
+    forged = _rec(
+        _SCOPE_A, "forged active at quarantine trust", trust=TrustTier.QUARANTINED,
+        embedder=embedder, source="test://forge",
+    )
+    assert forged.status is Status.QUARANTINED, "the model must force quarantine at trust 0"
+    forged.status = Status.ACTIVE  # forge the divergent stored state on purpose
+    adapter.add(records=[clean, forged])
+
+    qvec = embedder.embed(["forged active at quarantine trust"])[0]
+    active = adapter.vector_query(scope=_SCOPE_A, embedding=qvec, k=10, where={"status": "active"})
+    assert forged.id not in {h.record.id for h in active}, \
+        "a forged quarantine-level row surfaced through the vector status='active' filter"
+    quarantined = adapter.vector_query(
+        scope=_SCOPE_A, embedding=qvec, k=10, where={"status": "quarantined"}
+    )
+    assert forged.id in {h.record.id for h in quarantined}, \
+        "the forged row is invisible to a vector status='quarantined' audit"
+
+    # count() classifies by EFFECTIVE status: the forged row is quarantined, not active.
+    assert adapter.count(scope=_SCOPE_A, status="active") == 1, "forged row miscounted as active"
+    assert adapter.count(scope=_SCOPE_A, status="quarantined") == 1, \
+        "forged row missing from the quarantined count"
+
+    # The was-it-used credit skips the effectively-quarantined row (base-class rule).
+    credited = adapter.bump_proof_count(scope=_SCOPE_A, ids=[forged.id, clean.id])
+    assert credited == 1, "bump_proof_count credited a forged quarantine-level row"
+    assert adapter.get(scope=_SCOPE_A, ids=[forged.id]).records[0].proof_count == 0
+
+    # If the backend advertises lexical, the two legs must AGREE on the forged row.
+    if adapter.supports(CAP_LEXICAL):
+        text = "forged active quarantine trust"
+        lex_active = adapter.lexical_query(scope=_SCOPE_A, text=text, k=10, where={"status": "active"})
+        assert forged.id not in {h.record.id for h in lex_active}, \
+            "lexical status='active' surfaced the forged row (vector/lexical divergence)"
+        lex_quar = adapter.lexical_query(scope=_SCOPE_A, text=text, k=10, where={"status": "quarantined"})
+        assert forged.id in {h.record.id for h in lex_quar}
+    adapter.close()
+
+
 def assert_delete(make: AdapterFactory, embedder: Embedder) -> None:
     adapter = make()
     record = _rec(_SCOPE_A, "to be deleted", embedder=embedder)
@@ -401,6 +456,7 @@ ALL_CHECKS = (
     assert_vector_query_ranks,
     assert_distance_metric_honest,
     assert_where_honesty,
+    assert_effective_status_gate_on_forged_row,
     assert_delete,
     assert_delete_scope_isolation,
     assert_lexical_if_supported,

@@ -78,6 +78,47 @@ def _validate_where(
             ) from None
     return where.get("status"), min_trust
 
+
+def _effective_status(status: str, trust: int) -> str:
+    """The status ``MemoryRecord`` reports for a stored ``(status, trust)`` pair.
+
+    Quarantine-level trust forces ``status='quarantined'`` at construction
+    (``model.MemoryRecord.__post_init__``): an ACTIVE row at QUARANTINED trust
+    must never surface. A stored row whose status column still says ``active`` at
+    trust 0 — written by an older Rekoll, by a caller that mutated ``.status``
+    after ``create()``, or by hand — has the SAME effective status and must gate
+    identically. This is the ONE Python definition of that rule, shared by every
+    raw-column read gate: the vector scan (pure-Python + numpy legs), its live
+    winner re-check, and the lexical ``_filter_columns``. ``_EFFECTIVE_STATUS_SQL``
+    is the SQL twin used by ``count`` / ``bump_proof_count``.
+
+    Reading the raw column instead let a forged row surface through a
+    ``status='active'`` filter AND hide from a ``status='quarantined'`` audit —
+    the divergence with the lexical leg (which was already effective-status) that
+    this closes. It deliberately makes the vector and lexical legs bit-identical
+    for forged rows and, as a consequence, breaks vector/lexical bit-equivalence
+    ONLY for those forged rows; every row minted through the model is unaffected
+    (the model already normalized it), so the scan-equivalence oracle — which
+    never forges — stays green.
+    """
+    if trust <= int(TrustTier.QUARANTINED) and status == Status.ACTIVE.value:
+        return Status.QUARANTINED.value
+    return status
+
+
+#: ``_effective_status`` as a SQL scalar over the raw ``(trust_tier, status)``
+#: columns, so ``count`` / ``bump_proof_count`` gate on the EFFECTIVE status in a
+#: single query rather than fetching + reconstructing every row. Bind the three
+#: ``_EFFECTIVE_STATUS_SQL_PARAMS`` immediately before the value it is compared
+#: to. Kept in lock-step with ``_effective_status`` above (a unit test pins the
+#: Python and SQL forms equal across every (status, trust) pair).
+_EFFECTIVE_STATUS_SQL = "CASE WHEN trust_tier <= ? AND status = ? THEN ? ELSE status END"
+_EFFECTIVE_STATUS_SQL_PARAMS = (
+    int(TrustTier.QUARANTINED),
+    Status.ACTIVE.value,
+    Status.QUARANTINED.value,
+)
+
 _INSERT_COLUMNS = (
     "id, human_id, scope_key, kind, content, content_hash, source_id, "
     "prov_source_uri, prov_adapter_name, prov_adapter_version, prov_ingest_run_id, "
@@ -679,7 +720,13 @@ class SQLiteAdapter(StorageAdapter):
         ids (the was-it-used signal). Unlike a full-row upsert this can neither
         lose a concurrent increment nor revert a concurrent change to any other
         column: the increment happens IN the database (``SET proof_count =
-        proof_count + 1``), touching only that column."""
+        proof_count + 1``), touching only that column.
+
+        "Non-quarantined" is the EFFECTIVE status (``_effective_status``): a
+        forged row (raw ``status='active'`` at trust 0) is effectively
+        quarantined, so it is NOT credited — matching the base-class default,
+        which filters the reconstructed record's status. Gating the raw column
+        instead credited a quarantine-level row as if it were active."""
         ids = list(ids)
         if not ids:
             return 0
@@ -689,8 +736,8 @@ class SQLiteAdapter(StorageAdapter):
         for table in _KIND_TABLE.values():
             cur = self._conn.execute(
                 f"UPDATE {table} SET proof_count = proof_count + 1 "
-                f"WHERE scope_key=? AND status!=? AND id IN ({placeholders})",
-                (skey, Status.QUARANTINED.value, *ids),
+                f"WHERE scope_key=? AND {_EFFECTIVE_STATUS_SQL} != ? AND id IN ({placeholders})",
+                (skey, *_EFFECTIVE_STATUS_SQL_PARAMS, Status.QUARANTINED.value, *ids),
             )
             credited += cur.rowcount
         self._conn.commit()
@@ -728,8 +775,12 @@ class SQLiteAdapter(StorageAdapter):
             sql = f"SELECT COUNT(*) AS c FROM {table} WHERE scope_key=?"
             params: list = [skey]
             if status is not None:
-                sql += " AND status=?"
-                params.append(status)
+                # Filter on the EFFECTIVE status (``_effective_status``), so a
+                # forged ``status='active'`` row at trust 0 counts as quarantined,
+                # never as active — the count feeds the MCP status number and an
+                # audit view, both of which must agree with the lexical leg.
+                sql += f" AND {_EFFECTIVE_STATUS_SQL} = ?"
+                params.extend([*_EFFECTIVE_STATUS_SQL_PARAMS, status])
             row = self._conn.execute(sql, tuple(params)).fetchone()
             total += row["c"]
         return total
@@ -789,7 +840,12 @@ class SQLiteAdapter(StorageAdapter):
                 for rid, v in entry.rows.items():
                     if v.dim != qdim:
                         continue
-                    if status_filter is not None and v.status != status_filter:
+                    # Gate on the EFFECTIVE status (mirrors the lexical leg): a
+                    # forged raw-'active'-at-trust-0 row is quarantined, so it
+                    # neither surfaces through status='active' nor hides from
+                    # status='quarantined'. min_trust still reads the raw tier
+                    # (the effective-status rule reclassifies status, not trust).
+                    if status_filter is not None and _effective_status(v.status, v.trust) != status_filter:
                         continue
                     if min_trust is not None and v.trust < min_trust:
                         continue
@@ -812,7 +868,10 @@ class SQLiteAdapter(StorageAdapter):
                     local = [
                         j
                         for j, rid in enumerate(dim_ids)
-                        if (status_filter is None or rows[rid].status == status_filter)
+                        if (
+                            status_filter is None
+                            or _effective_status(rows[rid].status, rows[rid].trust) == status_filter
+                        )
                         and (min_trust is None or rows[rid].trust >= min_trust)
                     ]
                     if not local:
@@ -855,7 +914,13 @@ class SQLiteAdapter(StorageAdapter):
                 row = rows_by_key.get((table, rid))
                 if row is None:  # deleted (or re-scoped) inside the window
                     continue
-                if status_filter is not None and row["status"] != status_filter:
+                # Same EFFECTIVE-status gate as the cache scan, re-applied on the
+                # LIVE row: a foreign write that lands a forged (raw-'active',
+                # trust-0) row inside the TOCTOU window is still gated correctly.
+                if (
+                    status_filter is not None
+                    and _effective_status(row["status"], int(row["trust_tier"])) != status_filter
+                ):
                     continue
                 if min_trust is not None and row["trust_tier"] < min_trust:
                     continue
@@ -955,22 +1020,19 @@ class SQLiteAdapter(StorageAdapter):
         )
 
     def _filter_columns(self, skey: str, ids: Sequence[str]) -> dict[str, tuple[str, int]]:
-        """``{id: (status, trust_tier)}`` for in-scope ids — the two columns the
-        read-path filters gate on, without reconstructing a record.
+        """``{id: (effective_status, trust_tier)}`` for in-scope ids — the two
+        columns the read-path filters gate on, without reconstructing a record.
 
-        ``status`` is the EFFECTIVE status, i.e. what ``MemoryRecord`` would
-        report. Quarantine-level trust forces ``status=quarantined`` at
-        construction (``model.MemoryRecord.__post_init__``), so a row whose
-        stored status column still says ``active`` — written by an older Rekoll,
-        or by hand — must be gated as quarantined here too. Reading the raw
-        column instead would let it surface through a ``status='active'`` filter.
+        ``status`` is the EFFECTIVE status via the shared ``_effective_status``
+        predicate — the same rule the vector scan, its live re-check, and
+        ``count`` / ``bump_proof_count`` now all use, so every leg gates a forged
+        ``status='active'`` row at trust 0 as quarantined identically. Reading
+        the raw column instead would let it surface through a ``status='active'``
+        filter (and hide from a ``status='quarantined'`` audit).
         """
         if not ids:
             return {}
         placeholders = ",".join("?" * len(ids))
-        active = Status.ACTIVE.value
-        quarantined = Status.QUARANTINED.value
-        floor = int(TrustTier.QUARANTINED)
         out: dict[str, tuple[str, int]] = {}
         for table in _KIND_TABLE.values():
             rows = self._conn.execute(
@@ -980,10 +1042,7 @@ class SQLiteAdapter(StorageAdapter):
             ).fetchall()
             for row in rows:
                 trust = int(row["trust_tier"])
-                status = row["status"]
-                if trust <= floor and status == active:
-                    status = quarantined
-                out[row["id"]] = (status, trust)
+                out[row["id"]] = (_effective_status(row["status"], trust), trust)
         return out
 
     # -- embedder identity --------------------------------------------------
