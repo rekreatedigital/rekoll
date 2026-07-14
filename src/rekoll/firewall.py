@@ -123,12 +123,25 @@ _PII_PATTERNS = [
     ("phone", re.compile(r"(?<!\w)(?:\+\d{1,3}[\s.\-]?)?\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}(?!\w)")),
 ]
 
-# The PII class names, used by the redaction audit trail to tell PII apart from
-# secrets. PII redactions store the CLASS ONLY — never a value fingerprint —
-# because a low-entropy value's hash is reversible by brute force (see
-# ``_redaction_tag`` / ADR-0033). Derived from ``_PII_PATTERNS`` so a new PII
-# class is covered automatically and can never regress to a reversible tag.
-_PII_NAMES = frozenset(name for name, _ in _PII_PATTERNS)
+# Secret classes whose match is PROVABLY high-entropy — a format-specific
+# credential shape spanning >= 128 bits (cloud/API keys, tokens, JWTs, PEM
+# bodies). ONLY these may store a value fingerprint in the audit trail, because
+# only for these is the truncated digest non-enumerable (see ``_redaction_tag``).
+#
+# Everything NOT listed here gets a CLASS-ONLY tag: all PII (email/us_ssn/phone),
+# AND the two GENERIC catch-alls ``credential_assignment`` / ``connection_string``
+# — those match an arbitrary ``key=value`` / ``user:pass@host`` whose captured
+# value is USER-SUPPLIED and may be low-entropy (a phone in ``password:
+# 555-123-4567``, a weak DSN password), so a sha256 of the match is reversible
+# (ADR-0033). Safe-by-default: a newly-added pattern is class-only until it is
+# explicitly proven high-entropy and added here. ``test_high_entropy_secret_names_
+# are_real_and_disjoint_from_pii`` pins that every name here is a real secret
+# pattern and none is a PII name.
+_HIGH_ENTROPY_SECRET_NAMES = frozenset({
+    "aws_access_key", "anthropic_key", "openai_key", "stripe_key", "github_token",
+    "github_pat", "slack_token", "slack_app_token", "npm_token", "slack_webhook",
+    "google_api_key", "google_oauth_secret", "sendgrid_key", "private_key", "jwt",
+})
 
 # Prompt-injection markers (case-insensitive). These lower trust on UNTRUSTED input.
 # Tested against the homoglyph-folded, casefolded detection copy (``_marker_scan``),
@@ -346,8 +359,9 @@ class DefenseDecision:
     content: str  # sanitized + possibly redacted
     trust_tier: TrustTier  # possibly lowered to QUARANTINED
     redactions: tuple[str, ...] = ()  # audit tags — non-reversible; never the raw
-    # value. Secrets: 'name:sha256:<12hex>' correlation fingerprint. PII: class
-    # name only (a low-entropy value's hash is reversible — ADR-0033).
+    # value. A 'name:sha256:<12hex>' correlation fingerprint ONLY for high-entropy
+    # secret FORMATS; PII and the generic credential catch-alls get a class-only
+    # tag (a low-entropy value's hash is reversible — ADR-0033).
     injection_markers: tuple[str, ...] = ()
 
     @property
@@ -379,29 +393,35 @@ def _fingerprint(value: str) -> str:
 def _redaction_tag(name: str, raw: str) -> str:
     """The audit tag recorded in ``metadata['redactions']`` for one redaction.
 
-    - Secret classes get ``name:sha256:<12 hex>`` — the non-reversible
-      correlation fingerprint above.
-    - PII classes get the CLASS NAME ONLY (``email`` / ``us_ssn`` / ``phone``),
-      with NO value-derived token.
+    - Provably-high-entropy, format-specific secrets (``_HIGH_ENTROPY_SECRET_NAMES``)
+      get ``name:sha256:<12 hex>`` — a stable, NON-reversible correlation
+      fingerprint (``_fingerprint``): an auditor can match "the same credential
+      leaked here and there" without the store holding it, because the format
+      spans >= 128 bits and the digest is not enumerable.
+    - Everything else gets the CLASS NAME ONLY, no value-derived token: all PII
+      (``email`` / ``us_ssn`` / ``phone``), AND the generic
+      ``credential_assignment`` / ``connection_string`` catch-alls, whose captured
+      value is user-supplied and may be low-entropy.
 
     A "fingerprint" of a LOW-ENTROPY value is reversible: the US SSN space is
-    ~1e9 and a NANP phone ~1e10, so anyone with DB read access can hash every
-    candidate offline and match the digest — the tag would simply BE the SSN, and
-    a targeted email is a confirmable guess. This is information-theoretic, not a
-    tuning problem: ANY deterministic token of a low-entropy input is
-    brute-forceable, so truncating or re-hashing does not help. A keyed/salted
-    HMAC only moves the question to where the key lives, and in a local-first
-    single-file store the key would sit right beside the data it "protects" (and
-    a per-process salt would destroy the cross-record correlation that is the
-    fingerprint's only purpose). So PII stores the class alone: it preserves the
-    one audit signal the product actually consumes (how many values, of what
-    class, were redacted — cli.py's redaction note) and stores nothing an
-    attacker can reverse. (ADR-0033; supersedes ADR-0022's "PII fingerprinted,
-    identical machinery to secrets".)
+    ~1e9, a NANP phone ~1e10, and a phone written as ``password: 555-123-4567`` is
+    caught by a credential catch-all — anyone with DB read access can hash every
+    candidate offline and match the digest, so the tag would simply BE the value
+    (a targeted email is likewise a confirmable guess). This is
+    information-theoretic, not a tuning problem: ANY deterministic token of a
+    low-entropy input is brute-forceable, so truncating or re-hashing does not
+    help. A keyed/salted HMAC only moves the question to where the key lives, and
+    in a local-first single-file store the key would sit right beside the data it
+    "protects" (and a per-process salt would destroy the cross-record correlation
+    that is the fingerprint's only purpose). So a value fingerprint is stored ONLY
+    for classes whose entropy their FORMAT guarantees; the audit signal the
+    product actually consumes (how many values, of what class, were redacted —
+    cli.py's redaction note) is preserved for every class. (ADR-0033; supersedes
+    ADR-0022's "PII fingerprinted, identical machinery to secrets".)
     """
-    if name in _PII_NAMES:
-        return name
-    return f"{name}:{_fingerprint(raw)}"
+    if name in _HIGH_ENTROPY_SECRET_NAMES:
+        return f"{name}:{_fingerprint(raw)}"
+    return name
 
 
 def screen(text: str, *, source_trust: TrustTier, redact_pii: bool = False) -> DefenseDecision:

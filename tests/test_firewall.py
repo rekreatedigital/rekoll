@@ -37,8 +37,14 @@ def test_expanded_secret_patterns_are_redacted():
         decision = screen(raw, source_trust=TrustTier.OWNER)
         assert decision.action is DefenseAction.REDACT, f"{name} not redacted: {decision.content!r}"
         assert f"[REDACTED:{name}]" in decision.content, f"{name} marker missing: {decision.content!r}"
-        assert decision.redactions and decision.redactions[0].startswith(f"{name}:sha256:")
-    # The live secret bytes must never survive.
+        # connection_string is a GENERIC catch-all (user-supplied value of unknown
+        # entropy) -> class-only tag; format-specific secrets keep a value
+        # fingerprint (ADR-0033).
+        if name == "connection_string":
+            assert name in decision.redactions and not any("sha256" in r for r in decision.redactions)
+        else:
+            assert decision.redactions and decision.redactions[0].startswith(f"{name}:sha256:")
+    # The live secret bytes must never survive (content is redacted regardless of tag).
     pg = screen("postgres://admin:S3cr3tP@ss@db.internal/prod", source_trust=TrustTier.OWNER)
     assert "S3cr3tP" not in pg.content
 
@@ -157,6 +163,47 @@ def test_pii_redaction_tag_is_not_a_reversible_fingerprint():
     assert sec.redactions and sec.redactions[0].startswith("openai_key:sha256:")
 
 
+def test_generic_credential_catchalls_never_store_a_reversible_fingerprint():
+    # ADR-0033 hardening (F1): the generic credential catch-alls
+    # (credential_assignment / connection_string) capture a USER-SUPPLIED value of
+    # UNKNOWN entropy — a phone in `password: 555-123-4567`, or a weak DSN password —
+    # so a sha256 of the whole match is brute-forceable. Only provably-high-entropy,
+    # format-specific secret shapes may keep a value fingerprint; these catch-alls
+    # get a class-only tag like PII.
+    for text, cls, low in [
+        ("password: 555-123-4567", "credential_assignment", "555-123-4567"),
+        ("db postgres://u:weakpw@host/db", "connection_string", "weakpw"),
+    ]:
+        d = screen(text, source_trust=TrustTier.OWNER, redact_pii=True)
+        joined = ",".join(d.redactions)
+        assert f"[REDACTED:{cls}]" in d.content, f"{cls} not redacted: {d.content!r}"
+        assert "sha256" not in joined, f"{cls} stored a REVERSIBLE fingerprint: {d.redactions}"
+        assert cls in d.redactions, f"{cls} class tag missing: {d.redactions}"
+        assert low not in joined
+    # Format-specific, provably-high-entropy secrets KEEP their correlation fingerprint.
+    for text, cls in [
+        ("key sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", "openai_key"),
+        ("AKIAABCDEFGHIJKLMNOP is the key", "aws_access_key"),
+    ]:
+        d = screen(text, source_trust=TrustTier.OWNER)
+        assert any(r.startswith(f"{cls}:sha256:") for r in d.redactions), f"{cls} lost its fingerprint: {d.redactions}"
+
+
+def test_high_entropy_secret_names_are_real_and_disjoint_from_pii():
+    # Safe-by-default invariant (ADR-0033): the fingerprint allowlist must contain
+    # only REAL secret pattern names and NO PII name — else a low-entropy class
+    # could regain a reversible tag. The two generic catch-alls are deliberately
+    # EXCLUDED (user-supplied value of unknown entropy).
+    from rekoll.firewall import _HIGH_ENTROPY_SECRET_NAMES, _SECRET_PATTERNS, _PII_PATTERNS
+
+    secret_names = {n for n, _ in _SECRET_PATTERNS}
+    pii_names = {n for n, _ in _PII_PATTERNS}
+    assert _HIGH_ENTROPY_SECRET_NAMES <= secret_names, "allowlist names a non-secret pattern"
+    assert not (_HIGH_ENTROPY_SECRET_NAMES & pii_names), "a PII name leaked into the fingerprint allowlist"
+    assert {"credential_assignment", "connection_string"}.isdisjoint(_HIGH_ENTROPY_SECRET_NAMES), \
+        "a generic credential catch-all must NOT be fingerprinted (user-supplied value)"
+
+
 def test_memory_redact_pii_flag_threads_through(tmp_path):
     from rekoll import Memory
     from rekoll.embedding import StubEmbedder
@@ -166,6 +213,33 @@ def test_memory_redact_pii_flag_threads_through(tmp_path):
     assert "alice@corp.example" not in record.content
     assert "[REDACTED:email]" in record.content
     mem.close()
+
+
+def test_redact_pii_with_screen_off_warns_it_is_a_no_op():
+    # F3 footgun: redact_pii runs inside the firewall, so screen=False makes it a
+    # silent no-op. Warn (never block — project posture), and prove the warning is
+    # honest (PII really is stored raw).
+    import warnings as _w
+
+    from rekoll import Memory
+    from rekoll.embedding import StubEmbedder
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        mem = Memory(path=":memory:", embedder=StubEmbedder(), reranker=None,
+                     screen=False, redact_pii=True)
+    assert any("redact_pii=True has NO EFFECT" in str(x.message) for x in caught), \
+        [str(x.message) for x in caught]
+    rec = mem.remember("reach me at raw@corp.example")
+    assert "raw@corp.example" in rec.content  # really unredacted — the warning is true
+    mem.close()
+    # The normal path (screen on) must NOT warn.
+    with _w.catch_warnings(record=True) as caught2:
+        _w.simplefilter("always")
+        mem2 = Memory(path=":memory:", project="p2", embedder=StubEmbedder(),
+                      reranker=None, redact_pii=True)
+    assert not any("NO EFFECT" in str(x.message) for x in caught2)
+    mem2.close()
 
 
 def test_untrusted_injection_is_quarantined():

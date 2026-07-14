@@ -345,10 +345,17 @@ class Memory:
         firewall's quarantine (ADR-0016).
 
         ``redact_pii`` (default False, ADR-0022) opts into scrubbing emails, US
-        SSNs, and phone numbers from EVERY write, on top of the always-on secret
-        redaction. It is off by default because code and git history are full of
-        legitimate emails and number sequences that default-on redaction would
-        corrupt, gutting recall and provenance.
+        SSNs, and phone numbers from the CONTENT of every write, on top of the
+        always-on secret redaction. It is off by default because code and git
+        history are full of legitimate emails and number sequences that
+        default-on redaction would corrupt, gutting recall and provenance.
+
+        SCOPE — content only. Redaction rewrites the stored CONTENT; it does NOT
+        touch the caller-supplied ``source`` / ``metadata`` or an ingested file's
+        path, which are structural provenance stored verbatim (scrubbing a path
+        like ``src/jane/util.py`` would corrupt "which file did this come from?").
+        So do not place PII in a ``source=`` label, a ``metadata`` value, or a
+        filename you ingest under ``redact_pii=True`` — scrub those yourself.
 
         RETROACTIVE TRAP — turning ``redact_pii`` on is NOT retroactive. It
         scrubs writes made AFTER it is set; PII already stored while it was off
@@ -382,6 +389,18 @@ class Memory:
         self._screen = screen
         self._default_trust = default_trust
         self._redact_pii = redact_pii
+        if redact_pii and not screen:
+            # Warn, never block (project posture): redact_pii runs INSIDE the
+            # firewall screen, so screen=False makes it a silent no-op — the host
+            # asked to scrub PII AND to disable the firewall, and the latter wins.
+            # (consolidate() force-screens regardless, so its output is unaffected.)
+            warnings.warn(
+                "[rekoll] redact_pii=True has NO EFFECT while screen=False: the "
+                "firewall that performs redaction is disabled, so PII (and secrets) "
+                "are stored unredacted. Set screen=True to redact, or drop "
+                "redact_pii=True to silence this.",
+                stacklevel=2,
+            )
         self._max_content_chars = max_content_chars
         self._max_file_bytes = max_file_bytes
         self._max_chunks_per_doc = max_chunks_per_doc

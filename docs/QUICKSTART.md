@@ -105,10 +105,12 @@ match — so `Memory()` sees exactly what `rekoll remember` stored. Constructor
 knobs you'll actually use: `path=` (where the SQLite file lives),
 `project=`/`tenant=`/`agent=` (separate memory spaces; pair with the CLI's
 `--project` etc. if you use both), `trust=`/`kind=` per call on `remember`, and
-`redact_pii=True` to scrub emails/SSNs/phone from every write (off by default;
-**not retroactive** — enable it before you first store PII-bearing content, since
-turning it on later leaves already-stored PII in place and re-ingesting a source
-creates a second, differently-addressed record instead of replacing the first).
+`redact_pii=True` to scrub emails/SSNs/phone from stored **content** (off by
+default; content only — not file paths or `source`/`metadata` labels, so don't put
+PII there; and **not retroactive** — enable it before you first store PII-bearing
+content, since turning it on later leaves already-stored PII in place and
+re-ingesting a source creates a second, differently-addressed record instead of
+replacing the first).
 
 ## Door 3: AI agents via MCP
 

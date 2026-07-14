@@ -139,8 +139,8 @@ any of these; that's the point.
 > already in the store stays there, and re-ingesting the same source stores a
 > *second*, differently-addressed record instead of replacing the original (ids
 > are content-addressed after screening). Turn it on **before** you first index
-> PII-bearing content. Emails/SSNs/phone only; the audit trail keeps a class
-> label, never the value.
+> PII-bearing content. Emails/SSNs/phone only, and only in the stored **content**
+> — not file paths or metadata; the audit trail keeps a class label, never the value.
 
 Example — pin the project name and allow ingesting a sibling docs folder:
 
