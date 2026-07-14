@@ -94,6 +94,11 @@ def _open_memory(args: argparse.Namespace):
                 project=args.project,
                 tenant=args.tenant,
                 agent=args.agent,
+                # Opt-in PII redaction (ADR-0022). Only the write commands
+                # (remember/ingest) define --redact-pii; read commands never set
+                # it, so getattr defaults it off for them. Threads to screen()
+                # via Memory._redact_pii -> screened_record.
+                redact_pii=getattr(args, "redact_pii", False),
             )
     except (OSError, sqlite3.Error) as exc:
         _fail(f"could not open the memory store at {args.path}: {exc}")
@@ -274,7 +279,7 @@ def cmd_remember(args: argparse.Namespace) -> int:
     redactions = str(record.metadata.get("redactions") or "")
     if redactions:
         n = len(redactions.split(","))
-        _err(f"note: {n} secret-looking value{'s' if n > 1 else ''} redacted before storing (audit fingerprints kept)")
+        _err(f"note: {n} sensitive value{'s' if n > 1 else ''} redacted before storing (an audit tag is kept, never the value)")
     if record.status is Status.QUARANTINED:
         _err("note: the firewall QUARANTINED this memory - it looks like a prompt injection")
         _err("      from an untrusted source. It is stored for audit but will never appear in recall.")
@@ -728,6 +733,22 @@ def _db_path(value: str) -> str:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def _add_redact_pii_flag(p: argparse.ArgumentParser) -> None:
+    """Attach the opt-in PII-redaction switch to a write command (remember/ingest).
+
+    OFF by default (ADR-0022): default-on redaction corrupts code ingestion
+    (author emails, CODEOWNERS, number sequences). Secrets are ALWAYS redacted
+    regardless of this flag. Placed only on the write commands so it never
+    appears where it would do nothing.
+    """
+    p.add_argument(
+        "--redact-pii", action="store_true",
+        help="also redact emails, US SSNs, and phone numbers before storing "
+             "(off by default; secrets are always redacted). Enabling it later "
+             "does NOT scrub already-stored PII - see docs/QUICKSTART.md.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     shared = argparse.ArgumentParser(add_help=False)
     where = shared.add_argument_group("where the memory lives")
@@ -774,6 +795,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="user", help="where it came from (default: %(default)s)")
     p.add_argument("--trust", choices=_TRUST_CHOICES, default=TrustTier.OWNER.name.lower(),
                    help="how much to trust the source (default: %(default)s)")
+    _add_redact_pii_flag(p)
     p.set_defaults(func=cmd_remember)
 
     p = sub.add_parser(
@@ -823,6 +845,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--trust", choices=_TRUST_CHOICES, default=TrustTier.UNVERIFIED.name.lower(),
                    help="trust for the ingested content (default: %(default)s; "
                         "pass 'owner' to vouch for files you wrote yourself)")
+    _add_redact_pii_flag(p)
     p.set_defaults(func=cmd_ingest)
 
     p = sub.add_parser(

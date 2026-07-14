@@ -131,11 +131,27 @@ any of these; that's the point.
 | `--agent` | `REKOLL_MCP_AGENT` | `default` | Scope: agent |
 | `--trust` | `REKOLL_MCP_TRUST` | `unverified` | Trust stamped on MCP writes (`unverified` or `trusted_source`) |
 | `--root` | `REKOLL_MCP_ROOT` | launch directory | The only directory `ingest_path` may read |
+| `--redact-pii` | `REKOLL_MCP_REDACT_PII` | off | Redact emails / US SSNs / phone numbers from every write (secrets are always redacted) |
+
+> **`--redact-pii` is operator-only and not retroactive.** Like trust, it is
+> fixed at launch and appears in no tool schema, so the calling model can never
+> enable or disable it. It scrubs writes made *after* it is turned on — PII
+> already in the store stays there, and re-ingesting the same source stores a
+> *second*, differently-addressed record instead of replacing the original (ids
+> are content-addressed after screening). Turn it on **before** you first index
+> PII-bearing content. Emails/SSNs/phone only; the audit trail keeps a class
+> label, never the value.
 
 Example — pin the project name and allow ingesting a sibling docs folder:
 
 ```bash
 claude mcp add rekoll -- rekoll-mcp --project myapp --root ..
+```
+
+Example — redact PII from every write (a support-ticket or CRM corpus):
+
+```bash
+claude mcp add rekoll -- rekoll-mcp --redact-pii
 ```
 
 ## 6. Troubleshooting

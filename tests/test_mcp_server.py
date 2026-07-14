@@ -109,6 +109,20 @@ def test_load_config_sanitizes_weird_cwd_names(tmp_path, monkeypatch):
     Scope(project=cfg.project)  # must construct
 
 
+def test_load_config_redact_pii_is_operator_flag_or_env_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a scope-safe cwd for the derived project
+    # Default OFF (ADR-0022).
+    assert load_config([], environ={}).redact_pii is False
+    # The operator flag turns it on...
+    assert load_config(["--redact-pii"], environ={}).redact_pii is True
+    # ...as does a truthy env var (argparse default is computed from it)...
+    for truthy in ("1", "true", "YES", "on"):
+        assert load_config([], environ={"REKOLL_MCP_REDACT_PII": truthy}).redact_pii is True
+    # ...and a falsy/empty env value leaves it off.
+    for falsy in ("0", "false", "", "no"):
+        assert load_config([], environ={"REKOLL_MCP_REDACT_PII": falsy}).redact_pii is False
+
+
 # -- remember: caps, kind allowlist, server-side trust stamping ---------------
 
 def test_remember_stamps_server_trust_and_mcp_provenance():
@@ -648,6 +662,42 @@ def test_e2e_injected_write_is_quarantined_and_never_recalled(tmp_path):
     assert rec.status is Status.QUARANTINED
     assert rec.trust_tier is TrustTier.QUARANTINED
     adapter.close()
+
+
+@requires_mcp
+def test_build_server_threads_redact_pii_into_memory(tmp_path, monkeypatch):
+    # build_server is the ONLY place config -> Memory happens, so capturing the
+    # kwargs it constructs Memory with proves --redact-pii / config.redact_pii
+    # reaches the engine. Memory then threads it to screen()
+    # (test_firewall.test_memory_redact_pii_flag_threads_through pins that leg),
+    # so this closes the chain: CLI/env flag -> load_config -> build_server ->
+    # Memory -> screen(). Deliberately IN-PROCESS: the subprocess e2e harness runs
+    # `python -m rekoll.mcp_server`, which resolves the editable-installed rekoll,
+    # NOT this worktree — a known PYTHONPATH trap — so an e2e test could not see a
+    # not-yet-merged flag. This test imports the worktree module directly.
+    from rekoll import mcp_server as m
+
+    captured: dict = {}
+    real_memory = m.Memory
+
+    def capturing_memory(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        # Return a valid, cheap Memory so the tool closures in build_server work.
+        return real_memory(path=":memory:", project=kwargs.get("project", "x"),
+                           embedder=StubEmbedder(), reranker=None)
+
+    monkeypatch.setattr(m, "Memory", capturing_memory)
+
+    on = ServerConfig(path=":memory:", tenant="default", project="x", agent="default",
+                      trust=TrustTier.UNVERIFIED, root=tmp_path, redact_pii=True)
+    m.build_server(on)
+    assert captured.get("redact_pii") is True
+
+    off = ServerConfig(path=":memory:", tenant="default", project="x", agent="default",
+                       trust=TrustTier.UNVERIFIED, root=tmp_path)  # default off
+    m.build_server(off)
+    assert captured.get("redact_pii") is False
 
 
 @requires_mcp

@@ -344,6 +344,21 @@ class Memory:
         high default can never silently exempt third-party files from the
         firewall's quarantine (ADR-0016).
 
+        ``redact_pii`` (default False, ADR-0022) opts into scrubbing emails, US
+        SSNs, and phone numbers from EVERY write, on top of the always-on secret
+        redaction. It is off by default because code and git history are full of
+        legitimate emails and number sequences that default-on redaction would
+        corrupt, gutting recall and provenance.
+
+        RETROACTIVE TRAP — turning ``redact_pii`` on is NOT retroactive. It
+        scrubs writes made AFTER it is set; PII already stored while it was off
+        stays in the store verbatim (find and ``forget()`` those records to
+        remove it). And re-ingesting the same source to "apply" redaction does
+        NOT replace the old record: ids are content-addressed on the
+        POST-screening content, so the redacted copy hashes to a DIFFERENT id and
+        is stored ALONGSIDE the un-redacted original — you end up with both. Set
+        ``redact_pii=True`` BEFORE first ingesting PII-bearing content.
+
         ``max_content_chars`` caps one ``remember()`` record; ``max_file_bytes``
         caps one ingested file/document's bytes; ``max_chunks_per_doc`` caps how
         many chunks one document may yield (bytes alone don't bound work — a

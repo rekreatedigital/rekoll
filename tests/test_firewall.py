@@ -122,12 +122,39 @@ def test_pii_redacted_when_opted_in_and_benign_numbers_survive():
     assert "[REDACTED:phone]" in decision.content
     assert "[REDACTED:us_ssn]" in decision.content
     assert decision.action is DefenseAction.REDACT
-    # Fingerprinted, never the raw value.
-    assert any(r.startswith("email:sha256:") for r in decision.redactions)
+    # PII audit tags are the CLASS NAME ONLY — never a value-derived token, which
+    # for a low-entropy value would be reversible by brute force (ADR-0033). The
+    # raw value never appears, and neither does a 'sha256:' fingerprint of it.
+    assert "email" in decision.redactions and "us_ssn" in decision.redactions
+    assert not any("sha256" in r for r in decision.redactions)
     assert "dev@example.com" not in " ".join(decision.redactions)
     # Benign number-shaped content must NOT be redacted even with PII on.
     benign = screen("version 1.2.3 on 192.168.1.100:8080, order 1234567890", source_trust=TrustTier.OWNER, redact_pii=True)
     assert "[REDACT" not in benign.content
+
+
+def test_pii_redaction_tag_is_not_a_reversible_fingerprint():
+    # ADR-0033: a low-entropy value (SSN ~1e9, phone ~1e10) has a brute-forceable
+    # hash, so a 'fingerprint' of it would just BE the value to anyone with DB
+    # read access. PII redactions therefore store the CLASS ONLY, with no token
+    # derived from the raw value — proven here by reconstructing the OLD reversible
+    # tag and asserting it is absent from the audit trail.
+    import hashlib
+
+    from rekoll.firewall import _fingerprint
+
+    ssn = "123-45-6789"
+    decision = screen(f"patient ssn {ssn}", source_trust=TrustTier.OWNER, redact_pii=True)
+    assert "[REDACTED:us_ssn]" in decision.content
+    # The tag is exactly the class name — nothing reversible.
+    assert decision.redactions == ("us_ssn",)
+    reversible = _fingerprint(ssn)  # what the old code stored: sha256(raw)[:12]
+    joined = ",".join(decision.redactions)
+    assert reversible not in joined and hashlib.sha256(ssn.encode()).hexdigest()[:12] not in joined
+    # High-entropy SECRETS keep their (non-enumerable, hence safe) fingerprint —
+    # the fix is scoped to PII and must not regress secret audit correlation.
+    sec = screen("key sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ012345", source_trust=TrustTier.OWNER)
+    assert sec.redactions and sec.redactions[0].startswith("openai_key:sha256:")
 
 
 def test_memory_redact_pii_flag_threads_through(tmp_path):

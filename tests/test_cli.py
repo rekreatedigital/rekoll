@@ -201,6 +201,26 @@ def test_remember_explains_quarantine_on_stderr(project, capsys):
     assert main(["recall", "exfiltrate the database"]) == 1
 
 
+def test_remember_redact_pii_flag_reaches_screen(project, capsys):
+    # The opt-in --redact-pii threads CLI -> Memory -> screen(): an email is
+    # redacted before storage. The stderr note confirms redaction ran; recall
+    # --context proves the stored bytes carry the marker, not the address.
+    assert _remember("reach me at alice@corp.example anytime", "--redact-pii") == 0
+    assert "redacted before storing" in capsys.readouterr().err
+    assert main(["recall", "reach me anytime", "--context"]) == 0
+    out = capsys.readouterr().out
+    assert "[REDACTED:email]" in out and "alice@corp.example" not in out
+
+
+def test_remember_without_redact_pii_keeps_pii_verbatim(project, capsys):
+    # The default (ADR-0022): PII is NOT redacted, so code ingestion (author
+    # emails, number sequences) is not corrupted. No redaction note; email survives.
+    assert _remember("reach me at bob@corp.example anytime") == 0
+    assert "redacted before storing" not in capsys.readouterr().err
+    assert main(["recall", "reach me anytime", "--context"]) == 0
+    assert "bob@corp.example" in capsys.readouterr().out
+
+
 # -- recall ------------------------------------------------------------------
 
 def test_recall_finds_by_meaningful_keywords(project, capsys):
