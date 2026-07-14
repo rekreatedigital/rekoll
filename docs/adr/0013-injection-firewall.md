@@ -12,8 +12,11 @@ fragile keyword filter that an attacker tunes around.
 Two zero-LLM choke points, both building on the P0 provenance/trust spine.
 
 **(1) Ingest screen** (`screen` / `screened_record`):
-- Redact secrets/PII via prefix-anchored patterns; store a fingerprint, never the
-  raw value — even from a trusted source (defense in depth).
+- Redact secrets/PII via prefix-anchored patterns; store a non-reversible audit
+  tag, never the raw value — even from a trusted source (defense in depth).
+  *(PII tag refined by ADR-0033: a fingerprint of a low-entropy value is
+  reversible, so PII — and the generic credential catch-alls — store a class-only
+  tag; only high-entropy secret formats keep a fingerprint.)*
 - Sanitize unicode (NFKC + strip zero-width/bidi) so homoglyph/hidden tricks can't
   smuggle markers past the screen or the eye.
 - Detect prompt-injection markers. **Trust decides the action:** markers from an

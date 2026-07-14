@@ -109,6 +109,20 @@ def test_load_config_sanitizes_weird_cwd_names(tmp_path, monkeypatch):
     Scope(project=cfg.project)  # must construct
 
 
+def test_load_config_redact_pii_is_operator_flag_or_env_off_by_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a scope-safe cwd for the derived project
+    # Default OFF (ADR-0022).
+    assert load_config([], environ={}).redact_pii is False
+    # The operator flag turns it on...
+    assert load_config(["--redact-pii"], environ={}).redact_pii is True
+    # ...as does a truthy env var (argparse default is computed from it)...
+    for truthy in ("1", "true", "YES", "on"):
+        assert load_config([], environ={"REKOLL_MCP_REDACT_PII": truthy}).redact_pii is True
+    # ...and a falsy/empty env value leaves it off.
+    for falsy in ("0", "false", "", "no"):
+        assert load_config([], environ={"REKOLL_MCP_REDACT_PII": falsy}).redact_pii is False
+
+
 # -- remember: caps, kind allowlist, server-side trust stamping ---------------
 
 def test_remember_stamps_server_trust_and_mcp_provenance():
@@ -554,6 +568,18 @@ def _run_server_session(tmp: Path, fn, *, extra_args: tuple[str, ...] = ()):
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
+        # Pin the subprocess to THIS checkout's rekoll (mirrors test_cli.py's
+        # _env_pinned_to_this_checkout). StdioServerParameters otherwise launches
+        # with a minimal env, so `-m rekoll.mcp_server` resolves whatever rekoll is
+        # pip-installed — in a git worktree that is MAIN's source, not the branch's,
+        # so an e2e test would silently exercise the WRONG tree (a branch-new flag
+        # would even fail to parse). Prepending <checkout>/src makes the branch win;
+        # in CI (no worktree) it equals the editable install, so behavior is
+        # unchanged. REKOLL_MCP_* is stripped so the server's config comes only from
+        # the explicit flags below — a stray env var can't make an e2e test flaky.
+        src = str(Path(__file__).resolve().parent.parent / "src")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("REKOLL_MCP_")}
+        env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
         params = StdioServerParameters(
             command=sys.executable,
             args=[
@@ -564,6 +590,7 @@ def _run_server_session(tmp: Path, fn, *, extra_args: tuple[str, ...] = ()):
                 *extra_args,
             ],
             cwd=str(tmp),
+            env=env,
         )
         with (tmp / "server-stderr.log").open("w", encoding="utf-8") as errlog:
             # The floor SDK (1.2.0) has no errlog parameter and reads
@@ -647,6 +674,67 @@ def test_e2e_injected_write_is_quarantined_and_never_recalled(tmp_path):
     (rec,) = adapter.get(scope=_e2e_scope(), ids=[poisoned["id"]]).records
     assert rec.status is Status.QUARANTINED
     assert rec.trust_tier is TrustTier.QUARANTINED
+    adapter.close()
+
+
+@requires_mcp
+def test_build_server_threads_redact_pii_into_memory(tmp_path, monkeypatch):
+    # Fast in-process companion to the full-stack e2e test below: build_server is
+    # the ONLY place config -> Memory happens, so capturing the kwargs it builds
+    # Memory with proves --redact-pii / config.redact_pii reaches the engine
+    # without spawning a subprocess (localizes a wiring break to build_server).
+    # Memory then threads it to screen() (test_memory_redact_pii_flag_threads_
+    # through pins that leg): CLI/env flag -> load_config -> build_server ->
+    # Memory -> screen().
+    from rekoll import mcp_server as m
+
+    captured: dict = {}
+    real_memory = m.Memory
+
+    def capturing_memory(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        # Return a valid, cheap Memory so the tool closures in build_server work.
+        return real_memory(path=":memory:", project=kwargs.get("project", "x"),
+                           embedder=StubEmbedder(), reranker=None)
+
+    monkeypatch.setattr(m, "Memory", capturing_memory)
+
+    on = ServerConfig(path=":memory:", tenant="default", project="x", agent="default",
+                      trust=TrustTier.UNVERIFIED, root=tmp_path, redact_pii=True)
+    m.build_server(on)
+    assert captured.get("redact_pii") is True
+
+    off = ServerConfig(path=":memory:", tenant="default", project="x", agent="default",
+                       trust=TrustTier.UNVERIFIED, root=tmp_path)  # default off
+    m.build_server(off)
+    assert captured.get("redact_pii") is False
+
+
+@requires_mcp
+def test_e2e_redact_pii_flag_threads_to_screen(tmp_path):
+    # Full-stack proof: the operator flag --redact-pii threads all the way to
+    # screen() through the REAL server subprocess. An email written over MCP is
+    # stored redacted (not quarantined — PII is redacted, injection is
+    # quarantined), and the PII audit tag is class-only (ADR-0033). The default
+    # (no flag) is covered by the trust-stamping roundtrip, which stores ordinary
+    # content verbatim. (This exercises the branch's code because _run_server_
+    # session now pins <checkout>/src on the subprocess PYTHONPATH.)
+    async def fn(session):
+        stored = _payload(await session.call_tool(
+            "remember", {"content": "reach me at alice@corp.example anytime"}))
+        recalled = _payload(await session.call_tool("recall", {"query": "reach me anytime"}))
+        return stored, recalled
+
+    stored, recalled = _run_server_session(tmp_path, fn, extra_args=("--redact-pii",))
+    assert stored["quarantined"] is False
+    assert "[REDACTED:email]" in recalled["context"]
+    assert "alice@corp.example" not in recalled["context"]
+
+    adapter = get_adapter("sqlite", path=str(tmp_path / "mem.db"))
+    (rec,) = adapter.get(scope=_e2e_scope(), ids=[stored["id"]]).records
+    assert "[REDACTED:email]" in rec.content and "alice@corp.example" not in rec.content
+    assert rec.metadata.get("redactions") == "email"  # class-only, no reversible fp
     adapter.close()
 
 

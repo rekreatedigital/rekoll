@@ -26,8 +26,11 @@ silently degrading recall and provenance ("who decided X?" → `[REDACTED:email]
   even when enabled: email (standard), US SSN (dashed `ddd-dd-dddd` only — a
   bare 9-digit run is too ambiguous), phone (two separators required, so
   version strings / ports / IPs / bare digit runs don't trip). PII redactions
-  are fingerprinted in the audit trail, never leaked raw — identical machinery
-  to secrets.
+  are recorded in the audit trail, never leaked raw. (**Superseded by ADR-0033:**
+  this ADR originally fingerprinted PII with "identical machinery to secrets", but
+  a truncated-hash fingerprint of a *low-entropy* value is reversible by brute
+  force. PII now stores a **class-only** tag — `email`/`us_ssn`/`phone` — with no
+  value-derived token; secrets keep their non-enumerable fingerprint.)
 
 ## Consequences
 
@@ -41,4 +44,8 @@ silently degrading recall and provenance ("who decided X?" → `[REDACTED:email]
   higher-recall local NER remains the documented future upgrade (DESIGN §6.6),
   and stays local-only — never a remote API (ADR-0007).
 - This settles the parked decision without expanding scope into the AI-provider
-  layer, CLI, or MCP (owned by other sessions).
+  layer, CLI, or MCP (owned by other sessions). *(Update 2026-07-14: the
+  operator-only CLI `--redact-pii` and MCP `--redact-pii` /
+  `REKOLL_MCP_REDACT_PII` launch switches later exposed this flag on both doors —
+  never as an LLM-settable tool argument — and the audit-tag format was corrected
+  in ADR-0033.)*

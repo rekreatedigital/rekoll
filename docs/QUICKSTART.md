@@ -72,6 +72,14 @@ Useful flags:
   scraped docs, and other people's notes. If a folder is entirely your own
   work, vouch for it explicitly: `rekoll ingest . --trust owner`.
 - `--project`, `--tenant`, `--agent` — keep separate memory spaces in one store.
+- `rekoll remember "..." --redact-pii` / `rekoll ingest . --redact-pii` — also
+  redact emails, US SSNs, and phone numbers before storing (off by default, so a
+  normal code ingest keeps author emails intact; secrets are always redacted
+  regardless). **It is not retroactive:** it only scrubs *new* writes, and
+  re-ingesting the same source afterwards stores a *second*, differently-addressed
+  record rather than replacing the original (ids are content-addressed after
+  screening). Turn it on before you first index PII-bearing content, and the audit
+  trail keeps only a class label (`email`), never the value.
 
 For scripts: results go to stdout, messages to stderr; exit code `0` = success,
 `1` = nothing found / operational problem, `2` = bad usage. `recall` exits `1`
@@ -96,7 +104,13 @@ Everything the CLI does goes through this same `Memory` class, and the defaults
 match — so `Memory()` sees exactly what `rekoll remember` stored. Constructor
 knobs you'll actually use: `path=` (where the SQLite file lives),
 `project=`/`tenant=`/`agent=` (separate memory spaces; pair with the CLI's
-`--project` etc. if you use both), `trust=`/`kind=` per call on `remember`.
+`--project` etc. if you use both), `trust=`/`kind=` per call on `remember`, and
+`redact_pii=True` to scrub emails/SSNs/phone from stored **content** (off by
+default; content only — not file paths or `source`/`metadata` labels, so don't put
+PII there; and **not retroactive** — enable it before you first store PII-bearing
+content, since turning it on later leaves already-stored PII in place and
+re-ingesting a source creates a second, differently-addressed record instead of
+replacing the first).
 
 ## Door 3: AI agents via MCP
 

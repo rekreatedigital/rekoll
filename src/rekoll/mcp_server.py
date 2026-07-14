@@ -24,6 +24,11 @@ may itself be reading attacker-controlled content):
   instructions regardless.
 - **Directives cannot be written over MCP** at any configured trust: the
   ``kind`` allowlist is raw_fact/observation/episode only.
+- **PII redaction is operator-only** (``--redact-pii`` / ``REKOLL_MCP_REDACT_PII``,
+  off by default, ADR-0022): like trust, it is fixed at launch and appears in no
+  tool schema, so a calling model can neither enable nor disable it. Secrets are
+  always redacted regardless. Enabling it does not retroactively scrub PII already
+  in the store (ids are content-addressed post-screening).
 - **Every tool input is size-capped**; ``ingest_path`` only reads inside the
   configured root; reads return the firewall's data envelope
   (``RecallResult.context()``) — raw records and quarantined memory never
@@ -96,6 +101,11 @@ class ServerConfig:
     agent: str
     trust: TrustTier
     root: Path  # resolved; ingest_path may only read inside it
+    # Operator opt-in (like trust): redact emails/SSNs/phone from every MCP write
+    # before storage. Set at launch, never a tool argument a client can pass.
+    # Default False (ADR-0022). Defaulted so existing ServerConfig(...) call sites
+    # (and pinned-key tests) keep working without naming it.
+    redact_pii: bool = False
 
 
 def _derived_project(cwd: Path) -> str:
@@ -117,6 +127,10 @@ def load_config(
 
     def _env(name: str, default: str) -> str:
         return env.get(_ENV_PREFIX + name, default)
+
+    def _env_flag(name: str) -> bool:
+        """A boolean ``REKOLL_MCP_<NAME>`` env var: truthy for 1/true/yes/on."""
+        return _env(name, "").strip().lower() in ("1", "true", "yes", "on")
 
     parser = argparse.ArgumentParser(
         prog="rekoll-mcp",
@@ -156,6 +170,17 @@ def load_config(
         default=_env("ROOT", "."),
         help="directory ingest_path is allowed to read (default: the launch directory)",
     )
+    parser.add_argument(
+        "--redact-pii",
+        action="store_true",
+        default=_env_flag("REDACT_PII"),
+        help=(
+            "redact emails / US SSNs / phone numbers from EVERY write before "
+            "storing (default: off; secrets are always redacted). Operator-only, "
+            "like --trust: a calling model can never set it. Enabling it later "
+            "does NOT scrub already-stored PII."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Validated AFTER parsing (not via choices=) so a bad env-var default gets
@@ -183,6 +208,7 @@ def load_config(
         agent=args.agent,
         trust=TRUST_CHOICES[trust_raw],
         root=Path(args.root).expanduser().resolve(),
+        redact_pii=bool(args.redact_pii),
     )
 
 
@@ -444,6 +470,7 @@ def build_server(config: ServerConfig):
         project=config.project,
         agent=config.agent,
         default_trust=config.trust,
+        redact_pii=config.redact_pii,
     )
 
     server = FastMCP(
