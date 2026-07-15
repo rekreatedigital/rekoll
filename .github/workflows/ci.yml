@@ -14,7 +14,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macOS is covered here on the core (zero-extra) suite. The optional
+        # [mcp] and [embeddings] cells stay Linux/Windows-only below — the
+        # platform-specific risks they cover (Windows pipe encoding, the ONNX
+        # quality gate) aren't macOS-specific, so those extras aren't required
+        # on this lane.
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       # Third-party actions are pinned to full commit SHAs (not tags) so a
@@ -51,19 +56,31 @@ jobs:
           python -m rekoll --help
 
   audit:
-    # Supply-chain vulnerability gate over the project's declared dependencies
-    # (DESIGN §9). Scoped to the project (inputs: .) so unrelated advisories in
-    # the ambient CI toolchain don't red the build.
+    # Supply-chain vulnerability gate (DESIGN §9). The project declares ZERO
+    # runtime dependencies, so the old `inputs: .` (a project audit of
+    # pyproject) scanned an essentially empty closure and could never fire. The
+    # advisories that actually matter live in the OPTIONAL extras people install
+    # — [mcp] and the local embedding path [embeddings]/[bench] (fastembed +
+    # onnxruntime + their transitive deps). So we build a venv with every
+    # installable extra and audit THAT environment's full closure instead.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: pip-audit (project dependencies)
+      - name: Build a venv with every installable extra
+        run: |
+          python -m venv .audit-venv
+          .audit-venv/bin/python -m pip install -e ".[dev,mcp,embeddings,bench]"
+      - name: pip-audit (the extras' full transitive closure)
+        # Environment audit of the venv above (note the absence of `inputs:`),
+        # so the scan covers mcp + fastembed + onnxruntime and everything they
+        # pull in — not the empty runtime-dep set. The action stays SHA-pinned
+        # to match the supply-chain posture of the other jobs.
         uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
-          inputs: .
+          virtual-environment: .audit-venv/
 
   # Same suite with the optional MCP extra installed: runs the end-to-end
   # stdio server tests (skipped above) AND re-proves the zero-dep invariants
