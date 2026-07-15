@@ -30,6 +30,8 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 **Do you need an AI key?** No — saving and searching memory uses a local model, no key, no internet, free. Only the *optional* learning loop calls an LLM, and you can bring any model (OpenAI, Claude, Gemini, local Ollama, …) or run it locally.
 
+*One honest caveat:* the recommended `[embeddings]` extra installs FastEmbed, which downloads the `BAAI/bge-small-en-v1.5` embedder (~tens of MB) from Hugging Face the first time you embed, then caches it — so that very first write/recall needs the network. After that one download, normal recall is fully offline and makes no further network calls. (The extra also bundles a small cross-encoder reranker, but under the default `auto` setting it stays off in normal hybrid recall, so its model is fetched only if a scope ever degrades to lexical-only.) Keyword-only mode — install without the extra — downloads nothing at all.
+
 ## Quickstart
 
 **Install (today):** Rekoll isn't on PyPI yet, so install straight from git — or
@@ -107,6 +109,15 @@ for a tree you control with `mem.ingest_path(".", trust=TrustTier.CURATED)`. You
 own first-person notes via `mem.remember(...)` stay at `OWNER` (see
 [ADR-0016](docs/adr/0016-ingest-trust-default.md)).
 
+**PII redaction is opt-in, not on by default.** Secrets (API keys, tokens,
+private-key blocks, database DSNs) are *always* stripped before anything is
+stored. Emails, US SSNs and phone numbers are kept verbatim by default —
+default-on redaction would corrupt code ingestion (author emails, `CODEOWNERS`,
+number sequences). Turn PII redaction on per write with `rekoll remember
+--redact-pii` / `rekoll ingest --redact-pii`, or for the whole MCP server with
+`rekoll-mcp --redact-pii` (or `REKOLL_MCP_REDACT_PII=1`). Redaction keeps a
+non-reversible audit tag, never the raw value (ADR-0022, refined by ADR-0033).
+
 ### Use from any agent (MCP)
 
 Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
@@ -135,7 +146,7 @@ pytest
 ## Docs & policies
 
 - [Quickstart recipes](docs/QUICKSTART.md) · [Design document](docs/DESIGN.md) · [Architecture Decision Records](docs/adr/)
-- [Security policy](SECURITY.md) · [Non-goals](NON_GOALS.md) · [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md) · [Non-goals](NON_GOALS.md) · [Contributing](CONTRIBUTING.md)
 
 ## License
 

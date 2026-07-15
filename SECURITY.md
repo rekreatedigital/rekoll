@@ -2,8 +2,10 @@
 
 Rekoll ships memory-poisoning / prompt-injection defenses **on by default**. We
 do **not** claim it is unbreakable — we claim defenses are on, documented, and
-continuously tested against a public attack corpus. If you find a way to bypass
-them, we want to hear about it privately first.
+regression-gated by a versioned attack corpus (`benchmarks/attack_corpus.json`),
+whose attack-success-rate gate may only go **down**, never up (ADR-0020). That
+gate runs in CI on every change once this repository is public. If you find a
+way to bypass the defenses, we want to hear about it privately first.
 
 ## Reporting a vulnerability
 
