@@ -55,4 +55,4 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   the bare project.
 - CI `test` matrix now includes `macos-latest` on the core (zero-extra) suite.
 
-[Unreleased]: https://github.com/ryankyleocampo-github/rekoll/commits/main
+[Unreleased]: https://github.com/rekreatedigital/rekoll/commits/main
