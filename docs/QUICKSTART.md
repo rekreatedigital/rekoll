@@ -54,12 +54,15 @@ Useful flags:
   ```
 
 - `rekoll recall "query" --json` — one JSON object for scripts and agents:
-  `{context, ids, mode, count}` (the same shape the MCP `recall` tool returns).
-  `mode` names the search that actually ran — `vector+lexical+rerank` is a full
-  hybrid ranking, while `lexical-only: embedder mismatch` means the semantic leg
-  is switched off and you should trust the *order* less. It still prints the
-  object (and still exits `1`, like `grep`) when nothing matched, so a script
-  can always read `mode`. Run `rekoll doctor` if `mode` surprises you.
+  `{context, directives, ids, mode, count, abstained, top_vector_score}` (the same
+  shape the MCP `recall` tool returns). `directives` is your project's **standing
+  rules** — the always-on instructions returned on *every* recall, whatever you
+  searched for, so a saved rule never vanishes just because it didn't rank in
+  (ADR-0034). `mode` names the search that actually ran — `vector+lexical+rerank`
+  is a full hybrid ranking, while `lexical-only: embedder mismatch` means the
+  semantic leg is switched off and you should trust the *order* less. It still
+  prints the object (and still exits `1`, like `grep`) when nothing matched, so a
+  script can always read `mode`. Run `rekoll doctor` if `mode` surprises you.
 
   ```bash
   rekoll recall "why postgres" --json | python -c "import json,sys; d=json.load(sys.stdin); print(d['mode'], d['ids'])"
@@ -97,6 +100,7 @@ mem.ingest_path("docs/")                        # chunk + index files
 best = mem.recall("why postgres?", k=3)         # ranked hits
 print(best.texts()[0])                          # plain strings
 print(best.context())                           # safe, LLM-ready envelope
+print(best.directives())                        # standing rules that always apply
 mem.forget(*best.ids())                         # delete by id
 ```
 

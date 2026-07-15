@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from .adapters.base import CAP_LEXICAL, CAP_VECTOR, StorageAdapter, UnsupportedCapabilityError
@@ -440,6 +441,79 @@ def assert_lexical_if_supported(make: AdapterFactory, embedder: Embedder) -> Non
     adapter.close()
 
 
+def assert_active_directives_if_supported(make: AdapterFactory, embedder: Embedder) -> None:
+    """The standing-directive channel read (ADR-0034), IF the adapter serves it.
+
+    Optional exactly like ``lexical_query``: a backend that raises
+    ``UnsupportedCapabilityError`` is skipped (``Memory`` degrades to rank-only).
+    An adapter that DOES implement it must honor the contract ``Memory``'s
+    always-on instruction channel depends on — get any of these wrong and a saved
+    rule silently drops, duplicates, ranks the wrong five, or (worse) a
+    non-active / below-floor / cross-scope directive leaks in as a *rule*:
+
+      * only ACTIVE ``Kind.DIRECTIVE`` records at ``trust_tier >= min_trust``;
+      * oldest-first, deterministic order (``created_at`` ASC, ``id`` ASC), so the
+        rendered envelope stays byte-stable and the cap keeps the foundational
+        rules;
+      * capped at ``limit`` (and ``limit <= 0`` returns nothing);
+      * scope-isolated.
+
+    The forged/quarantine leak is separately caught by
+    ``build_envelope``/``Memory._pinned_directives`` (defense in depth), but a
+    wrong ORDER or a dropped/duplicated rule is a correctness bug those cannot
+    see, so it is pinned here at the contract."""
+    adapter = make()
+    floor = int(TrustTier.TRUSTED_SOURCE)
+    try:
+        adapter.active_directives(scope=_SCOPE_A, limit=1, min_trust=floor)
+    except UnsupportedCapabilityError:
+        adapter.close()
+        return
+
+    def _dir(scope, text, *, sec, source, trust=TrustTier.OWNER, status=Status.ACTIVE):
+        return _rec(
+            scope, text, kind=Kind.DIRECTIVE, trust=trust, embedder=embedder,
+            source=source, status=status,
+            created_at=datetime(2026, 1, 1, 0, 0, sec, tzinfo=timezone.utc),
+        )
+
+    d0 = _dir(_SCOPE_A, "rule zero oldest", sec=0, source="t://0")
+    d1 = _dir(_SCOPE_A, "rule one middle", sec=1, source="t://1")
+    d2 = _dir(_SCOPE_A, "rule two newest", sec=2, source="t://2")
+    below = _dir(_SCOPE_A, "below floor rule", sec=3, source="t://b", trust=TrustTier.UNVERIFIED)
+    superseded = _dir(_SCOPE_A, "superseded rule", sec=4, source="t://s", status=Status.SUPERSEDED)
+    fact = _rec(_SCOPE_A, "a plain raw fact not a rule", embedder=embedder, source="t://f")
+    other = _dir(_SCOPE_B, "scope b rule", sec=0, source="t://ob")
+    adapter.add(records=[d0, d1, d2, below, superseded, fact, other])
+
+    got = adapter.active_directives(scope=_SCOPE_A, limit=10, min_trust=floor).records
+    ids = [r.id for r in got]
+    assert ids == [d0.id, d1.id, d2.id], (
+        f"active_directives must return ACTIVE at-floor directives oldest-first; "
+        f"got {[r.content for r in got]}"
+    )
+    assert below.id not in ids, "a below-floor directive surfaced in the standing channel"
+    assert superseded.id not in ids, "a non-active directive surfaced in the standing channel"
+    assert fact.id not in ids, "a raw fact surfaced in the directive-only channel"
+    assert other.id not in ids, "a scope-B directive leaked into scope A"
+    assert all(r.kind is Kind.DIRECTIVE for r in got), "non-directive kind in the channel"
+
+    capped = adapter.active_directives(scope=_SCOPE_A, limit=2, min_trust=floor).records
+    assert [r.id for r in capped] == [d0.id, d1.id], "limit/oldest-first cap not honored"
+    assert adapter.active_directives(scope=_SCOPE_A, limit=0, min_trust=floor).records == (), \
+        "limit<=0 must return no directives"
+
+    # A higher floor (OWNER) filters out a TRUSTED_SOURCE directive.
+    ts = _dir(_SCOPE_B, "trusted-source only rule", sec=1, source="t://ts",
+              trust=TrustTier.TRUSTED_SOURCE)
+    adapter.add(records=[ts])
+    owner_only = adapter.active_directives(
+        scope=_SCOPE_B, limit=10, min_trust=int(TrustTier.OWNER)
+    ).records
+    assert ts.id not in {r.id for r in owner_only}, "min_trust floor was not applied"
+    adapter.close()
+
+
 ALL_CHECKS = (
     assert_capabilities_honest,
     assert_kwargs_only,
@@ -460,6 +534,7 @@ ALL_CHECKS = (
     assert_delete,
     assert_delete_scope_isolation,
     assert_lexical_if_supported,
+    assert_active_directives_if_supported,
 )
 
 

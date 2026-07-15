@@ -46,6 +46,16 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   `forget`, `status`) over a project's private store (the `[mcp]` extra).
 - Bring-your-own-database adapter contract with a SQLite adapter shipped by
   default, and bring-your-own-embedder / consolidator provider hooks.
+- **Standing-directive channel** — a saved directive (e.g. "always explain
+  simply") now **always** rides the recall envelope's instruction channel, on
+  every recall, independent of the query and of the abstain gate — instead of
+  surfacing only when it happened to rank into the top-k. A bounded
+  (`max_pinned_directives`, default 5, `0` disables), deterministically ordered
+  (oldest-first), deduplicated, tamper-verified, zero-LLM scoped read. Exposed as
+  a new `directives` key on the SDK (`RecallResult.directives()`), CLI
+  `recall --json`, and MCP `recall` — identical across all three doors — and as a
+  new optional `StorageAdapter.active_directives` adapter method with its own
+  conformance check (ADR-0034).
 - Benchmark harness with a recall-quality regression gate over a sealed split.
 
 ### Changed
