@@ -805,6 +805,42 @@ class SQLiteAdapter(StorageAdapter):
         rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
         return GetResult(records=tuple(self._row_to_record(row) for row in rows[:n]))
 
+    def active_directives(
+        self, *, scope: Scope, limit: int, min_trust: int
+    ) -> GetResult:
+        """Active directives in ``scope`` at ``trust >= min_trust``, oldest first,
+        capped at ``limit`` — the standing-directive channel read (ADR-0034).
+
+        A single scoped SELECT over the dedicated ``directives`` table (ADR-0001:
+        directives are their own physical table), zero-LLM and zero-embedding
+        (ADR-0007). Gates on the EFFECTIVE status (``_effective_status``) exactly
+        like ``count`` / ``vector_query`` / ``lexical_query`` do, so a forged raw
+        ``status='active'`` row at trust 0 can never surface as a standing rule.
+        (The ``trust >= min_trust`` floor is itself above QUARANTINED, so the
+        effective-status CASE never actually reclassifies here — but gating
+        identically keeps the one-status-rule invariant visible across every read
+        leg.) Oldest-first (``created_at`` ASC, ``id`` ASC) is the contract from
+        :meth:`StorageAdapter.active_directives`: under the cap the foundational
+        rules survive, and the rendered prefix stays byte-stable as rules accrue.
+        """
+        if limit <= 0:
+            return GetResult(records=())
+        skey = scope.key()
+        table = _KIND_TABLE[Kind.DIRECTIVE]
+        rows = self._conn.execute(
+            f"SELECT * FROM {table} WHERE scope_key=? "
+            f"AND {_EFFECTIVE_STATUS_SQL} = ? AND trust_tier >= ? "
+            f"ORDER BY created_at ASC, id ASC LIMIT ?",
+            (
+                skey,
+                *_EFFECTIVE_STATUS_SQL_PARAMS,
+                Status.ACTIVE.value,
+                int(min_trust),
+                int(limit),
+            ),
+        ).fetchall()
+        return GetResult(records=tuple(self._row_to_record(row) for row in rows))
+
     def vector_query(
         self,
         *,

@@ -37,7 +37,17 @@ __all__ = [
     "sanitize_unicode",
     "ContextEnvelope",
     "build_envelope",
+    "DIRECTIVE_FLOOR",
 ]
+
+#: The trust floor for the recall envelope's INSTRUCTION channel: a record renders
+#: as a *directive* (a rule to follow) only if it is ``kind == DIRECTIVE`` AND
+#: ``trust_tier >= DIRECTIVE_FLOOR`` (ADR-0017; DESIGN §6.1 "directives only from
+#: the trusted tier"). Anything below the floor renders as evidence, never as an
+#: instruction. Defined once here so the ranked partition (``build_envelope``),
+#: the standing-directive channel (``Memory._pinned_directives``, ADR-0034), and
+#: any future gate all read the SAME floor.
+DIRECTIVE_FLOOR: TrustTier = TrustTier.TRUSTED_SOURCE
 
 
 class DefenseAction(str, Enum):
@@ -699,10 +709,40 @@ class ContextEnvelope:
 def build_envelope(
     hits: Iterable[QueryHit],
     *,
-    directive_floor: TrustTier = TrustTier.TRUSTED_SOURCE,
+    pinned: Sequence[MemoryRecord] = (),
+    directive_floor: TrustTier = DIRECTIVE_FLOOR,
 ) -> ContextEnvelope:
-    """Split hits into trusted directives vs. evidence; quarantined never surfaces."""
-    directives: list[str] = []
+    """Split hits into trusted directives vs. evidence; quarantined never surfaces.
+
+    ``pinned`` is the STANDING-DIRECTIVE CHANNEL (ADR-0034): the active, in-scope
+    ``Kind.DIRECTIVE`` records at/above ``directive_floor``, fetched
+    deterministically on every recall so a saved rule ALWAYS surfaces — not only
+    when it happens to rank into the query's hits. Pinned directives are listed
+    FIRST, in the deterministic order the caller supplies (``Memory`` orders them
+    oldest-first, so the rendered prefix stays byte-stable as new rules are
+    added), then any ranked directives that are not already pinned (deduped by
+    record id). ``pinned=()`` reproduces the pre-ADR-0034 behavior exactly (a pure
+    partition of ``hits``), so existing direct callers are unaffected.
+
+    Both channels pass the SAME gate — ``kind is DIRECTIVE`` AND
+    ``trust_tier >= directive_floor`` AND never quarantined — and the same
+    delimiter neutralization, so a pinned directive can no more forge the envelope
+    frame, nor slip below the floor, than a ranked one. ``render()`` stays a pure
+    function of the resulting ``(directives, evidence)`` tuples (cache-stable).
+    """
+    pinned_texts: list[str] = []
+    pinned_ids: set[str] = set()
+    for record in pinned:
+        if record.status is Status.QUARANTINED or record.trust_tier <= TrustTier.QUARANTINED:
+            continue  # never surface quarantined memory, in any channel
+        if record.kind is not Kind.DIRECTIVE or record.trust_tier < directive_floor:
+            continue  # the pinned channel is directives-at-floor only (defense in depth)
+        if record.id in pinned_ids:
+            continue  # a scoped read shouldn't repeat an id; never list one twice regardless
+        pinned_ids.add(record.id)
+        pinned_texts.append(_neutralize_delimiters(record.content))
+
+    ranked_directives: list[str] = []
     evidence: list[str] = []
     for hit in hits:
         record = hit.record
@@ -710,7 +750,12 @@ def build_envelope(
             continue  # never surface quarantined memory, in any channel
         text = _neutralize_delimiters(record.content)
         if record.kind is Kind.DIRECTIVE and record.trust_tier >= directive_floor:
-            directives.append(text)
+            if record.id in pinned_ids:
+                continue  # already standing in the pinned channel — dedup by id (invariant 6)
+            ranked_directives.append(text)
         else:
             evidence.append(text)
-    return ContextEnvelope(directives=tuple(directives), evidence=tuple(evidence))
+    return ContextEnvelope(
+        directives=tuple(pinned_texts + ranked_directives),
+        evidence=tuple(evidence),
+    )

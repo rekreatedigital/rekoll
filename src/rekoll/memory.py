@@ -32,6 +32,7 @@ from .chunking import chunk_file
 from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder, compare_identity
 from .firewall import (
+    DIRECTIVE_FLOOR,
     ContextEnvelope,
     build_envelope,
     sanitize_unicode,
@@ -50,6 +51,7 @@ __all__ = [
     "DEFAULT_MAX_CONTENT_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
     "DEFAULT_MAX_CHUNKS_PER_DOC",
+    "DEFAULT_MAX_PINNED_DIRECTIVES",
 ]
 
 # Files and bulk documents are third-party by nature: ingestion defaults to
@@ -72,6 +74,17 @@ DEFAULT_INGEST_TRUST = TrustTier.UNVERIFIED
 DEFAULT_MAX_CONTENT_CHARS = 100_000
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_CHUNKS_PER_DOC = 25_000
+
+# The standing-directive channel's cap (ADR-0034). On EVERY recall, up to this
+# many active, in-scope directives at/above the directive floor ALWAYS surface in
+# the envelope's instruction channel, independent of the query — so a saved rule
+# ("always explain simply") never silently vanishes just because it did not rank
+# into the top-k. BOUNDED on purpose: the product sells cheap, bounded reads, and
+# unbounded pinning would re-introduce token cost on every read. Under the cap the
+# read is oldest-first, so the foundational rules survive; 0 disables the channel
+# (rank-only, exactly the pre-ADR-0034 behavior). Overridable per Memory via
+# ``max_pinned_directives`` (ADR-0018-style: a knob, never silently unbounded).
+DEFAULT_MAX_PINNED_DIRECTIVES = 5
 
 DEFAULT_INCLUDE_EXT = {
     ".py", ".md", ".markdown", ".txt", ".rst", ".toml", ".yml", ".yaml",
@@ -253,12 +266,25 @@ class RecallResult:
     cosine-metric vector leg produced a surfacable candidate. It is NOT
     ``hits[0].score`` (that is an RRF or reranker score); read it here to pick
     a threshold from your own data.
+
+    ``pinned_directives`` is the STANDING-DIRECTIVE CHANNEL (ADR-0034): the
+    active, in-scope ``Kind.DIRECTIVE`` records at/above the directive floor,
+    fetched deterministically on the recall that produced this result so a saved
+    rule ALWAYS surfaces in :meth:`envelope`'s / :meth:`context`'s instruction
+    channel — even for an UNRELATED query, and even when the recall abstained
+    (``abstained=True``, zero hits). They ride ONLY the directive channel: they
+    deliberately do NOT appear in :meth:`ids` / :meth:`records` / :meth:`texts`
+    (those stay the RANKED hits — ``forget(*recall(q).ids())`` must never delete a
+    standing rule) and are NOT counted by ``len(result)``.
     """
 
     hits: tuple[QueryHit, ...]
     mode: str = "unspecified"
     abstained: bool = False
     top_vector_score: Optional[float] = None
+    #: Standing directives that ALWAYS surface (ADR-0034); see the class docstring.
+    #: Empty by default so a bare ``RecallResult(hits)`` behaves as before.
+    pinned_directives: tuple[MemoryRecord, ...] = ()
 
     def __iter__(self):
         return iter(self.hits)
@@ -277,11 +303,22 @@ class RecallResult:
         return [h.record for h in self.hits]
 
     def envelope(self) -> ContextEnvelope:
-        return build_envelope(self.hits)
+        """The framed DATA envelope: standing directives (``pinned_directives``)
+        plus ranked hits, split into the instruction and evidence channels
+        (:func:`rekoll.firewall.build_envelope`)."""
+        return build_envelope(self.hits, pinned=self.pinned_directives)
 
     def context(self) -> str:
         """LLM-ready string: memories framed as DATA, never as instructions."""
         return self.envelope().render()
+
+    def directives(self) -> list[str]:
+        """The recall envelope's directive channel as a list — the standing
+        (always-surfaced) rules plus any ranked directives, neutralized and
+        deduped exactly as :meth:`context` renders them (ADR-0034). The
+        machine-readable twin of the ``# Trusted directives`` block, exposed
+        identically across the SDK, CLI ``--json`` and MCP ``recall`` doors."""
+        return list(self.envelope().directives)
 
 
 @dataclass(frozen=True)
@@ -336,6 +373,7 @@ class Memory:
         max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
         max_chunks_per_doc: int = DEFAULT_MAX_CHUNKS_PER_DOC,
+        max_pinned_directives: int = DEFAULT_MAX_PINNED_DIRECTIVES,
     ) -> None:
         """``default_trust`` applies to first-person ``remember()`` calls ONLY.
 
@@ -371,6 +409,16 @@ class Memory:
         many chunks one document may yield (bytes alone don't bound work — a
         heading-per-line document chunks at ~0.25 chunks/byte). All ADR-0018:
         overridable, never disable-able to zero.
+
+        ``max_pinned_directives`` (default 5, ADR-0034) caps the STANDING-DIRECTIVE
+        channel: on EVERY recall, up to this many active, in-scope directives
+        at/above the directive floor ALWAYS surface in the envelope's instruction
+        channel, independent of the query — so a saved rule never silently
+        vanishes just because it did not rank into the top-k. Bounded on purpose
+        (unbounded pinning would re-introduce token cost on every read); under the
+        cap the oldest (foundational) directives are kept. Set it higher if you
+        maintain more than five standing rules, or ``0`` to disable the channel
+        (recall reverts to surfacing a directive only when it ranks in).
         """
         if path is None or not str(path).strip():
             # An empty (or None — e.g. an unset env var passed straight in)
@@ -384,6 +432,14 @@ class Memory:
         if max_content_chars <= 0 or max_file_bytes <= 0 or max_chunks_per_doc <= 0:
             raise ValueError(
                 "max_content_chars, max_file_bytes and max_chunks_per_doc must be positive"
+            )
+        if max_pinned_directives < 0:
+            # 0 is legal — it disables the standing-directive channel (rank-only,
+            # pre-ADR-0034). Negative is a bug (an unbounded/negative cap has no
+            # meaning), so refuse it loudly rather than silently clamping.
+            raise ValueError(
+                "max_pinned_directives must be >= 0 (0 disables the "
+                "standing-directive channel)"
             )
         self.scope = Scope(tenant=tenant, project=project, agent=agent)
         self._screen = screen
@@ -404,6 +460,7 @@ class Memory:
         self._max_content_chars = max_content_chars
         self._max_file_bytes = max_file_bytes
         self._max_chunks_per_doc = max_chunks_per_doc
+        self._max_pinned_directives = max_pinned_directives
 
         if backend == "sqlite" and path and path != ":memory:":
             Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -962,6 +1019,15 @@ class Memory:
     ) -> RecallResult:
         """Hybrid + reranked search. Quarantined memory is excluded; reads call no LLM.
 
+        On EVERY recall, the active in-scope directives at/above the directive
+        floor also ride the result's STANDING-DIRECTIVE channel
+        (``RecallResult.pinned_directives``, rendered in the envelope's
+        instruction block) — independent of ``query``, of the ``kind`` filter, and
+        of the abstain gate — so a saved rule never silently vanishes just because
+        it did not rank into the top-k (ADR-0034). This is a bounded, zero-LLM
+        scoped DB read (see ``max_pinned_directives``); it does NOT add to
+        ``.ids()`` / ``.records()`` / ``len(result)``, which stay the ranked hits.
+
         The query is firewall-sanitized and truncated to
         ``retrieval.MAX_QUERY_CHARS`` before embedding (DESIGN §7, ADR-0018).
 
@@ -991,7 +1057,10 @@ class Memory:
         :meth:`informed_by` can join them later. An abstain surfaces no ids, so
         it credits nothing to the ledger.
         """
-        result = self._search(query, k=k, kind=kind, rerank=rerank, min_score=min_score)
+        result = self._search(
+            query, k=k, kind=kind, rerank=rerank, min_score=min_score,
+            pin_directives=True,
+        )
         try:
             self.ledger.record(
                 [h.record.id for h in result.hits], query=query, call_id=call_id
@@ -1285,11 +1354,16 @@ class Memory:
         kind: Optional[Kind] = None,
         rerank: bool = True,
         min_score: Optional[float] = None,
+        pin_directives: bool = False,
     ) -> RecallResult:
         """The one read path recall/health/self_test share (no ledger write).
 
         health/self_test never pass ``min_score``: a probe of the index must not
         be able to abstain, or a healthy scope could read as a broken one.
+
+        ``pin_directives`` attaches the standing-directive channel (ADR-0034) to
+        the result. Only ``recall`` sets it: health/self_test look at ``.hits``
+        ids alone, never the envelope, so they skip the extra scoped read.
         """
         use_vector = self._identity_state != "mismatch"
         reranker = self.reranker if rerank else None
@@ -1315,6 +1389,11 @@ class Memory:
             mode=mode,
             abstained=result.abstained,
             top_vector_score=result.top_vector_score,
+            # The standing directives are fetched INDEPENDENTLY of the ranked hits
+            # (a plain scoped DB read) and INDEPENDENTLY of the abstain gate, so a
+            # saved rule surfaces even here, where ``result.hits`` is empty because
+            # the gate refused (invariant 7, abstain-proof).
+            pinned_directives=self._pinned_directives() if pin_directives else (),
         )
 
     def _mode(
@@ -1340,6 +1419,58 @@ class Memory:
         if isinstance(self.embedder, StubEmbedder):
             mode += " (stub-embedder)"  # deterministic hash vectors, no semantics
         return mode
+
+    def _pinned_directives(self) -> tuple[MemoryRecord, ...]:
+        """The STANDING-DIRECTIVE CHANNEL (ADR-0034): active, in-scope directives
+        at/above the directive floor, always surfaced in the recall envelope's
+        instruction channel — independent of the query and of the abstain gate.
+
+        A plain, scoped, deterministic DB read — no embedding, no LLM (ADR-0007) —
+        bounded to ``max_pinned_directives`` and ordered oldest-first by the
+        adapter. Fail-soft on every axis, because a standing rule surfacing is a
+        best-effort enhancement that must NEVER break a recall:
+
+          * ``max_pinned_directives == 0`` disables the channel with no read.
+          * An adapter that cannot serve ``active_directives`` (or ANY read error)
+            degrades to the pre-ADR-0034 rank-only behavior — the rule still
+            surfaces when it ranks in — never a raised exception on the read path.
+          * Each candidate is content-hash verified before it can render as a RULE
+            (ADR-0019). The pinned read bypasses ``hybrid_search``'s ``_verify_hits``,
+            and a tampered directive is the highest-stakes thing to surface as an
+            instruction, so a hash mismatch withholds it (one warning names the
+            ids), exactly as the ranked path would.
+
+        (Trust gating, scope isolation, and the effective-status ACTIVE filter are
+        enforced in the adapter read; ``build_envelope`` re-checks the floor +
+        quarantine as defense in depth. This method owns tamper-verify and the
+        cap/disable/degrade policy.)
+        """
+        if self._max_pinned_directives <= 0:
+            return ()
+        try:
+            records = self.adapter.active_directives(
+                scope=self.scope,
+                limit=self._max_pinned_directives,
+                min_trust=int(DIRECTIVE_FLOOR),
+            ).records
+        except Exception:
+            return ()  # unsupported adapter or read error: degrade to rank-only
+        verified: list[MemoryRecord] = []
+        tampered: list[str] = []
+        for record in records:
+            if record.verify():
+                verified.append(record)
+            else:
+                tampered.append(record.id)
+        if tampered:
+            warnings.warn(
+                f"[rekoll] {len(tampered)} standing directive(s) failed content-hash "
+                "verification and were withheld from the instruction channel "
+                "(possible direct-DB tampering; re-ingest or delete them): "
+                f"{', '.join(sorted(tampered))}",
+                stacklevel=2,
+            )
+        return tuple(verified)
 
     def _make_record(
         self, *, content, kind, provenance, trust, metadata, force_screen=False, **kwargs

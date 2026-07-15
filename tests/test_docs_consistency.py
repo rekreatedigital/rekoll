@@ -103,7 +103,7 @@ def test_design_and_readme_name_every_shipped_tool():
 # LLM-FACING surface, so the docs edit lands in the same PR.
 
 PINNED_MCP_RECALL_KEYS = {
-    "context", "ids", "mode", "count", "abstained", "top_vector_score",
+    "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
 }
 PINNED_MCP_STATUS_KEYS = {
     "memories", "scope", "store", "write_trust", "writable_kinds",

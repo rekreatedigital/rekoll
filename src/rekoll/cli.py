@@ -358,13 +358,18 @@ def _recall_payload(result) -> dict:
     Deliberately the SAME keys the MCP door's ``recall`` tool returns
     (``mcp_server._recall``), so a shell script and an MCP agent read one shape
     through either door — including ``mode``, the honest-degradation string
-    (ADR-0024) that names the pipeline which actually ran, and ``abstained`` /
-    ``top_vector_score``, the abstain-gate envelope (ADR-0028/0031): an abstain
-    is zero hits that is NOT an empty store, and it says so here rather than
-    looking identical to a miss.
+    (ADR-0024) that names the pipeline which actually ran; ``abstained`` /
+    ``top_vector_score``, the abstain-gate envelope (ADR-0028/0031); and
+    ``directives``, the standing-directive channel (ADR-0034) — the always-on
+    rules an agent must follow, read programmatically instead of scraped out of
+    the ``context`` string. ``directives`` is the SAME list rendered into
+    ``context``'s ``# Trusted directives`` block (one envelope, one source), so
+    the two never disagree.
     """
+    env = result.envelope()  # build once: context and directives share it
     return {
-        "context": result.context(),
+        "context": env.render(),
+        "directives": list(env.directives),
         "ids": result.ids(),
         "mode": result.mode,
         "count": len(result),
@@ -823,10 +828,11 @@ def _build_parser() -> argparse.ArgumentParser:
     fmt.add_argument("--ids", action="store_true",
                      help="print matching ids only, one per line (pipe into 'rekoll forget')")
     fmt.add_argument("--json", action="store_true",
-                     help="print one JSON object {context, ids, mode, count, abstained, "
-                          "top_vector_score}; 'mode' names the retrieval pipeline that ran "
-                          "(e.g. 'lexical-only: embedder mismatch' when degraded), and "
-                          "'abstained' is true when --min-score refused the query")
+                     help="print one JSON object {context, directives, ids, mode, count, "
+                          "abstained, top_vector_score}; 'directives' is the standing rules "
+                          "that always apply (ADR-0034), 'mode' names the retrieval pipeline "
+                          "that ran (e.g. 'lexical-only: embedder mismatch' when degraded), "
+                          "and 'abstained' is true when --min-score refused the query")
     p.set_defaults(func=cmd_recall)
 
     p = sub.add_parser(

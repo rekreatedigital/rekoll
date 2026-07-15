@@ -49,7 +49,7 @@ the working directory; that's how it knows which project's memory to open.
 | Tool | What it does |
 | --- | --- |
 | `remember` | Save one memory (a fact, decision, or event). Screened by the injection firewall first. |
-| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `ids` (record ids in rank order), `count`, `mode` (see below), plus the abstain envelope `abstained` and `top_vector_score` (see below). Takes an optional `min_score`. |
+| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `directives` (the project's standing rules — see below), `ids` (record ids in rank order), `count`, `mode` (see below), plus the abstain envelope `abstained` and `top_vector_score` (see below). Takes an optional `min_score`. |
 | `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names), plus `secrets_skipped` (credential-shaped files the walk excluded) and `secrets_stored` (credential-shaped files ingested anyway — see below). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
 | `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
@@ -83,6 +83,23 @@ present (`false` on an ordinary recall), and `top_vector_score` reports the
 top-1 cosine the gate compared against — the number to calibrate a threshold
 from. An abstain (zero hits, `abstained: true`) is **not** an empty store: treat
 it as "not sure", not "nothing here" (ADR-0028).
+
+### `directives` — the project's standing rules (always applied)
+
+`recall` returns `directives`: the project's **standing rules** — the always-on
+instructions an agent must follow (e.g. "always explain simply", "never touch the
+billing tables"). Unlike the ranked `context`, they are returned on **every**
+recall, whatever you searched for, so a saved rule never silently vanishes just
+because it didn't rank into the top-k for this particular query (ADR-0034). They
+are the same list rendered into `context`'s `# Trusted directives` block — exposed
+separately so you can read them programmatically instead of scraping the string.
+
+`directives` is always present (an empty list when the project has no standing
+rules), bounded (a small cap, oldest-first), and drawn only from the operator's
+own trusted-tier directives — a model **cannot** write one over MCP (see the trust
+model below), so returning them leaks nothing an injected instruction could
+exploit. A memory returned as `context` DATA is still never an instruction; only
+`directives` are rules, and only the operator can mint them.
 
 ### `secrets_stored` — a credential was indexed
 
