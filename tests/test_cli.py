@@ -287,8 +287,9 @@ def test_recall_json_prints_one_object_with_the_mcp_recall_keys(project, capsys)
     assert main(["recall", "postgres pooling", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) == {
-        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
     }
+    assert payload["directives"] == []  # no standing rules stored (ADR-0034 empty case)
     assert payload["count"] == len(payload["ids"]) >= 1
     assert all(rid.startswith("rk_") for rid in payload["ids"])
     assert "NOT instructions" in payload["context"]

@@ -70,7 +70,7 @@ import pytest
 
 from rekoll import Memory
 from rekoll.embedding import StubEmbedder
-from rekoll.model import Kind, Status
+from rekoll.model import Kind, Status, TrustTier
 
 K = 5
 PROJECT = "parity"
@@ -499,7 +499,7 @@ def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
     cli_payload = _cli_json(store, query)
 
     assert set(cli_payload) == set(mcp_payload) == {
-        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
     }
     assert cli_payload["ids"] == mcp_payload["ids"]
     assert cli_payload["mode"] == mcp_payload["mode"]
@@ -507,6 +507,7 @@ def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
     assert cli_payload["context"] == mcp_payload["context"]  # one envelope, one renderer
     assert cli_payload["abstained"] == mcp_payload["abstained"]  # abstain gate (ADR-0028/0031)
     assert cli_payload["top_vector_score"] == mcp_payload["top_vector_score"]
+    assert cli_payload["directives"] == mcp_payload["directives"]  # standing channel (ADR-0034)
 
 
 # The abstain gate is a COSINE floor; on the stub corpus every top-1 cosine is
@@ -572,3 +573,69 @@ def test_three_doors_agree_at_nondefault_k(store, sdk):
     ids_mcp = mcp_out[(query, 3)]["ids"]
     assert ids_mcp == _sdk_ids(sdk, query, k=3) == _cli_ids(store, query, k=3)
     assert len(ids_mcp) == 3
+
+
+# -- the standing-directive channel across all three doors (ADR-0034) ----------
+
+# A rule that shares NO salient words with any QUERY, so it surfaces ONLY because
+# it is a standing directive (it never ranks into an unrelated query's top-k).
+STANDING_RULE = "Always explain changes in plain language before writing any code."
+
+
+@pytest.fixture(scope="module")
+def directive_store(store):
+    """A twin of ``store`` that ALSO holds one OWNER directive, so the
+    standing-directive channel (ADR-0034) is exercised across doors. A SEPARATE db
+    file reusing ``store``'s shim env/root, so the shared ``store`` fixture — and
+    every existing parity assertion built on it — is untouched."""
+    db = store.root / "parity-directives.db"
+    mem = Memory(path=str(db), project=PROJECT, embedder=StubEmbedder(), reranker=None)
+    mem.remember(STANDING_RULE, kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    for fact in REMEMBERED_FACTS:
+        mem.remember(fact)
+    quarantined = mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value)
+    mem.close()
+    assert quarantined == 0
+    return SimpleNamespace(db=str(db), root=store.root, env=store.env)
+
+
+def test_standing_directive_key_is_identical_across_doors(directive_store):
+    """THE ADR-0034 cross-door pin: the ``directives`` payload key is NON-EMPTY and
+    identical at SDK, CLI ``--json`` and the real MCP stdio server, for EVERY query
+    — including UNRELATED ones, where the rule surfaces only because it is a
+    standing directive, not because it ranked in. Skips MCP cleanly without the
+    extra (``_mcp_recall_bulk`` importorskips 'mcp')."""
+    mcp_out, _ = _mcp_recall_bulk(directive_store, [(q, K) for q in QUERIES])
+    sdk = Memory(path=directive_store.db, project=PROJECT, embedder=StubEmbedder(), reranker=None)
+    try:
+        for query in QUERIES:
+            cli = _cli_json(directive_store, query)["directives"]
+            mcp = mcp_out[(query, K)]["directives"]
+            sdk_dirs = sdk.recall(query, k=K).directives()
+            assert cli == mcp == sdk_dirs, f"directives diverged across doors on {query!r}"
+            assert cli == [STANDING_RULE], (
+                f"the standing rule did not surface (or changed) on {query!r}: {cli}"
+            )
+    finally:
+        sdk.close()
+
+
+def test_standing_directive_crosses_doors_even_under_abstain(directive_store):
+    """The channel is abstain-proof through every door: with min_score forcing an
+    abstain (zero ranked hits) the standing rule STILL rides ``directives``,
+    identically at SDK/CLI/MCP, while ``ids``/``count`` are empty. A standing rule
+    is never silenced by an abstain — on any door."""
+    query = QUERIES[0]
+    mcp_out, _ = _mcp_recall_bulk(directive_store, [(query, K)], min_score=ABSTAIN_MIN_SCORE)
+    mcp = mcp_out[(query, K)]
+    cli = _cli_json(directive_store, query, min_score=ABSTAIN_MIN_SCORE)
+    sdk = Memory(path=directive_store.db, project=PROJECT, embedder=StubEmbedder(), reranker=None)
+    try:
+        sdk_res = sdk.recall(query, k=K, min_score=ABSTAIN_MIN_SCORE)
+        for name, payload in (("cli", cli), ("mcp", mcp)):
+            assert payload["abstained"] is True and payload["ids"] == [], f"{name} not abstained"
+            assert payload["directives"] == [STANDING_RULE], f"{name} dropped the standing rule"
+        assert sdk_res.directives() == [STANDING_RULE]
+        assert cli["directives"] == mcp["directives"] == sdk_res.directives()
+    finally:
+        sdk.close()

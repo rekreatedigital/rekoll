@@ -165,6 +165,37 @@ class StorageAdapter(ABC):
             f"adapter '{self.name}' does not support newest-record enumeration"
         )
 
+    # --- optional: standing-directive channel (always-surface rules) -------
+    def active_directives(
+        self, *, scope: Scope, limit: int, min_trust: int
+    ) -> GetResult:
+        """The ACTIVE ``Kind.DIRECTIVE`` records in ``scope`` at ``trust_tier >=
+        min_trust``, in a STABLE, DETERMINISTIC order (oldest first: ``created_at``
+        ascending, ``id`` ascending as the tiebreak), capped at ``limit``.
+
+        This is the read behind Rekoll's standing-directive channel (ADR-0034):
+        a saved rule must ALWAYS ride the recall envelope's instruction channel,
+        not only when it happens to rank into a query's hits. It is a plain,
+        scoped, deterministic DB read — **zero LLM, zero embedding** (ADR-0007) —
+        and the ordering contract is load-bearing: ``Memory`` renders these in the
+        order returned, and the envelope must be byte-stable for cache reuse, so
+        the order may not depend on scores, timestamps-of-read, or row layout.
+
+        Oldest-first is deliberate: under the ``limit`` cap the FOUNDATIONAL rules
+        (the ones set at onboarding) survive, and appending a new rule never
+        disturbs the pinned prefix — the rendered envelope's directive block stays
+        prefix-stable as rules accrue, so a host's prompt cache is not busted.
+
+        Optional the same way :meth:`lexical_query` / :meth:`newest` are: a backend
+        that cannot serve it raises ``UnsupportedCapabilityError`` and ``Memory``
+        degrades to the pre-ADR-0034 rank-only behavior (the rule still appears
+        when it ranks in) — never a crash. ``limit <= 0`` returns an empty result.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the standing-directive channel "
+            "(active_directives enumeration)"
+        )
+
     # --- was-it-used: proof_count increment -------------------------------
     def bump_proof_count(self, *, scope: Scope, ids: Sequence[str]) -> int:
         """Increment ``proof_count`` by one for each in-scope, non-quarantined

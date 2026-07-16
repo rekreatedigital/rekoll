@@ -489,8 +489,9 @@ def test_e2e_degraded_mode_reaches_the_calling_model_over_the_wire(tmp_path):
     recall, status = _run_server_session(tmp_path, fn, env=_stub_pinned_env(tmp_path))
 
     assert set(recall) == {
-        "context", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
     }
+    assert recall["directives"] == []  # no standing rules stored (ADR-0034 empty case)
     assert recall["count"] >= 1 and "Postgres" in recall["context"]  # looks healthy...
     assert recall["mode"] == DEGRADED_MODE  # ...and says otherwise
     assert recall["abstained"] is False  # no gate was requested
