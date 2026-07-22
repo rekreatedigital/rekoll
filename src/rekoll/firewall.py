@@ -38,6 +38,7 @@ __all__ = [
     "ContextEnvelope",
     "build_envelope",
     "DIRECTIVE_FLOOR",
+    "BOARD_FLOOR",
 ]
 
 #: The trust floor for the recall envelope's INSTRUCTION channel: a record renders
@@ -48,6 +49,21 @@ __all__ = [
 #: the standing-directive channel (``Memory._pinned_directives``, ADR-0034), and
 #: any future gate all read the SAME floor.
 DIRECTIVE_FLOOR: TrustTier = TrustTier.TRUSTED_SOURCE
+
+#: The trust floor for the LIVE PROJECT BOARD (ADR-0035), defined once beside
+#: ``DIRECTIVE_FLOOR`` so the two channel policies live in the same place. It
+#: gates two things: Tier-2 board membership (a ``board`` metadata tag only
+#: counts as a curated major/pending item at ``trust_tier >= BOARD_FLOOR``) and
+#: the board payload's text excerpts (below the floor an entry still appears —
+#: id/kind/trust/created_at awareness — but its ``text`` is null, so the board
+#: never amplifies untrusted text to every session). Deliberately the same tier
+#: as ``DIRECTIVE_FLOOR``: content below it may be *evidence*, never a channel
+#: that every session replays. Import this constant everywhere the floor is
+#: needed — never restate the number. (``adapters/base.py`` cannot import it —
+#: this module imports ``adapters.base``, so that would be a cycle; the adapter
+#: contract therefore spells its default as ``int(TrustTier.TRUSTED_SOURCE)``
+#: and a test pins the two equal.)
+BOARD_FLOOR: TrustTier = TrustTier.TRUSTED_SOURCE
 
 
 class DefenseAction(str, Enum):

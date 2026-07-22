@@ -23,6 +23,7 @@ import re
 import sqlite3
 import sys
 from array import array
+from contextlib import contextmanager
 from datetime import datetime
 from functools import reduce
 from operator import add, mul
@@ -30,7 +31,19 @@ from typing import Mapping, Optional, Sequence
 
 from ..embedding import EmbedderIdentity
 from ..model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
-from .base import CAP_LEXICAL, CAP_VECTOR, GetResult, QueryHit, QueryResult, StorageAdapter
+from .base import (
+    BOARD_LIMIT_CEILING,
+    BOARD_METADATA_KEY,
+    BOARD_TAG_MAJOR,
+    BOARD_TAG_PENDING,
+    CAP_LEXICAL,
+    CAP_VECTOR,
+    BoardSnapshot,
+    GetResult,
+    QueryHit,
+    QueryResult,
+    StorageAdapter,
+)
 
 _KIND_TABLE = {
     Kind.RAW_FACT: "verbatim_records",
@@ -163,6 +176,23 @@ def _decode_scalar(vtype: str, value: Optional[str]):
 def _scope_from_key(key: str) -> Scope:
     tenant, project, agent = key.split("/", 2)
     return Scope(tenant=tenant, project=project, agent=agent)
+
+
+def _validate_board_limit(name: str, value: int) -> int:
+    """Validate a board-read limit at the door (ADR-0035 / ADR-0018 bound).
+
+    ``0`` legitimately disables that leg; negative has no meaning and anything
+    over ``BOARD_LIMIT_CEILING`` would break the board's bounded-read promise —
+    both are refused loudly (the ``max_pinned_directives`` shape), never
+    silently clamped.
+    """
+    limit = int(value)
+    if limit < 0 or limit > BOARD_LIMIT_CEILING:
+        raise ValueError(
+            f"{name} must be between 0 and {BOARD_LIMIT_CEILING} "
+            f"(0 disables that board leg), got {value!r}"
+        )
+    return limit
 
 
 # Bound the MATCH expression: a hostile/runaway query must not inflate it
@@ -504,6 +534,13 @@ class SQLiteAdapter(StorageAdapter):
             self._conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{table}_scope ON {table}(scope_key)"
             )
+            # Board reads (ADR-0035) ORDER BY created_at within a scope on every
+            # poll; additive + idempotent, no migration machinery — an existing
+            # store gains it on next open.
+            self._conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{table}_scope_created "
+                f"ON {table}(scope_key, created_at)"
+            )
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS record_metadata (
@@ -514,6 +551,13 @@ class SQLiteAdapter(StorageAdapter):
                 PRIMARY KEY (record_id, key)
             )
             """
+        )
+        # The Tier-2 board JOIN probes record_metadata by key (PK order is
+        # (record_id, key), useless for a key-first lookup). Same additive,
+        # idempotent shape as the scope_created indexes above.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_record_metadata_key "
+            "ON record_metadata(key, record_id)"
         )
         self._conn.execute(
             """
@@ -840,6 +884,221 @@ class SQLiteAdapter(StorageAdapter):
             ),
         ).fetchall()
         return GetResult(records=tuple(self._row_to_record(row) for row in rows))
+
+    # -- live project board (ADR-0035) --------------------------------------
+    @contextmanager
+    def _read_txn(self):
+        """One consistent read snapshot across several SELECTs.
+
+        Every public method on this adapter commits before returning, so the
+        connection is in autocommit between calls and each of a multi-statement
+        read's SELECTs sees whatever foreign commit landed in between — a torn
+        board. An explicit BEGIN (deferred) pins all reads inside to the
+        snapshot WAL establishes at the first statement; ROLLBACK ends it
+        without writing (this is a read-only transaction). Ended per call on
+        purpose: the NEXT board read starts a fresh snapshot, so a foreign
+        connection's committed write is always visible to it (these reads never
+        touch the vector scan cache). Joins an already-open transaction rather
+        than nesting a BEGIN.
+        """
+        if self._conn.in_transaction:
+            yield
+            return
+        self._conn.execute("BEGIN")
+        try:
+            yield
+        finally:
+            self._conn.rollback()
+
+    def _recent_rows(self, skey: str, limit: int, min_trust: int) -> list[sqlite3.Row]:
+        """Tier-1 rows: effective-active at/above ``min_trust``, newest first —
+        the ``newest()`` per-table-then-Python-merge shape with the surfaced-read
+        gates ``newest()`` deliberately lacks."""
+        rows: list[sqlite3.Row] = []
+        for table in _KIND_TABLE.values():
+            rows.extend(
+                self._conn.execute(
+                    # created_at is ISO-8601 UTC, so lexicographic order IS
+                    # chronological; id breaks same-instant ties (as newest()).
+                    f"SELECT * FROM {table} WHERE scope_key=? "
+                    f"AND {_EFFECTIVE_STATUS_SQL} = ? AND trust_tier >= ? "
+                    f"ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (
+                        skey,
+                        *_EFFECTIVE_STATUS_SQL_PARAMS,
+                        Status.ACTIVE.value,
+                        int(min_trust),
+                        limit,
+                    ),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: (row["created_at"], row["id"]), reverse=True)
+        return rows[:limit]
+
+    def _board_rows(self, skey: str, limit: int, min_trust: int) -> list[sqlite3.Row]:
+        """Tier-2 rows: ``board`` in {major, pending} + the same gates, oldest
+        first. record_metadata has NO scope_key column, so every gate
+        (scope/status/trust) sits on the KIND-TABLE side — a metadata-first
+        query would leak tags across scopes. (record_metadata's PK is
+        (record_id, key): one 'board' row per record, so the JOIN cannot fan
+        out.) The bare ``status``/``trust_tier`` in the effective-status CASE
+        are unambiguous — record_metadata has no columns of those names."""
+        rows: list[sqlite3.Row] = []
+        for table in _KIND_TABLE.values():
+            rows.extend(
+                self._conn.execute(
+                    f"SELECT t.* FROM {table} AS t "
+                    f"JOIN record_metadata AS m ON m.record_id = t.id "
+                    f"WHERE m.key = ? AND m.value IN (?, ?) "
+                    f"AND t.scope_key = ? AND {_EFFECTIVE_STATUS_SQL} = ? "
+                    f"AND t.trust_tier >= ? "
+                    f"ORDER BY t.created_at ASC, t.id ASC LIMIT ?",
+                    (
+                        BOARD_METADATA_KEY,
+                        BOARD_TAG_MAJOR,
+                        BOARD_TAG_PENDING,
+                        skey,
+                        *_EFFECTIVE_STATUS_SQL_PARAMS,
+                        Status.ACTIVE.value,
+                        int(min_trust),
+                        limit,
+                    ),
+                ).fetchall()
+            )
+        rows.sort(key=lambda row: (row["created_at"], row["id"]))
+        return rows[:limit]
+
+    def _pending_open_count(self, skey: str, min_trust: int) -> int:
+        """FULL count of ``board=pending`` rows passing the Tier-2 gates (not
+        capped by any leg limit); same kind-table-side gating as _board_rows."""
+        total = 0
+        for table in _KIND_TABLE.values():
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table} AS t "
+                f"JOIN record_metadata AS m ON m.record_id = t.id "
+                f"WHERE m.key = ? AND m.value = ? "
+                f"AND t.scope_key = ? AND {_EFFECTIVE_STATUS_SQL} = ? "
+                f"AND t.trust_tier >= ?",
+                (
+                    BOARD_METADATA_KEY,
+                    BOARD_TAG_PENDING,
+                    skey,
+                    *_EFFECTIVE_STATUS_SQL_PARAMS,
+                    Status.ACTIVE.value,
+                    int(min_trust),
+                ),
+            ).fetchone()
+            total += row["c"]
+        return total
+
+    def recent_records(
+        self, *, scope: Scope, limit: int = 10, min_trust: int = int(TrustTier.UNVERIFIED)
+    ) -> GetResult:
+        """Tier 1 of the live project board (see :meth:`StorageAdapter.recent_records`).
+
+        Deliberately NOT a reuse of :meth:`newest`: that read has no status or
+        trust gate — ``health()``/``reindex()`` depend on it seeing every row,
+        forged or quarantined included — while this one gates on the EFFECTIVE
+        status (``_effective_status``) and the trust floor like every other
+        surfaced read leg. Rows and their child-table reconstruction happen
+        inside one read transaction so the returned records are one snapshot.
+        """
+        limit = _validate_board_limit("limit", limit)
+        if limit == 0:
+            return GetResult(records=())
+        skey = scope.key()
+        with self._read_txn():
+            rows = self._recent_rows(skey, limit, min_trust)
+            return GetResult(records=tuple(self._row_to_record(row) for row in rows))
+
+    def board_entries(
+        self,
+        *,
+        scope: Scope,
+        limit: int = 10,
+        min_trust: int = int(TrustTier.TRUSTED_SOURCE),
+    ) -> GetResult:
+        """Tier 2 of the live project board (see :meth:`StorageAdapter.board_entries`).
+
+        Oldest-first (``created_at`` ASC, ``id`` ASC — ADR-0034 §4's
+        prefix-stability rationale), capped, gated on the kind-table side only.
+        """
+        limit = _validate_board_limit("limit", limit)
+        if limit == 0:
+            return GetResult(records=())
+        skey = scope.key()
+        with self._read_txn():
+            rows = self._board_rows(skey, limit, min_trust)
+            return GetResult(records=tuple(self._row_to_record(row) for row in rows))
+
+    def board_snapshot(
+        self,
+        *,
+        scope: Scope,
+        recent_limit: int = 10,
+        major_limit: int = 10,
+        min_trust: int = int(TrustTier.UNVERIFIED),
+    ) -> BoardSnapshot:
+        """Both tiers + the open-pending count from ONE read transaction, so a
+        concurrent writer can never produce a torn snapshot (tiers that
+        contradict each other). ``min_trust`` gates the Tier-1 leg only; the
+        curated leg and ``pending_open`` always apply the Tier-2 board floor
+        policy (``firewall.BOARD_FLOOR`` — spelled via ``TrustTier`` here
+        because ``firewall`` imports this package; a test pins them equal).
+        """
+        recent_limit = _validate_board_limit("recent_limit", recent_limit)
+        major_limit = _validate_board_limit("major_limit", major_limit)
+        skey = scope.key()
+        tier2_floor = int(TrustTier.TRUSTED_SOURCE)  # == int(firewall.BOARD_FLOOR)
+        with self._read_txn():
+            major_rows = self._board_rows(skey, major_limit, tier2_floor) if major_limit else []
+            recent_rows = self._recent_rows(skey, recent_limit, min_trust) if recent_limit else []
+            pending = self._pending_open_count(skey, tier2_floor)
+            return BoardSnapshot(
+                majors=tuple(self._row_to_record(row) for row in major_rows),
+                recent=tuple(self._row_to_record(row) for row in recent_rows),
+                pending_open=pending,
+            )
+
+    def set_status(self, *, scope: Scope, record_id: str, status: str) -> bool:
+        """Atomic, targeted status transition for one effective-active record —
+        the :meth:`bump_proof_count` concurrency pattern: the effective-status
+        gate lives IN the UPDATE's WHERE (evaluated on the pre-update row), so
+        two racing callers yield exactly one transition and there is no
+        read-modify-write window. The gate means a quarantined, forged
+        (raw-active-at-trust-0), proposed, superseded, or cross-scope row never
+        transitions — and nothing can be resurrected through this verb.
+        """
+        status_value = Status(status).value  # garbage target -> loud ValueError
+        skey = scope.key()
+        transitioned: list[str] = []
+        for table in _KIND_TABLE.values():
+            cur = self._conn.execute(
+                f"UPDATE {table} SET status = ? "
+                f"WHERE scope_key=? AND id=? AND {_EFFECTIVE_STATUS_SQL} = ?",
+                (
+                    status_value,
+                    skey,
+                    record_id,
+                    *_EFFECTIVE_STATUS_SQL_PARAMS,
+                    Status.ACTIVE.value,
+                ),
+            )
+            if cur.rowcount:
+                transitioned.append(table)
+        self._conn.commit()
+        # Scan-cache coherence: unlike bump_proof_count's proof_count, `status`
+        # IS held by the scan cache (the vector gate reads it). An UPDATE moves
+        # no rowid, so the entry is patched in place — never dropped — keeping
+        # the remember()-then-recall() cache warm. (_mats holds ids/vectors/
+        # norms only, so no invalidation is needed there.)
+        for table in transitioned:
+            cached = self._scan_cache.get((table, skey))
+            if cached is not None:
+                entry = cached.rows.get(record_id)
+                if entry is not None:
+                    entry.status = status_value
+        return bool(transitioned)
 
     def vector_query(
         self,
