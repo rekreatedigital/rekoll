@@ -72,6 +72,10 @@ jobs:
       - name: Build a venv with every installable extra
         run: |
           python -m venv .audit-venv
+          # The venv's own pip is part of the audited closure; the runner's
+          # bundled pip lags upstream and trips pip-audit on its own advisories
+          # (PYSEC-2026-196 et al.) — upgrade it before anything is installed.
+          .audit-venv/bin/python -m pip install --upgrade pip
           .audit-venv/bin/python -m pip install -e ".[dev,mcp,embeddings,bench]"
       - name: pip-audit (the extras' full transitive closure)
         # Environment audit of the venv above (note the absence of `inputs:`),

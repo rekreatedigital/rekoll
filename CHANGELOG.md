@@ -67,6 +67,7 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   the deterministic, tamper-verified, injection-neutralized payload every door
   will render. Storage + SDK building block only so far: the `Memory` facade
   method and the CLI/MCP board surfaces land in follow-up lanes.
+- Benchmark harness with a recall-quality regression gate over a sealed split.
 
 ### Changed
 
