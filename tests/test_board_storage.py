@@ -208,6 +208,14 @@ def test_set_status_rolls_back_a_failed_sweep_and_leaves_no_open_transaction():
     target = _rec("an active board item", source="t://tgt")
     adapter.add(records=[target])
     table = _KIND_TABLE[Kind.RAW_FACT]  # the FIRST table the sweep visits
+    # Pin the premise the injection below rests on: raw_fact must sweep FIRST,
+    # so the detonation on `observations` lands AFTER a matching UPDATE. If
+    # _KIND_TABLE is ever reordered, fail loudly here instead of this test
+    # passing vacuously on rollback-free code (PR #57 review finding).
+    assert next(iter(_KIND_TABLE.values())) == table, (
+        "_KIND_TABLE order changed: re-derive this test's boom table so the "
+        "injected failure still fires AFTER the first matching UPDATE"
+    )
 
     def status_of(record_id):
         row = real.execute(

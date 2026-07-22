@@ -24,7 +24,8 @@ import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Union
+from types import MappingProxyType
+from typing import Iterable, Mapping, Optional, Sequence, Union
 
 from .adapters.base import (
     BOARD_METADATA_KEY,
@@ -385,14 +386,17 @@ class BoardResult:
     pending items, not capped by ``major_limit``; ``latest`` is a freshness
     HINT (see :meth:`Memory.board`).
 
-    The legs are tuples because the result is frozen — a board handed to
-    several concurrent sessions must not be mutable under them. ``to_dict()``
-    hands back plain lists/dicts for JSON.
+    The legs are tuples of READ-ONLY mappings — in-place mutation of an entry
+    (``result.majors[0]["text"] = ...``) raises ``TypeError``, and the entries
+    are copies detached from the builder's dicts — because a board handed to
+    several concurrent sessions must not be mutable under any of them (pinned
+    by test). ``to_dict()`` hands back plain, freshly-copied lists/dicts for
+    JSON.
     """
 
     rules: tuple[str, ...]
-    majors: tuple[dict, ...]
-    recent: tuple[dict, ...]
+    majors: tuple[Mapping[str, object], ...]
+    recent: tuple[Mapping[str, object], ...]
     pending_open: int
     latest: Optional[str]
 
@@ -1048,10 +1052,15 @@ class Memory:
                 "bundled SQLite adapter does — open this Memory on a sqlite store "
                 f"(original error: {exc})"
             ) from exc
+        # Copy-then-proxy: dict(entry) detaches from the builder's dicts,
+        # MappingProxyType makes in-place mutation raise — the frozen dataclass
+        # alone only blocks attribute REBINDING, not entry mutation (a review
+        # finding on PR #57: one session's edit would silently rewrite the
+        # board every other holder of this instance serializes).
         return BoardResult(
             rules=tuple(payload["rules"]),
-            majors=tuple(payload["majors"]),
-            recent=tuple(payload["recent"]),
+            majors=tuple(MappingProxyType(dict(e)) for e in payload["majors"]),
+            recent=tuple(MappingProxyType(dict(e)) for e in payload["recent"]),
             pending_open=payload["pending_open"],
             latest=payload["latest"],
         )
@@ -1073,12 +1082,25 @@ class Memory:
         (quarantined/forged/proposed) each just don't count. The return value
         is the honest report: ``resolve(a, b)`` returning 1 means exactly one
         moved. Resolving the same id twice returns 1 then 0.
+
+        An adapter without ``set_status`` raises ``UnsupportedCapabilityError``
+        naming the adapter — the same honest failure as :meth:`board` (there is
+        nothing to quietly succeed at).
         """
         resolved = 0
         for record_id in record_ids:
-            if self.adapter.set_status(
-                scope=self.scope, record_id=record_id, status=Status.SUPERSEDED.value
-            ):
+            try:
+                moved = self.adapter.set_status(
+                    scope=self.scope, record_id=record_id, status=Status.SUPERSEDED.value
+                )
+            except UnsupportedCapabilityError as exc:
+                raise UnsupportedCapabilityError(
+                    f"the storage adapter in use ({type(self.adapter).__name__}) does "
+                    "not serve the live project board, so there is nothing to "
+                    "resolve. The bundled SQLite adapter does — open this Memory on "
+                    f"a sqlite store (original error: {exc})"
+                ) from exc
+            if moved:
                 resolved += 1
         return resolved
 

@@ -1044,8 +1044,9 @@ class SQLiteAdapter(StorageAdapter):
         concurrent writer can never produce a torn snapshot (tiers that
         contradict each other). ``min_trust`` gates the Tier-1 leg only; the
         curated leg and ``pending_open`` always apply the Tier-2 board floor
-        policy (``firewall.BOARD_FLOOR`` — spelled via ``TrustTier`` here
-        because ``firewall`` imports this package; a test pins them equal).
+        policy: read ``adapters.base.BOARD_TRUST_FLOOR`` — the ONE storage-side
+        name, pinned equal to ``firewall.BOARD_FLOOR`` by test. Never restate
+        the number via ``TrustTier``.
         """
         recent_limit = _validate_board_limit("recent_limit", recent_limit)
         major_limit = _validate_board_limit("major_limit", major_limit)

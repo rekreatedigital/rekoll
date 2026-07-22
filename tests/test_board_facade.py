@@ -89,6 +89,46 @@ def test_board_result_is_frozen_and_its_dict_is_a_detached_copy(tmp_path):
     mem.close()
 
 
+def test_board_result_entries_refuse_in_place_mutation(tmp_path):
+    """The frozen dataclass only blocks attribute REBINDING; the entries
+    themselves must also be read-only, or one session's in-place edit
+    (``result.majors[0]["text"] = ...``) silently rewrites the board every
+    other holder of the same instance serializes — a confirmed PR #57 review
+    finding. Entries are copy-then-proxied at construction, so mutation raises
+    and the builder's own dicts are never aliased."""
+    mem = _seeded(tmp_path)
+    result = mem.board()
+    assert result.majors, "seed guarantees at least one major"
+    before = json.dumps(result.to_dict())
+    with pytest.raises(TypeError):
+        result.majors[0]["text"] = "POISONED"
+    with pytest.raises(TypeError):
+        result.recent[0]["trust"] = "owner"
+    assert json.dumps(result.to_dict()) == before, "a failed mutation leaked"
+    mem.close()
+
+
+def test_resolve_on_storage_without_the_capability_fails_honestly(tmp_path):
+    """``resolve()`` mirrors ``board()``'s honest failure: an adapter without
+    ``set_status`` raises ``UnsupportedCapabilityError`` naming the adapter —
+    never a silent count of 0 that reads as 'nothing needed resolving'."""
+
+    class NoResolve(SQLiteAdapter):
+        def set_status(self, **kwargs):
+            raise UnsupportedCapabilityError("no set_status here")
+
+    mem = _mem(tmp_path)
+    rid = mem.remember("a pending item", board=BOARD_TAG_PENDING).id
+    mem.adapter.close()
+    mem.adapter = NoResolve(str(tmp_path / "nr.db"))
+    with pytest.raises(UnsupportedCapabilityError) as excinfo:
+        mem.resolve(rid)
+    message = str(excinfo.value)
+    assert "NoResolve" in message, "the message must name the adapter in use"
+    assert "sqlite" in message.lower()  # and point at one that does serve it
+    mem.close()
+
+
 def test_board_legs_carry_the_expected_records(tmp_path):
     """A sanity pass over the delegated legs through the facade's own types."""
     mem = _seeded(tmp_path)
