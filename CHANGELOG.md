@@ -65,8 +65,17 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   (marks SUPERSEDED, never deletes) — four new optional `StorageAdapter`
   methods with three conformance checks, plus `rekoll.board.build_board_payload`,
   the deterministic, tamper-verified, injection-neutralized payload every door
-  will render. Storage + SDK building block only so far: the `Memory` facade
-  method and the CLI/MCP board surfaces land in follow-up lanes.
+  will render.
+- **Live-project-board SDK surface** (ADR-0035) — the `Memory` facade door onto
+  that board: `mem.board()` returns a frozen `BoardResult` whose `to_dict()` is
+  byte-identical to `build_board_payload`'s dict (so the SDK, CLI and MCP boards
+  cannot drift), `mem.resolve(*ids)` marks board items done — ACTIVE →
+  SUPERSEDED only, returning how many actually transitioned, never deleting —
+  and `mem.remember(..., board="major"|"pending")` tags a curated item without
+  changing its record id. The board is a free read: it builds no embedder and
+  credits nothing to the was-it-used ledger. `BoardResult` and `BoardSnapshot`
+  are exported from the package root. The CLI and MCP board surfaces land in a
+  follow-up lane.
 - Benchmark harness with a recall-quality regression gate over a sealed split.
 
 ### Changed
@@ -75,5 +84,15 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   extras (`.[dev,mcp,embeddings,bench]`) instead of the empty runtime-dep set of
   the bare project.
 - CI `test` matrix now includes `macos-latest` on the core (zero-extra) suite.
+
+### Fixed
+
+- `SQLiteAdapter.set_status` now rolls back a failed multi-table sweep. A
+  failure partway through could previously leave a matching `UPDATE` in an open
+  transaction that the next unrelated write silently committed — a resolve that
+  reported failure taking effect later, with the scan-cache patch never applied.
+- The board payload's tamper warning counted a record once per leg while naming
+  its id once, so a tampered curated major (which also rides the activity feed)
+  was reported as "2 board record(s)" followed by a single id.
 
 [Unreleased]: https://github.com/rekreatedigital/rekoll/commits/main
