@@ -36,6 +36,7 @@ from .base import (
     BOARD_METADATA_KEY,
     BOARD_TAG_MAJOR,
     BOARD_TAG_PENDING,
+    BOARD_TRUST_FLOOR,
     CAP_LEXICAL,
     CAP_VECTOR,
     BoardSnapshot,
@@ -1016,7 +1017,7 @@ class SQLiteAdapter(StorageAdapter):
         *,
         scope: Scope,
         limit: int = 10,
-        min_trust: int = int(TrustTier.TRUSTED_SOURCE),
+        min_trust: int = BOARD_TRUST_FLOOR,
     ) -> GetResult:
         """Tier 2 of the live project board (see :meth:`StorageAdapter.board_entries`).
 
@@ -1049,7 +1050,7 @@ class SQLiteAdapter(StorageAdapter):
         recent_limit = _validate_board_limit("recent_limit", recent_limit)
         major_limit = _validate_board_limit("major_limit", major_limit)
         skey = scope.key()
-        tier2_floor = int(TrustTier.TRUSTED_SOURCE)  # == int(firewall.BOARD_FLOOR)
+        tier2_floor = BOARD_TRUST_FLOOR  # the one shared name; == int(firewall.BOARD_FLOOR)
         with self._read_txn():
             major_rows = self._board_rows(skey, major_limit, tier2_floor) if major_limit else []
             recent_rows = self._recent_rows(skey, recent_limit, min_trust) if recent_limit else []
@@ -1068,25 +1069,35 @@ class SQLiteAdapter(StorageAdapter):
         read-modify-write window. The gate means a quarantined, forged
         (raw-active-at-trust-0), proposed, superseded, or cross-scope row never
         transitions — and nothing can be resurrected through this verb.
+
+        Rolls back on failure, exactly like :meth:`_write`: the UPDATE sweep
+        spans several kind tables, so a failure partway through would otherwise
+        leave a MATCHING update sitting in an open transaction that the next
+        unrelated write silently commits — a resolve that reported failure
+        taking effect later, with the scan-cache patch below never applied.
         """
         status_value = Status(status).value  # garbage target -> loud ValueError
         skey = scope.key()
         transitioned: list[str] = []
-        for table in _KIND_TABLE.values():
-            cur = self._conn.execute(
-                f"UPDATE {table} SET status = ? "
-                f"WHERE scope_key=? AND id=? AND {_EFFECTIVE_STATUS_SQL} = ?",
-                (
-                    status_value,
-                    skey,
-                    record_id,
-                    *_EFFECTIVE_STATUS_SQL_PARAMS,
-                    Status.ACTIVE.value,
-                ),
-            )
-            if cur.rowcount:
-                transitioned.append(table)
-        self._conn.commit()
+        try:
+            for table in _KIND_TABLE.values():
+                cur = self._conn.execute(
+                    f"UPDATE {table} SET status = ? "
+                    f"WHERE scope_key=? AND id=? AND {_EFFECTIVE_STATUS_SQL} = ?",
+                    (
+                        status_value,
+                        skey,
+                        record_id,
+                        *_EFFECTIVE_STATUS_SQL_PARAMS,
+                        Status.ACTIVE.value,
+                    ),
+                )
+                if cur.rowcount:
+                    transitioned.append(table)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise  # no transition applied: the cache still mirrors the rolled-back DB
         # Scan-cache coherence: unlike bump_proof_count's proof_count, `status`
         # IS held by the scan cache (the vector gate reads it). An UPDATE moves
         # no rowid, so the entry is patched in place — never dropped — keeping

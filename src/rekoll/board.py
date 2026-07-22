@@ -176,11 +176,16 @@ def build_board_payload(
                 latest = created  # ISO-8601 UTC: lexicographic == chronological
 
     if tampered:
+        # Dedup ONCE and count the deduped set: one record can be collected
+        # twice (a curated major also rides the Tier-1 feed), and a count taken
+        # off the raw list would claim more withheld records than the message
+        # goes on to name.
+        withheld = sorted(set(tampered))
         warnings.warn(
-            f"[rekoll] {len(tampered)} board record(s) failed content-hash "
+            f"[rekoll] {len(withheld)} board record(s) failed content-hash "
             "verification and were withheld from the board payload (possible "
             "direct-DB tampering; re-ingest or delete them): "
-            f"{', '.join(sorted(set(tampered)))}",
+            f"{', '.join(withheld)}",
             stacklevel=2,
         )
 

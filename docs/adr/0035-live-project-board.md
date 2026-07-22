@@ -222,11 +222,23 @@ identity mechanism to back it.
   CLI/MCP lanes will call).
 * The storage contract grows four OPTIONAL methods + one typed result
   (`BoardSnapshot`); a third-party adapter that skips them keeps working, and
-  one that implements them is held to the gates/ordering/bounds/atomicity by
-  three new conformance checks in `ALL_CHECKS`.
+  one that implements them is held by three new conformance checks in
+  `ALL_CHECKS` to the trust/status **gates**, the **ordering** and **bounds**
+  (including limit validation), scope isolation, and `set_status`'s **gating,
+  honest return value, and marks-never-evicts** behavior. Two properties are
+  deliberately NOT in conformance because a single-writer sequential check
+  cannot observe them: `set_status`'s **atomicity** and the **untorn**
+  `board_snapshot` are proven by reference-adapter (SQLite) tests using two
+  real connections. A third-party adapter must therefore establish those two
+  itself; conformance passing is not evidence of them.
 * Two additive indexes speed the board and `newest()`-style recency scans; no
   migration, idempotent bootstrap.
-* `firewall.py` gains exactly one constant (`BOARD_FLOOR`); the envelope, the
+* `firewall.py` gains exactly one constant (`BOARD_FLOOR`), mirrored once as
+  `adapters.base.BOARD_TRUST_FLOOR` (an int, because `firewall` imports
+  `adapters.base` and the reverse would cycle). Every storage-side Tier-2 floor
+  reads that mirror rather than restating the tier, and a test pins the two
+  equal — including a behavioral check, since a signature-only pin cannot see a
+  floor restated inside a method body. The envelope, the
   screen, and every existing read path are untouched (full suite byte-green).
 * The forged-row hazard is now CONTRACT everywhere it can surface: `newest()`
   keeps its ungated semantics for health, and everything board-shaped is gated

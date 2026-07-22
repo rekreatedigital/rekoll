@@ -227,6 +227,77 @@ def test_latest_does_not_move_on_resolve_but_bytes_do():
     adapter.close()
 
 
+def test_latest_steps_backward_when_the_newest_entry_is_resolved():
+    """The other half of ``latest``'s honesty (ADR-0035 documents it; nothing
+    pinned it): it is recomputed from the rows still surfacing, so resolving the
+    NEWEST entry moves it BACKWARD to the next-newest — and resolving them all
+    returns it to null.
+
+    This kills the "sticky latest" regression class: a well-meaning cache of
+    the high-water mark would keep the old value here and pass
+    ``test_latest_does_not_move_on_resolve_but_bytes_do`` (which resolves an
+    OLDER row), so only this test can see it. ``latest`` is a hint about the
+    CURRENT board, never a monotonic change token.
+    """
+    adapter, rule, major, pending, low = _seeded_adapter()
+    before = build_board_payload(adapter, SCOPE)
+    assert before["latest"] == low.created_at.isoformat()  # 2026-01-04, the newest
+
+    assert adapter.set_status(
+        scope=SCOPE, record_id=low.id, status=Status.SUPERSEDED.value
+    ) is True
+    after = build_board_payload(adapter, SCOPE)
+    assert after["latest"] == pending.created_at.isoformat(), (
+        "latest must recompute to the next-newest surfacing row, not stick"
+    )
+    assert after["latest"] < before["latest"], "it genuinely steps BACKWARD"
+
+    # Resolve every remaining surfacing row — including the directive, which
+    # rides the Tier-1 feed like any other effective-active record (its rules-leg
+    # appearance is a separate read that carries no timestamp). No entries left
+    # => latest is null.
+    for record in (pending, major, rule):
+        assert adapter.set_status(
+            scope=SCOPE, record_id=record.id, status=Status.SUPERSEDED.value
+        ) is True
+    empty = build_board_payload(adapter, SCOPE)
+    assert empty["majors"] == [] and empty["recent"] == []
+    assert empty["latest"] is None, "no surfacing rows => no freshness hint"
+    assert list(empty.keys()) == PAYLOAD_KEYS  # shape never varies
+    adapter.close()
+
+
+def test_tamper_warning_counts_a_two_leg_record_once():
+    """A curated major ALSO rides the Tier-1 feed, so a tampered one is
+    collected twice. The withheld-id list was deduped but the count was taken
+    off the raw list — the warning claimed 2 records and then named 1. Count
+    and ids must agree, or an operator chasing "2 tampered records" hunts a
+    record that does not exist.
+    """
+    adapter, rule, major, pending, low = _seeded_adapter()
+    # Confirm the premise: this record really does surface in BOTH legs.
+    clean = build_board_payload(adapter, SCOPE)
+    assert major.id in {e["id"] for e in clean["majors"]}
+    assert major.id in {e["id"] for e in clean["recent"]}
+
+    adapter._conn.execute(
+        f"UPDATE {_KIND_TABLE[Kind.RAW_FACT]} SET content='EVIL EDIT' WHERE id=?",
+        (major.id,),
+    )
+    adapter._conn.commit()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        payload = build_board_payload(adapter, SCOPE)
+    board_warnings = [w for w in caught if "board record(s)" in str(w.message)]
+    assert len(board_warnings) == 1
+    message = str(board_warnings[0].message)
+    assert "1 board record(s)" in message, f"count must match the named ids: {message}"
+    assert message.count(major.id) == 1, "the id must be named exactly once"
+    assert major.id not in {e["id"] for e in payload["majors"] + payload["recent"]}
+    adapter.close()
+
+
 def test_unsupported_storage_raises_honestly():
     """Without the storage capability there is no board to degrade to: the
     builder propagates UnsupportedCapabilityError instead of fabricating an
