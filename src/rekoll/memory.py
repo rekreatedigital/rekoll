@@ -26,8 +26,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Union
 
-from .adapters.base import CAP_LEXICAL, QueryHit, StorageAdapter, UnsupportedCapabilityError
+from .adapters.base import (
+    BOARD_METADATA_KEY,
+    BOARD_TAG_MAJOR,
+    BOARD_TAG_PENDING,
+    CAP_LEXICAL,
+    QueryHit,
+    StorageAdapter,
+    UnsupportedCapabilityError,
+)
 from .adapters.registry import get_adapter
+from .board import DEFAULT_BOARD_RULES_LIMIT, build_board_payload
 from .chunking import chunk_file
 from .consolidation import Consolidator
 from .embedding import Embedder, StubEmbedder, compare_identity
@@ -47,6 +56,7 @@ __all__ = [
     "Memory",
     "RecallResult",
     "HealthReport",
+    "BoardResult",
     "DEFAULT_INGEST_TRUST",
     "DEFAULT_MAX_CONTENT_CHARS",
     "DEFAULT_MAX_FILE_BYTES",
@@ -356,6 +366,52 @@ class HealthReport:
         }
 
 
+@dataclass(frozen=True)
+class BoardResult:
+    """What :meth:`Memory.board` returns: the live project board (ADR-0035).
+
+    A thin, typed view over :func:`rekoll.board.build_board_payload` — the ONE
+    builder every door renders, so the SDK, CLI and MCP boards cannot drift.
+    This class re-shapes that payload, it never recomputes a leg: ``to_dict()``
+    reproduces the builder's dict exactly, including key order, so
+    ``json.dumps`` of either is BYTE-IDENTICAL for the same store (pinned by
+    test). Hosts can therefore keep the builder's cheap change check — byte-
+    compare two payloads — while holding a typed object.
+
+    ``rules`` are the standing directives (the same records recall pins into
+    its instruction channel); ``majors``/``recent`` are entry dicts (the fixed
+    key set ``id/kind/trust/created_at/board/text``, oldest-first and
+    newest-first respectively); ``pending_open`` is the FULL count of open
+    pending items, not capped by ``major_limit``; ``latest`` is a freshness
+    HINT (see :meth:`Memory.board`).
+
+    The legs are tuples because the result is frozen — a board handed to
+    several concurrent sessions must not be mutable under them. ``to_dict()``
+    hands back plain lists/dicts for JSON.
+    """
+
+    rules: tuple[str, ...]
+    majors: tuple[dict, ...]
+    recent: tuple[dict, ...]
+    pending_open: int
+    latest: Optional[str]
+
+    def to_dict(self) -> dict:
+        """JSON-safe view — byte-identical to ``build_board_payload``'s dict.
+
+        Key order is the builder's constant key set, and each entry dict is
+        copied in its stored insertion order, so neither this method nor the
+        builder can serialize differently for the same rows.
+        """
+        return {
+            "rules": list(self.rules),
+            "majors": [dict(entry) for entry in self.majors],
+            "recent": [dict(entry) for entry in self.recent],
+            "pending_open": self.pending_open,
+            "latest": self.latest,
+        }
+
+
 class Memory:
     def __init__(
         self,
@@ -568,17 +624,46 @@ class Memory:
         source: str = "user",
         trust: Optional[TrustTier] = None,
         metadata: Optional[dict] = None,
+        board: Optional[str] = None,
     ) -> MemoryRecord:
         """Store one memory (screened by default). Returns the stored record.
 
         ``metadata`` values must be flat scalars (str/int/float/bool/None);
         nested or list values are rejected (ADR-0001, no unbounded JSON).
 
+        ``board="major"`` / ``board="pending"`` is sugar for the curated
+        live-project-board tag (ADR-0035): it merges ``{"board": <value>}`` into
+        ``metadata``, nothing more. Any other value raises ``ValueError`` naming
+        the two legal ones, rather than storing a tag the board would silently
+        read as untagged. Passing the keyword AND a DIFFERENT board tag in
+        ``metadata`` also raises — the caller stated two intents, and guessing
+        which one wins is how boards go quietly wrong. (An agreeing tag is
+        redundant, not a conflict, and is accepted.)
+
+        Tagging is METADATA, which is outside the content address, so it changes
+        no record id (pinned by test). Being curated ALSO needs trust at or
+        above ``firewall.BOARD_FLOOR`` — the tag alone never promotes a
+        low-trust row onto the board.
+
         ``kind=Kind.DIRECTIVE`` requires an explicit ``trust=``: directives at
         or above ``TrustTier.TRUSTED_SOURCE`` render in the recall envelope's
         *instruction* channel, so minting one must be a conscious act of
         vouching, never an inherited default (ADR-0017).
         """
+        if board is not None:
+            if board not in (BOARD_TAG_MAJOR, BOARD_TAG_PENDING):
+                raise ValueError(
+                    f"board must be {BOARD_TAG_MAJOR!r} or {BOARD_TAG_PENDING!r} "
+                    f"(the curated live-project-board legs), got {board!r}"
+                )
+            existing = (metadata or {}).get(BOARD_METADATA_KEY)
+            if existing is not None and existing != board:
+                raise ValueError(
+                    f"conflicting board tag: board={board!r} but "
+                    f"metadata[{BOARD_METADATA_KEY!r}]={existing!r}. Pass one or the "
+                    "other — rekoll will not guess which you meant."
+                )
+            metadata = {**(metadata or {}), BOARD_METADATA_KEY: board}
         if kind is Kind.DIRECTIVE and trust is None:
             raise ValueError(
                 "kind=DIRECTIVE writes to the instruction channel of the recall "
@@ -902,6 +987,100 @@ class Memory:
     def forget(self, *ids: str) -> int:
         """Delete memories by id; returns how many were removed."""
         return self.adapter.delete(scope=self.scope, ids=list(ids))
+
+    # -- the live project board (ADR-0035) -----------------------------------
+    # SEAM: the CLI/MCP board doors render BoardResult.to_dict(); it is
+    # byte-identical to build_board_payload's dict, which is what pins the
+    # three doors to one payload. Keep both signatures stable.
+    def board(
+        self,
+        *,
+        recent_limit: int = 10,
+        major_limit: int = 10,
+        rules_limit: int = DEFAULT_BOARD_RULES_LIMIT,
+        min_trust: Optional[int] = None,
+    ) -> BoardResult:
+        """The shared current-state board for this scope — what every concurrent
+        session on this store should see (ADR-0035).
+
+        A plain, bounded, ZERO-LLM, ZERO-EMBEDDING read: it builds no query
+        vector, so it never constructs or touches the embedder (pinned by
+        test). It also credits NOTHING to the was-it-used ledger — only
+        :meth:`recall` records there, and this verb does not route through it —
+        so polling the board can never inflate :meth:`informed_by` and fake
+        evidence that a memory informed an action (pinned by test).
+
+        Delegates every leg to :func:`rekoll.board.build_board_payload`, so the
+        SDK board is the same payload the CLI and MCP doors serve. Parameter
+        names mirror that builder deliberately (cross-layer consistency): 0
+        disables a leg, and a negative or over-ceiling limit raises
+        ``ValueError`` rather than silently clamping.
+
+        ``min_trust`` gates the Tier-1 activity feed ONLY, and ``None`` means
+        "the builder's default" (UNVERIFIED — low-trust rows appear, labelled
+        with their tier, and their ``text`` is withheld below the board floor).
+        The Tier-2 floor is NOT a caller preference: curated majors/pending and
+        the open-pending count always apply ``firewall.BOARD_FLOOR``, because a
+        ``board`` metadata tag is data any writer can attach.
+
+        ``latest`` is a freshness hint, not a change token: it can step
+        BACKWARD when the newest entry is resolved. Byte-compare
+        ``to_dict()`` payloads to detect change.
+
+        Raises ``UnsupportedCapabilityError`` — naming the adapter — on storage
+        that cannot serve a board. There is no board to degrade to, so this
+        fails honestly instead of returning a plausible empty one.
+        """
+        kwargs = {} if min_trust is None else {"min_trust": int(min_trust)}
+        try:
+            payload = build_board_payload(
+                self.adapter,
+                self.scope,
+                recent_limit=recent_limit,
+                major_limit=major_limit,
+                rules_limit=rules_limit,
+                **kwargs,
+            )
+        except UnsupportedCapabilityError as exc:
+            raise UnsupportedCapabilityError(
+                f"the storage adapter in use ({type(self.adapter).__name__}) does not "
+                "serve the live project board, so there is no board to show. The "
+                "bundled SQLite adapter does — open this Memory on a sqlite store "
+                f"(original error: {exc})"
+            ) from exc
+        return BoardResult(
+            rules=tuple(payload["rules"]),
+            majors=tuple(payload["majors"]),
+            recent=tuple(payload["recent"]),
+            pending_open=payload["pending_open"],
+            latest=payload["latest"],
+        )
+
+    def resolve(self, *record_ids: str) -> int:
+        """Mark board items DONE; returns how many actually transitioned.
+
+        The product policy over the adapter's general ``set_status`` (ADR-0035
+        §5): this verb performs ACTIVE -> SUPERSEDED and nothing else, so it
+        takes no status argument — a facade caller cannot use it to resurrect a
+        row, mint a PROPOSED one, or reach any other transition.
+
+        Resolve MARKS, it never deletes (contrast :meth:`forget`): every byte
+        stays in the store and stays ``get``-able for audit; the item simply
+        leaves the board's legs, its open-pending count, and recall.
+
+        Non-transitions are silent PER ID — an unknown id, an already-resolved
+        item, a row in another scope, or one the effective-status gate refuses
+        (quarantined/forged/proposed) each just don't count. The return value
+        is the honest report: ``resolve(a, b)`` returning 1 means exactly one
+        moved. Resolving the same id twice returns 1 then 0.
+        """
+        resolved = 0
+        for record_id in record_ids:
+            if self.adapter.set_status(
+                scope=self.scope, record_id=record_id, status=Status.SUPERSEDED.value
+            ):
+                resolved += 1
+        return resolved
 
     # -- write-side learning (explicit opt-in; never on the read path) -------
     def consolidate(

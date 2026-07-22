@@ -34,6 +34,7 @@ __all__ = [
     "BOARD_METADATA_KEY",
     "BOARD_TAG_MAJOR",
     "BOARD_TAG_PENDING",
+    "BOARD_TRUST_FLOOR",
 ]
 
 CAP_VECTOR = "vector"
@@ -78,6 +79,17 @@ BOARD_LIMIT_CEILING = 50
 BOARD_METADATA_KEY = "board"
 BOARD_TAG_MAJOR = "major"
 BOARD_TAG_PENDING = "pending"
+
+#: The Tier-2 (curated leg + open-pending count) trust floor, as an int. This
+#: IS ``firewall.BOARD_FLOOR``, spelled here via ``TrustTier`` because
+#: ``firewall`` imports this module (importing it back would cycle). Every
+#: STORAGE-SIDE Tier-2 floor reads this name — the contract defaults below and
+#: the reference adapter's ``board_snapshot`` internals alike — so a sideways
+#: edit at one call site is no longer possible. That leaves exactly ONE
+#: restatement in the codebase (this constant vs ``firewall.BOARD_FLOOR``), and
+#: ``test_every_tier2_floor_reads_the_one_shared_constant`` pins it, including a
+#: behavioral check that the adapter internals really do read this name.
+BOARD_TRUST_FLOOR: int = int(TrustTier.TRUSTED_SOURCE)
 
 
 class UnsupportedCapabilityError(Exception):
@@ -276,7 +288,7 @@ class StorageAdapter(ABC):
         *,
         scope: Scope,
         limit: int = 10,
-        min_trust: int = int(TrustTier.TRUSTED_SOURCE),
+        min_trust: int = BOARD_TRUST_FLOOR,
     ) -> GetResult:
         """Tier 2 of the live project board: the CURATED records in ``scope`` —
         metadata ``board`` in {``major``, ``pending``} (``BOARD_METADATA_KEY`` /
@@ -288,11 +300,12 @@ class StorageAdapter(ABC):
         FOUNDATIONAL items survive, and appending a new major never disturbs the
         rendered prefix, so a host's prompt cache stays warm as the board grows.
 
-        The default floor is the board floor policy (``firewall.BOARD_FLOOR ==
-        TRUSTED_SOURCE``; spelled as ``int(TrustTier.TRUSTED_SOURCE)`` here only
-        because ``firewall`` imports this module — a test pins them equal): a
-        tag is data any writer can attach, so curated status = tag AND trust
-        floor, never the tag alone. Scope isolation is on the RECORD row —
+        The default floor is the board floor policy (``BOARD_TRUST_FLOOR``, the
+        one name every Tier-2 floor in the codebase reads; it equals
+        ``firewall.BOARD_FLOOR``, restated there only because ``firewall``
+        imports this module — a test pins the two equal): a tag is data any
+        writer can attach, so curated status = tag AND trust floor, never the
+        tag alone. Scope isolation is on the RECORD row —
         ``record_metadata`` carries no scope column, so implementations must
         gate scope/status/trust on the kind-table side (a metadata-first read
         would leak tags across scopes).

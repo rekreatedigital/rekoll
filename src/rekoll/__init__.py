@@ -17,6 +17,7 @@ from .adapters.base import (
     CAP_LEXICAL,
     CAP_RELATIONAL,
     CAP_VECTOR,
+    BoardSnapshot,
     GetResult,
     QueryHit,
     QueryResult,
@@ -47,8 +48,9 @@ from .firewall import (
     screen,
     screened_record,
 )
+from .board import build_board_payload
 from .ledger import RecallLedger
-from .memory import HealthReport, Memory, RecallResult
+from .memory import BoardResult, HealthReport, Memory, RecallResult
 from .reranking import CrossEncoderReranker, Reranker
 from .retrieval import FusedResult, hybrid_search, rrf_fuse
 from .ids import content_hash, human_id, normalize_content, record_id
@@ -88,6 +90,7 @@ __all__ = [
     "QueryHit",
     "QueryResult",
     "GetResult",
+    "BoardSnapshot",
     "UnsupportedCapabilityError",
     "CAP_VECTOR",
     "CAP_LEXICAL",
@@ -125,4 +128,7 @@ __all__ = [
     # memory-quality loop (was-it-used, freshness, honest degradation)
     "RecallLedger",
     "HealthReport",
+    # live project board — shared current state for concurrent sessions (P3)
+    "BoardResult",
+    "build_board_payload",
 ]

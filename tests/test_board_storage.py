@@ -12,8 +12,13 @@ implementation and to THIS repo's history:
    the two new indexes on reopen, no migration machinery);
  * the policy pins that keep restated numbers from drifting: the adapter
    contract's trust-floor defaults == ``firewall.BOARD_FLOOR`` (base.py cannot
-   import firewall — firewall imports base), and the board's rules cap ==
-   ``DEFAULT_MAX_PINNED_DIRECTIVES`` (board.py must not import memory);
+   import firewall — firewall imports base), that every storage-side Tier-2
+   floor READS ``BOARD_TRUST_FLOOR`` rather than restating it (proven
+   behaviorally, since a signature pin cannot see an internal restatement),
+   and the board's rules cap == ``DEFAULT_MAX_PINNED_DIRECTIVES`` (board.py
+   must not import memory);
+ * ``set_status`` rolling back a failed multi-table sweep, so a resolve that
+   reported failure can never be committed later by an unrelated write;
  * scan-cache coherence after ``set_status`` (status IS cached for the vector
    gate, unlike ``proof_count``);
  * the INTENDED reopen semantics: a same-id re-upsert rewrites ``status``
@@ -26,10 +31,13 @@ from __future__ import annotations
 import inspect
 from datetime import datetime, timezone
 
+import pytest
+
 from rekoll.adapters.base import (
     BOARD_METADATA_KEY,
     BOARD_TAG_MAJOR,
     BOARD_TAG_PENDING,
+    BOARD_TRUST_FLOOR,
     StorageAdapter,
 )
 from rekoll.adapters.sqlite import _KIND_TABLE, SQLiteAdapter
@@ -142,6 +150,108 @@ def test_adapter_trust_floor_defaults_equal_board_floor():
     # The board floor IS the directive floor (deliberately — see firewall.py);
     # if that policy ever diverges, the ADR-0035 reasoning must be revisited.
     assert int(BOARD_FLOOR) == int(DIRECTIVE_FLOOR)
+
+
+def test_every_tier2_floor_reads_the_one_shared_constant():
+    """The Tier-2 floor was restated in THREE places (the contract defaults,
+    the reference adapter's ``board_snapshot`` internals, and
+    ``firewall.BOARD_FLOOR``). A signature-only pin cannot see the INTERNAL
+    one, so a sideways edit there would drift silently in both directions.
+
+    Now every storage-side floor reads ``BOARD_TRUST_FLOOR``. This proves it
+    BEHAVIORALLY for the internal restatement: move the shared constant and the
+    curated leg must move with it. A hard-coded internal floor fails here.
+    """
+    assert BOARD_TRUST_FLOOR == int(BOARD_FLOOR)  # the one remaining restatement
+
+    adapter = SQLiteAdapter(":memory:")
+    low_major = _rec(
+        "a below-floor tagged major", trust=TrustTier.UNVERIFIED, source="t://lm",
+        metadata={BOARD_METADATA_KEY: BOARD_TAG_MAJOR},
+    )
+    adapter.add(records=[low_major])
+    # At the real floor the tag alone never curates it (the landed policy)...
+    assert adapter.board_snapshot(scope=SCOPE, recent_limit=10, major_limit=10).majors == ()
+
+    # ...and with the SHARED constant lowered, the same call must curate it —
+    # which can only happen if board_snapshot reads that constant, not a literal.
+    import rekoll.adapters.sqlite as sqlite_module
+
+    original = sqlite_module.BOARD_TRUST_FLOOR
+    try:
+        sqlite_module.BOARD_TRUST_FLOOR = int(TrustTier.UNVERIFIED)
+        snap = adapter.board_snapshot(scope=SCOPE, recent_limit=10, major_limit=10)
+        assert [r.id for r in snap.majors] == [low_major.id], (
+            "board_snapshot's Tier-2 floor is restated internally instead of "
+            "reading BOARD_TRUST_FLOOR — a sideways drift this pin must catch"
+        )
+        assert snap.pending_open == 0  # still no pending item; only the floor moved
+    finally:
+        sqlite_module.BOARD_TRUST_FLOOR = original
+    adapter.close()
+
+
+def test_set_status_rolls_back_a_failed_sweep_and_leaves_no_open_transaction():
+    """``set_status`` sweeps several kind tables then commits. Without a
+    rollback, a failure AFTER a matching UPDATE leaves that update sitting in an
+    open transaction: the call reports failure (it raised), but the NEXT
+    unrelated write's commit silently lands the resolve anyway — and the
+    scan-cache patch that write depends on never ran.
+
+    Injects a failure on the SECOND table after the FIRST one matched, then
+    proves the row is unchanged, STAYS unchanged across a later committed
+    write, and that no transaction was left open.
+    """
+    import sqlite3
+
+    adapter = SQLiteAdapter(":memory:")
+    target = _rec("an active board item", source="t://tgt")
+    adapter.add(records=[target])
+    table = _KIND_TABLE[Kind.RAW_FACT]  # the FIRST table the sweep visits
+
+    def status_of(record_id):
+        row = real.execute(
+            f"SELECT status FROM {table} WHERE id=?", (record_id,)
+        ).fetchone()
+        return row[0]
+
+    class _BoomAfterFirstMatch:
+        """Delegates to the real connection but detonates on ``observations`` —
+        the table the sweep reaches AFTER updating ``verbatim_records``."""
+
+        def __init__(self, conn):
+            self._conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def execute(self, sql, *args):
+            if sql.lstrip().startswith("UPDATE ") and " observations " in sql:
+                raise sqlite3.OperationalError("injected mid-sweep failure")
+            return self._conn.execute(sql, *args)
+
+    real = adapter._conn
+    assert status_of(target.id) == Status.ACTIVE.value
+
+    adapter._conn = _BoomAfterFirstMatch(real)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            adapter.set_status(
+                scope=SCOPE, record_id=target.id, status=Status.SUPERSEDED.value
+            )
+    finally:
+        adapter._conn = real
+
+    assert not real.in_transaction, "a failed set_status left a transaction dangling"
+    assert status_of(target.id) == Status.ACTIVE.value, "the failed resolve took effect"
+
+    # The real hazard: a LATER unrelated write must not commit the abandoned
+    # UPDATE on its way past.
+    adapter.add(records=[_rec("an unrelated later write", source="t://other")])
+    assert status_of(target.id) == Status.ACTIVE.value, (
+        "a failed resolve was silently committed by the next unrelated write"
+    )
+    adapter.close()
 
 
 def test_board_rules_cap_equals_pinned_directives_cap():

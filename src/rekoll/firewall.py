@@ -61,8 +61,10 @@ DIRECTIVE_FLOOR: TrustTier = TrustTier.TRUSTED_SOURCE
 #: that every session replays. Import this constant everywhere the floor is
 #: needed — never restate the number. (``adapters/base.py`` cannot import it —
 #: this module imports ``adapters.base``, so that would be a cycle; the adapter
-#: contract therefore spells its default as ``int(TrustTier.TRUSTED_SOURCE)``
-#: and a test pins the two equal.)
+#: contract therefore keeps ONE int mirror, ``adapters.base.BOARD_TRUST_FLOOR``,
+#: which every storage-side Tier-2 floor reads — contract defaults and the
+#: reference adapter's internals alike. That mirror is the only restatement in
+#: the codebase, and a test pins it equal to this constant.)
 BOARD_FLOOR: TrustTier = TrustTier.TRUSTED_SOURCE
 
 
