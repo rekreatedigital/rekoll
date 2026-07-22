@@ -15,14 +15,21 @@ properties, each of which has a plausible wrong implementation:
  * RACING RESOLVES — two threads, two connections, one id: EXACTLY ONE
    ``set_status`` reports the transition, both return safely (the
    ``bump_proof_count`` in-SQL-gate pattern; no read-modify-write window).
+ * CROSS-CONNECTION BYTE-DETERMINISM — the payload is a pure function of
+   STORED rows, so two different sessions (connections) over one store must
+   ``json.dumps`` byte-identically; that equality is what makes "byte-compare
+   payloads to detect change" (ADR-0035 §9) work ACROSS sessions, not just
+   within one.
 """
 
 from __future__ import annotations
 
+import json
 import threading
 
-from rekoll.adapters.base import BOARD_METADATA_KEY, BOARD_TAG_PENDING
+from rekoll.adapters.base import BOARD_METADATA_KEY, BOARD_TAG_MAJOR, BOARD_TAG_PENDING
 from rekoll.adapters.sqlite import SQLiteAdapter
+from rekoll.board import build_board_payload
 from rekoll.embedding import StubEmbedder
 from rekoll.model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 
@@ -158,3 +165,36 @@ def test_racing_set_status_transitions_exactly_once(tmp_path):
     assert stored.status is Status.SUPERSEDED
     assert check.board_snapshot(scope=SCOPE).pending_open == 0
     check.close()
+
+
+def test_payload_is_byte_identical_across_connections(tmp_path):
+    """Two SESSIONS (separate connections) over one store must render the SAME
+    bytes: the payload is a pure function of stored rows, never of connection
+    state (caches, cursors, open transactions). This is what lets any session
+    byte-compare payloads to detect change regardless of WHICH session produced
+    the baseline (ADR-0035 §9's authoritative change check)."""
+    path = str(tmp_path / "shared.db")
+    writer = SQLiteAdapter(path)
+    rule = MemoryRecord.create(
+        scope=SCOPE, kind=Kind.DIRECTIVE, content="always explain simply",
+        provenance=Provenance(source_uri="t://rule", adapter_name="test"),
+        trust_tier=TrustTier.OWNER,
+    )
+    writer.add(records=[
+        rule,
+        _rec("major milestone", source="t://major", tag=BOARD_TAG_MAJOR),
+        _rec("open question", source="t://pending", tag=BOARD_TAG_PENDING),
+        _rec("untrusted note", source="t://low", trust=TrustTier.UNVERIFIED),
+    ])
+    first = SQLiteAdapter(path)
+    second = SQLiteAdapter(path)
+    # Skew the two connections' incidental state: warm ONLY first's scan cache.
+    first.vector_query(scope=SCOPE, embedding=_EMB.embed(["major milestone"])[0], k=2)
+    payload_one = json.dumps(build_board_payload(first, SCOPE))
+    payload_two = json.dumps(build_board_payload(second, SCOPE))
+    assert payload_one == payload_two, (
+        "two connections rendered different board bytes for identical stored "
+        "rows — cross-session byte-comparison would false-positive"
+    )
+    for adapter in (writer, first, second):
+        adapter.close()
