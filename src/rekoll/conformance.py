@@ -19,7 +19,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from .adapters.base import CAP_LEXICAL, CAP_VECTOR, StorageAdapter, UnsupportedCapabilityError
+from .adapters.base import (
+    BOARD_LIMIT_CEILING,
+    BOARD_METADATA_KEY,
+    BOARD_TAG_MAJOR,
+    BOARD_TAG_PENDING,
+    CAP_LEXICAL,
+    CAP_VECTOR,
+    StorageAdapter,
+    UnsupportedCapabilityError,
+)
 from .embedding import Embedder, StubEmbedder
 from .model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
 
@@ -514,6 +523,250 @@ def assert_active_directives_if_supported(make: AdapterFactory, embedder: Embedd
     adapter.close()
 
 
+def assert_board_gates_forged_and_quarantined_if_supported(
+    make: AdapterFactory, embedder: Embedder
+) -> None:
+    """The live-project-board reads (ADR-0035), IF the adapter serves them, must
+    gate on the EFFECTIVE status — the same one-status-rule every other read leg
+    obeys (see ``assert_effective_status_gate_on_forged_row``).
+
+    The board is the HIGHEST-fanout read in the product: every concurrent
+    session replays it, so a forged row (raw ``status='active'`` at QUARANTINED
+    trust) or a genuinely quarantined row surfacing here is amplified to every
+    session at once. Both are planted through the public record API only, and
+    NEITHER may appear in ``recent_records``, ``board_entries``, or the
+    ``pending_open`` count — even at a ``min_trust`` floor of 0, which isolates
+    the status gate from the trust floor that would otherwise mask it."""
+    adapter = make()
+    try:
+        adapter.board_snapshot(scope=_SCOPE_A, recent_limit=1, major_limit=1)
+        adapter.recent_records(scope=_SCOPE_A, limit=1)
+        adapter.board_entries(scope=_SCOPE_A, limit=1)
+    except UnsupportedCapabilityError:
+        adapter.close()
+        return
+
+    clean = _rec(
+        _SCOPE_A, "a genuinely active tagged major", trust=TrustTier.OWNER,
+        embedder=embedder, source="t://clean",
+        metadata={BOARD_METADATA_KEY: BOARD_TAG_MAJOR},
+    )
+    forged = _rec(
+        _SCOPE_A, "forged active at quarantine trust", trust=TrustTier.QUARANTINED,
+        embedder=embedder, source="t://forge",
+        metadata={BOARD_METADATA_KEY: BOARD_TAG_PENDING},
+    )
+    assert forged.status is Status.QUARANTINED, "the model must force quarantine at trust 0"
+    forged.status = Status.ACTIVE  # forge the divergent stored state on purpose
+    quarantined = _rec(
+        _SCOPE_A, "openly quarantined pending item", trust=TrustTier.OWNER,
+        embedder=embedder, source="t://quar", status=Status.QUARANTINED,
+        metadata={BOARD_METADATA_KEY: BOARD_TAG_PENDING},
+    )
+    adapter.add(records=[clean, forged, quarantined])
+
+    floor0 = int(TrustTier.QUARANTINED)
+    recent = {r.id for r in adapter.recent_records(scope=_SCOPE_A, limit=10, min_trust=floor0)}
+    assert clean.id in recent, "a genuinely active row is missing from the activity feed"
+    assert forged.id not in recent, "a forged (raw-active, trust-0) row surfaced in recent_records"
+    assert quarantined.id not in recent, "a quarantined row surfaced in recent_records"
+    assert forged.id not in {r.id for r in adapter.recent_records(scope=_SCOPE_A, limit=10)}, \
+        "a forged row surfaced in recent_records at the default floor"
+
+    entries = {r.id for r in adapter.board_entries(scope=_SCOPE_A, limit=10, min_trust=floor0)}
+    assert clean.id in entries, "a trusted tagged major is missing from the curated leg"
+    assert forged.id not in entries, "a forged row surfaced as a curated board entry"
+    assert quarantined.id not in entries, "a quarantined row surfaced as a curated board entry"
+
+    snap = adapter.board_snapshot(
+        scope=_SCOPE_A, recent_limit=10, major_limit=10, min_trust=floor0
+    )
+    assert forged.id not in {r.id for r in snap.recent}
+    assert forged.id not in {r.id for r in snap.majors}
+    assert quarantined.id not in {r.id for r in snap.recent}
+    assert quarantined.id not in {r.id for r in snap.majors}
+    # The quarantined row is tagged 'pending' at OWNER trust — only the STATUS
+    # gate can exclude it from the count; the forged one checks the same for
+    # the effective-status rule. Neither may be counted as open.
+    assert snap.pending_open == 0, "pending_open counted a forged or quarantined pending row"
+    adapter.close()
+
+
+def assert_board_ordering_bounds_and_scope_if_supported(
+    make: AdapterFactory, embedder: Embedder
+) -> None:
+    """Board read determinism + bounds (ADR-0035), IF the adapter serves them:
+
+      * curated leg (``board_entries`` / ``snapshot.majors``): major+pending
+        tagged rows at/above the TRUSTED_SOURCE default floor, OLDEST first
+        (``created_at`` ASC, ``id`` ASC tiebreak — ADR-0034 §4 prefix
+        stability), capped, ``0`` disables;
+      * activity feed (``recent_records`` / ``snapshot.recent``): newest first
+        (``created_at`` DESC, ``id`` DESC), trust floor honored, capped;
+      * a tag alone must NOT curate a below-floor row;
+      * scope isolation — the metadata table carries no scope column, so a
+        metadata-first implementation leaks another scope's tagged rows: pinned
+        here at the contract;
+      * the snapshot's legs agree with the standalone reads, and its
+        ``pending_open`` counts ONLY this scope's open pending rows;
+      * limits are validated loudly: negative or over ``BOARD_LIMIT_CEILING``
+        raises ``ValueError``, never a silent clamp."""
+    adapter = make()
+    try:
+        adapter.board_snapshot(scope=_SCOPE_A, recent_limit=1, major_limit=1)
+    except UnsupportedCapabilityError:
+        adapter.close()
+        return
+
+    def _brec(scope, text, *, sec, source, tag=None, trust=TrustTier.OWNER):
+        return _rec(
+            scope, text, trust=trust, embedder=embedder, source=source,
+            metadata={BOARD_METADATA_KEY: tag} if tag else {},
+            created_at=datetime(2026, 1, 1, 0, 0, sec, tzinfo=timezone.utc),
+        )
+
+    m0 = _brec(_SCOPE_A, "major zero oldest", sec=0, source="t://m0", tag=BOARD_TAG_MAJOR)
+    m0b = _brec(_SCOPE_A, "major zero same instant", sec=0, source="t://m0b", tag=BOARD_TAG_MAJOR)
+    m1 = _brec(_SCOPE_A, "major one", sec=1, source="t://m1", tag=BOARD_TAG_MAJOR)
+    p2 = _brec(_SCOPE_A, "pending two", sec=2, source="t://p2", tag=BOARD_TAG_PENDING)
+    plain3 = _brec(_SCOPE_A, "plain activity three", sec=3, source="t://f3")
+    low4 = _brec(
+        _SCOPE_A, "low-trust tagged major", sec=4, source="t://l4",
+        tag=BOARD_TAG_MAJOR, trust=TrustTier.UNVERIFIED,
+    )
+    other = _brec(_SCOPE_B, "scope b tagged major", sec=0, source="t://ob", tag=BOARD_TAG_MAJOR)
+    otherp = _brec(_SCOPE_B, "scope b pending", sec=1, source="t://obp", tag=BOARD_TAG_PENDING)
+    adapter.add(records=[m0, m0b, m1, p2, plain3, low4, other, otherp])
+
+    ids0 = sorted([m0.id, m0b.id])  # same created_at: id ASC breaks the tie
+
+    entries = [r.id for r in adapter.board_entries(scope=_SCOPE_A, limit=10)]
+    assert entries == ids0 + [m1.id, p2.id], (
+        f"curated leg must be oldest-first (created_at ASC, id ASC) major+pending "
+        f"at/above the floor; got {entries}"
+    )
+    assert low4.id not in entries, "a below-floor tagged row was curated (tag alone must not curate)"
+    assert [r.id for r in adapter.board_entries(scope=_SCOPE_A, limit=2)] == ids0, \
+        "board_entries cap/oldest-first not honored"
+    assert adapter.board_entries(scope=_SCOPE_A, limit=0).records == (), \
+        "limit=0 must disable the curated leg"
+
+    recent = [r.id for r in adapter.recent_records(scope=_SCOPE_A, limit=10)]
+    assert recent == [low4.id, plain3.id, p2.id, m1.id] + list(reversed(ids0)), (
+        f"activity feed must be newest-first (created_at DESC, id DESC); got {recent}"
+    )
+    assert [r.id for r in adapter.recent_records(scope=_SCOPE_A, limit=2)] == [low4.id, plain3.id], \
+        "recent_records cap/newest-first not honored"
+    assert adapter.recent_records(scope=_SCOPE_A, limit=0).records == (), \
+        "limit=0 must disable the activity feed"
+    trusted_only = {
+        r.id for r in adapter.recent_records(
+            scope=_SCOPE_A, limit=10, min_trust=int(TrustTier.OWNER)
+        )
+    }
+    assert low4.id not in trusted_only, "recent_records min_trust floor not applied"
+
+    a_snap = adapter.board_snapshot(scope=_SCOPE_A, recent_limit=10, major_limit=10)
+    assert [r.id for r in a_snap.majors] == entries, "snapshot majors disagree with board_entries"
+    assert [r.id for r in a_snap.recent] == recent, "snapshot recent disagrees with recent_records"
+    assert other.id not in entries and otherp.id not in entries, \
+        "another scope's tagged rows leaked into the curated leg (metadata has no scope column)"
+    assert a_snap.pending_open == 1, "pending_open must count ONLY this scope's open pending rows"
+    b_snap = adapter.board_snapshot(scope=_SCOPE_B, recent_limit=10, major_limit=10)
+    assert {r.id for r in b_snap.majors} == {other.id, otherp.id}
+    assert b_snap.pending_open == 1
+
+    for bad in (-1, BOARD_LIMIT_CEILING + 1):
+        for call in (
+            lambda: adapter.recent_records(scope=_SCOPE_A, limit=bad),
+            lambda: adapter.board_entries(scope=_SCOPE_A, limit=bad),
+            lambda: adapter.board_snapshot(scope=_SCOPE_A, recent_limit=bad, major_limit=1),
+            lambda: adapter.board_snapshot(scope=_SCOPE_A, recent_limit=1, major_limit=bad),
+        ):
+            try:
+                call()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"a board limit of {bad} must raise ValueError, never silently clamp"
+                )
+    adapter.close()
+
+
+def assert_board_set_status_if_supported(make: AdapterFactory, embedder: Embedder) -> None:
+    """The board's resolve verb (ADR-0035 / the first slice of ADR-0025's
+    lifecycle), IF the adapter serves it: ``set_status`` transitions ONLY an
+    effective-active row (atomically, in the update statement itself), reports
+    honestly whether a row transitioned, and a transitioned row leaves both
+    board legs and the open-pending count — while the stored bytes SURVIVE
+    (resolve marks, never evicts)."""
+    adapter = make()
+    try:
+        adapter.set_status(scope=_SCOPE_A, record_id="missing", status=Status.SUPERSEDED.value)
+        adapter.board_snapshot(scope=_SCOPE_A, recent_limit=1, major_limit=1)
+    except UnsupportedCapabilityError:
+        adapter.close()
+        return
+
+    pending = _rec(
+        _SCOPE_A, "an open pending item", trust=TrustTier.OWNER, embedder=embedder,
+        source="t://p", metadata={BOARD_METADATA_KEY: BOARD_TAG_PENDING},
+    )
+    proposed = _rec(
+        _SCOPE_A, "merely proposed", trust=TrustTier.OWNER, embedder=embedder,
+        source="t://pr", status=Status.PROPOSED,
+    )
+    forged = _rec(
+        _SCOPE_A, "forged active at trust zero", trust=TrustTier.QUARANTINED,
+        embedder=embedder, source="t://fg",
+    )
+    forged.status = Status.ACTIVE  # forge the divergent stored state on purpose
+    adapter.add(records=[pending, proposed, forged])
+
+    before = adapter.board_snapshot(scope=_SCOPE_A, recent_limit=10, major_limit=10)
+    assert before.pending_open == 1
+    assert pending.id in {r.id for r in before.recent}
+
+    try:
+        adapter.set_status(scope=_SCOPE_A, record_id=pending.id, status="not-a-status")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("set_status must raise ValueError on a non-Status target")
+
+    assert adapter.set_status(
+        scope=_SCOPE_B, record_id=pending.id, status=Status.SUPERSEDED.value
+    ) is False, "a cross-scope set_status transitioned another scope's record"
+    assert adapter.set_status(
+        scope=_SCOPE_A, record_id=proposed.id, status=Status.SUPERSEDED.value
+    ) is False, "a PROPOSED (non-active) row transitioned"
+    assert adapter.set_status(
+        scope=_SCOPE_A, record_id=forged.id, status=Status.SUPERSEDED.value
+    ) is False, "a forged (effectively quarantined) row transitioned"
+
+    assert adapter.set_status(
+        scope=_SCOPE_A, record_id=pending.id, status=Status.SUPERSEDED.value
+    ) is True, "an effective-active row must transition"
+    assert adapter.set_status(
+        scope=_SCOPE_A, record_id=pending.id, status=Status.SUPERSEDED.value
+    ) is False, "a second call on the same id must report no-transition"
+    assert adapter.set_status(
+        scope=_SCOPE_A, record_id=pending.id, status=Status.ACTIVE.value
+    ) is False, "a resolved row must not be resurrectable through set_status"
+
+    after = adapter.board_snapshot(scope=_SCOPE_A, recent_limit=10, major_limit=10)
+    assert pending.id not in {r.id for r in after.recent}, \
+        "a superseded row stayed on the activity feed"
+    assert pending.id not in {r.id for r in after.majors}, \
+        "a superseded row stayed on the curated leg"
+    assert after.pending_open == 0, "pending_open still counts a resolved item"
+    kept = adapter.get(scope=_SCOPE_A, ids=[pending.id]).records
+    assert len(kept) == 1 and kept[0].status is Status.SUPERSEDED, \
+        "resolve must MARK the row (ADR-0025: no bytes leave the store)"
+    adapter.close()
+
+
 ALL_CHECKS = (
     assert_capabilities_honest,
     assert_kwargs_only,
@@ -535,6 +788,9 @@ ALL_CHECKS = (
     assert_delete_scope_isolation,
     assert_lexical_if_supported,
     assert_active_directives_if_supported,
+    assert_board_gates_forged_and_quarantined_if_supported,
+    assert_board_ordering_bounds_and_scope_if_supported,
+    assert_board_set_status_if_supported,
 )
 
 

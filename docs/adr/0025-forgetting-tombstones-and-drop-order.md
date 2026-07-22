@@ -2,6 +2,8 @@
 
 **Status:** Proposed (design note — no implementation in this ADR) · **Date:** 2026-07-02
 
+> **Annotation (2026-07-23):** the live project board's resolve verb ([ADR-0035](0035-live-project-board.md) §7, `set_status` → SUPERSEDED) is the first implemented slice of this lifecycle — it MARKS a record via the supersession path §1 already names and evicts no bytes, so the "any interim eviction feature" clause below is not triggered.
+
 ## Context
 Rekoll will eventually need compaction: long-running agents accumulate memory
 past any context/storage budget, and P3 (DESIGN §10) promises

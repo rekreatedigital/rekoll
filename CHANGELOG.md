@@ -56,7 +56,17 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   `recall --json`, and MCP `recall` — identical across all three doors — and as a
   new optional `StorageAdapter.active_directives` adapter method with its own
   conformance check (ADR-0034).
-- Benchmark harness with a recall-quality regression gate over a sealed split.
+- **Live-project-board storage layer** (ADR-0035) — the shared current-state
+  read for multiple concurrent AI sessions on one store: a trust-labeled
+  activity feed (`recent_records`, effective-status gated — unlike `newest()`,
+  which deliberately isn't), a curated majors/pending leg (`board_entries`,
+  membership = a `board` metadata tag + the `TRUSTED_SOURCE` floor), an untorn
+  one-transaction `board_snapshot`, and an atomic `set_status` resolve verb
+  (marks SUPERSEDED, never deletes) — four new optional `StorageAdapter`
+  methods with three conformance checks, plus `rekoll.board.build_board_payload`,
+  the deterministic, tamper-verified, injection-neutralized payload every door
+  will render. Storage + SDK building block only so far: the `Memory` facade
+  method and the CLI/MCP board surfaces land in follow-up lanes.
 
 ### Changed
 

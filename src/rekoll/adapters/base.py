@@ -17,18 +17,23 @@ from dataclasses import dataclass
 from typing import Mapping, Optional, Sequence
 
 from ..embedding import EmbedderIdentity
-from ..model import Kind, MemoryRecord, Scope, Status
+from ..model import Kind, MemoryRecord, Scope, Status, TrustTier
 
 __all__ = [
     "StorageAdapter",
     "QueryHit",
     "QueryResult",
     "GetResult",
+    "BoardSnapshot",
     "UnsupportedCapabilityError",
     "CAP_VECTOR",
     "CAP_LEXICAL",
     "CAP_RELATIONAL",
     "CAP_VECTOR_INDEX",
+    "BOARD_LIMIT_CEILING",
+    "BOARD_METADATA_KEY",
+    "BOARD_TAG_MAJOR",
+    "BOARD_TAG_PENDING",
 ]
 
 CAP_VECTOR = "vector"
@@ -53,6 +58,26 @@ CAP_RELATIONAL = "relational"
 #: The reference SQLite adapter deliberately does NOT advertise it: it is an
 #: exact, cached, vectorized full scan.
 CAP_VECTOR_INDEX = "vector_index"
+
+
+#: Hard ceiling on every live-project-board read limit (``recent_records`` /
+#: ``board_entries`` and both ``board_snapshot`` legs) — an ADR-0018-style
+#: resource bound. The board is a BOUNDED read by contract (ADR-0035 sells a
+#: cheap, predictable payload); a runaway/hostile limit must not turn it into a
+#: table scan any caller pays on every poll. Validation follows the
+#: ``max_pinned_directives`` shape: negative and over-ceiling limits raise
+#: ``ValueError`` loudly (never a silent clamp), and ``0`` disables that leg.
+BOARD_LIMIT_CEILING = 50
+
+#: The metadata key and values that make a record a CURATED (Tier-2) board
+#: entry (ADR-0035). Membership is a metadata tag on purpose — the Kind
+#: vocabulary is frozen (ADR-0004), and importance must stay orthogonal to
+#: provenance-trust (ADR-0002), so neither a new kind nor a trust tier may
+#: encode "this is a major". Defined once here so the reference adapter, the
+#: payload builder, and the conformance suite never restate the strings.
+BOARD_METADATA_KEY = "board"
+BOARD_TAG_MAJOR = "major"
+BOARD_TAG_PENDING = "pending"
 
 
 class UnsupportedCapabilityError(Exception):
@@ -85,6 +110,24 @@ class GetResult:
 
     def __len__(self) -> int:
         return len(self.records)
+
+
+@dataclass(frozen=True)
+class BoardSnapshot:
+    """One consistent read of the live project board (ADR-0035).
+
+    ``majors`` is the curated Tier-2 leg (records tagged ``board=major`` or
+    ``board=pending`` at/above the board floor, oldest first); ``recent`` is the
+    Tier-1 activity feed (effective-active records, newest first);
+    ``pending_open`` counts the ``board=pending`` rows passing the Tier-2 gates
+    (a full count, not capped by the legs' limits). Adapters must produce all
+    three from ONE read snapshot so a concurrent writer can never yield tiers
+    that contradict each other (a torn board).
+    """
+
+    majors: tuple[MemoryRecord, ...]
+    recent: tuple[MemoryRecord, ...]
+    pending_open: int
 
 
 class StorageAdapter(ABC):
@@ -194,6 +237,128 @@ class StorageAdapter(ABC):
         raise UnsupportedCapabilityError(
             f"adapter '{self.name}' does not support the standing-directive channel "
             "(active_directives enumeration)"
+        )
+
+    # --- optional: live project board (ADR-0035) ---------------------------
+    def recent_records(
+        self, *, scope: Scope, limit: int = 10, min_trust: int = int(TrustTier.UNVERIFIED)
+    ) -> GetResult:
+        """Tier 1 of the live project board: the EFFECTIVE-ACTIVE records in
+        ``scope`` at ``trust_tier >= min_trust``, newest first (``created_at``
+        DESC, ``id`` DESC as the tiebreak), capped at ``limit``.
+
+        This is deliberately NOT :meth:`newest`: ``newest`` enumerates by
+        recency with no status or trust gate (``health()``/``reindex()`` depend
+        on seeing every row, including quarantined ones), so a forged raw
+        ``status='active'`` row at trust 0 — effectively quarantined — comes
+        back from it. A board that every concurrent session replays must gate on
+        the EFFECTIVE status exactly like every other surfaced read leg, and
+        label trust, which is why this is its own contract.
+
+        The default floor is ``UNVERIFIED`` (owner decision, ADR-0035): the feed
+        shows ALL effective-active writes, trust-labeled, so a session sees what
+        its peers did; the *text* amplification gate lives higher up (the
+        payload builder nulls excerpts below ``firewall.BOARD_FLOOR``).
+
+        Limits follow the ``max_pinned_directives`` shape: ``0`` disables the
+        leg (empty result, no read), negative or over
+        ``BOARD_LIMIT_CEILING`` raises ``ValueError`` — never a silent clamp.
+        Optional like :meth:`lexical_query` / :meth:`newest`: a backend that
+        cannot serve it raises ``UnsupportedCapabilityError``.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the live project board "
+            "(recent_records enumeration)"
+        )
+
+    def board_entries(
+        self,
+        *,
+        scope: Scope,
+        limit: int = 10,
+        min_trust: int = int(TrustTier.TRUSTED_SOURCE),
+    ) -> GetResult:
+        """Tier 2 of the live project board: the CURATED records in ``scope`` —
+        metadata ``board`` in {``major``, ``pending``} (``BOARD_METADATA_KEY`` /
+        ``BOARD_TAG_*``) — that are effective-active at ``trust_tier >=
+        min_trust``, OLDEST first (``created_at`` ASC, ``id`` ASC), capped at
+        ``limit``.
+
+        Oldest-first is the ADR-0034 §4 rationale verbatim: under the cap the
+        FOUNDATIONAL items survive, and appending a new major never disturbs the
+        rendered prefix, so a host's prompt cache stays warm as the board grows.
+
+        The default floor is the board floor policy (``firewall.BOARD_FLOOR ==
+        TRUSTED_SOURCE``; spelled as ``int(TrustTier.TRUSTED_SOURCE)`` here only
+        because ``firewall`` imports this module — a test pins them equal): a
+        tag is data any writer can attach, so curated status = tag AND trust
+        floor, never the tag alone. Scope isolation is on the RECORD row —
+        ``record_metadata`` carries no scope column, so implementations must
+        gate scope/status/trust on the kind-table side (a metadata-first read
+        would leak tags across scopes).
+
+        Same limit validation and optionality as :meth:`recent_records`.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the live project board "
+            "(board_entries enumeration)"
+        )
+
+    def board_snapshot(
+        self,
+        *,
+        scope: Scope,
+        recent_limit: int = 10,
+        major_limit: int = 10,
+        min_trust: int = int(TrustTier.UNVERIFIED),
+    ) -> BoardSnapshot:
+        """Both board tiers AND the open-pending count from ONE read snapshot.
+
+        Implementations MUST produce ``majors`` (the :meth:`board_entries` leg,
+        capped at ``major_limit``), ``recent`` (the :meth:`recent_records` leg,
+        capped at ``recent_limit``), and ``pending_open`` (the FULL count of
+        ``board=pending`` rows passing the Tier-2 gates) inside one read
+        transaction, so a concurrent writer can never produce a torn snapshot —
+        tiers that contradict each other or a count that disagrees with the
+        entries it summarizes.
+
+        ``min_trust`` gates the Tier-1 ``recent`` leg only (its default is the
+        Tier-1 floor, UNVERIFIED). The curated leg and ``pending_open`` always
+        apply the Tier-2 board floor policy (``firewall.BOARD_FLOOR``): the
+        Tier-2 floor is an owner-locked policy, not a per-read preference.
+
+        Same limit validation (each leg independently; ``0`` disables that leg)
+        and optionality as :meth:`recent_records`.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the live project board "
+            "(board_snapshot)"
+        )
+
+    def set_status(self, *, scope: Scope, record_id: str, status: str) -> bool:
+        """Atomically transition one EFFECTIVE-ACTIVE record's ``status`` to
+        ``status``; return whether a row actually transitioned.
+
+        This is the board's resolve verb (ADR-0035) and the first implemented
+        slice of ADR-0025's lifecycle: it MARKS a record (typically ACTIVE →
+        ``superseded``), it never evicts bytes. The gate is the record's
+        EFFECTIVE status (the ``_effective_status`` rule): only an
+        effective-active row may transition, so a quarantined, forged
+        (raw-active-at-trust-0), proposed, or already-transitioned row is left
+        untouched and the call reports ``False``. Because the gate rejects
+        everything non-active, this verb can never RESURRECT a superseded or
+        quarantined record either.
+
+        Adapters MUST implement the gate IN the update statement — the
+        :meth:`bump_proof_count` concurrency pattern — so two racing callers
+        yield exactly one transition and no read-modify-write window. ``status``
+        is data here (a valid ``Status`` value; garbage raises ``ValueError``);
+        policy about WHICH transitions a product verb allows belongs to the
+        facade, not the storage contract. Optional like the other board reads.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the live project board "
+            "(set_status)"
         )
 
     # --- was-it-used: proof_count increment -------------------------------
