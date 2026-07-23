@@ -55,6 +55,28 @@ pip install rekoll                 # keyword search, zero dependencies
 (Bleeding edge, straight from git:
 `pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"`.)
 
+**Vibe-coding? Don't install anything — paste this to your AI** (Claude Code,
+Cursor, Windsurf, …) and let it do the whole setup:
+
+```text
+Please set up Rekoll — a private, local memory layer for AI agents
+(https://rekoll.dev) — in this repository:
+
+1. Install it in this project's Python environment (Python 3.10+):
+   pip install "rekoll[embeddings,mcp]"
+2. From the repo root, run:  rekoll init
+   then index the project:   rekoll ingest .
+3. If you support MCP, connect yourself to it
+   (Claude Code: claude mcp add rekoll -- rekoll-mcp
+    other tools: https://github.com/rekreatedigital/rekoll/blob/main/docs/MCP.md)
+4. Run rekoll status and rekoll doctor, and show me both outputs.
+
+From now on in this repo: check memory before starting work (recall, and the
+board tool to see what other sessions did), and save important decisions with
+remember. Everything stays on this machine; searches are free and never call
+an LLM.
+```
+
 **60 seconds, any project** — website, mobile app, agent repo; no Python code needed:
 
 ```bash
