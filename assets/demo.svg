@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="418" viewBox="0 0 860 418" role="img" aria-label="Terminal demo: rekoll init, remember, and recall running locally with no API key">
+  <title>Rekoll in 60 seconds — real terminal output</title>
+  <rect x="0" y="0" width="860" height="418" rx="10" fill="#0d1117"/>
+  <rect x="0" y="0" width="860" height="36" rx="10" fill="#161b22"/>
+  <rect x="0" y="26" width="860" height="10" fill="#161b22"/>
+  <circle cx="22" cy="18" r="6" fill="#ff5f56"/>
+  <circle cx="42" cy="18" r="6" fill="#ffbd2e"/>
+  <circle cx="62" cy="18" r="6" fill="#27c93f"/>
+  <text x="430" y="23" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" fill="#8b949e" text-anchor="middle">your-project — rekoll</text>
+
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14">
+    <text x="28" y="76" fill="#7ee787">$ <tspan fill="#e6edf3">rekoll init</tspan></text>
+    <text x="28" y="100" fill="#8b949e">Rekoll is ready in this project.</text>
+    <text x="28" y="122" fill="#8b949e">  created .rekoll  (the local memory store lives here)</text>
+    <text x="28" y="144" fill="#8b949e">  search mode: real semantic search</text>
+    <text x="28" y="166" fill="#58a6ff">Everything stays on this machine. No API key. Reads never call an LLM.</text>
+
+    <text x="28" y="204" fill="#7ee787">$ <tspan fill="#e6edf3">rekoll remember "we chose Postgres over BigQuery for cost"</tspan></text>
+    <text x="28" y="228" fill="#8b949e">Remembered: rk_8c9346cee35927193d0c735b</text>
+
+    <text x="28" y="266" fill="#7ee787">$ <tspan fill="#e6edf3">rekoll recall "why postgres?"</tspan></text>
+    <text x="28" y="290" fill="#e6edf3">[1] we chose Postgres over BigQuery because egress cost</text>
+    <text x="28" y="312" fill="#e6edf3">    dominated the bill</text>
+    <text x="28" y="334" fill="#8b949e">    (raw_fact | trust: owner | id: rk_8c9346cee359...)</text>
+
+    <text x="28" y="378" fill="#7d8590">no API key  ·  no network on reads  ·  nothing leaves your machine</text>
+  </g>
+</svg>
