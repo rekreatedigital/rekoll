@@ -196,6 +196,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.path == ":memory:":
         _out("':memory:' is a temporary in-process store - nothing to set up.")
         _out("Use a file path for a store that persists (the default is ./.rekoll/memory.db).")
+        if args.wizard:
+            _err("rekoll: note: --wizard skipped - a ':memory:' store vanishes when this "
+                 "command exits, so there is nowhere durable to save your answers")
         return 0
     store_dir = Path(args.path).expanduser().parent
     already = store_dir.is_dir()
@@ -258,6 +261,200 @@ def cmd_init(args: argparse.Namespace) -> int:
     _out('  print(mem.recall("why postgres?").context())')
     _out()
     _out("Everything stays on this machine. No API key. Reads never call an LLM.")
+    if args.wizard:
+        return _run_init_wizard(args)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# init --wizard (ADR-0036): the opt-in first-run interview
+# ---------------------------------------------------------------------------
+
+# Everything about the wizard is bounded on purpose: at most 3 questions, so at
+# most 3 minted rules per run (the ADR-0034 channel surfaces the OLDEST five
+# directives on every recall - one interview must never be able to flood that
+# cap), and at most this many characters per answer (a standing rule rides
+# every future recall's instruction channel, so an unbounded answer would be a
+# permanent per-read token tax). Overlong answers are trimmed and the trim is
+# announced BEFORE the summary, so what the user confirms is exactly what is
+# stored - never a crash, never a silent cut.
+_WIZARD_ANSWER_MAX = 500
+
+
+def _wizard_ask(prompt: str) -> Optional[str]:
+    """Show ``prompt`` (stdout, no trailing newline) and read one stdin line.
+
+    Returns ``None`` when no answer can ever arrive - EOF (the human left) or
+    undecodable stdin bytes (a mis-encoded terminal) - which cancels the whole
+    wizard; otherwise the stripped answer ('' means "skip"), trimmed to
+    ``_WIZARD_ANSWER_MAX`` characters. Questions ride stdout (unlike the vouch
+    gate's stderr prompt): init's stdout is already the human conversation and
+    carries no machine-readable contract to protect.
+
+    The answer is sanitized EXACTLY like stored content (NFKC + invisible-char
+    strip, ``firewall.sanitize_unicode``) BEFORE the trim, so the cap bounds
+    what is STORED, not what was typed: NFKC can expand one typed character
+    into many (U+FDFA becomes 18), which would otherwise silently defeat the
+    per-read token bound the cap exists for - and it makes the summary the
+    user confirms equal the stored text (secret redaction aside, which is
+    reported after saving).
+    """
+    from .firewall import sanitize_unicode  # deferred, like every non-model import
+
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    try:
+        line = sys.stdin.readline()
+    except UnicodeDecodeError:
+        # Bytes the console encoding cannot decode are not an answer; without
+        # this, main()'s safety net would blame "the store or its data"
+        # (UnicodeDecodeError IS a ValueError) for a terminal-encoding problem.
+        return None
+    if line == "":  # EOF (Ctrl+Z / Ctrl+D, or the input source ran dry)
+        return None
+    answer = sanitize_unicode(line.strip()).strip()
+    if len(answer) > _WIZARD_ANSWER_MAX:
+        answer = answer[:_WIZARD_ANSWER_MAX].rstrip()
+        _out(f"   (long answer trimmed to {_WIZARD_ANSWER_MAX} characters)")
+    return answer
+
+
+def _wizard_cancelled() -> int:
+    _out()
+    _out("(input ended or could not be read - wizard cancelled, nothing was saved)")
+    return 0
+
+
+def _run_init_wizard(args: argparse.Namespace) -> int:
+    """The opt-in first-run interview (ADR-0036).
+
+    Runs only AFTER plain ``init`` fully succeeded, so the zero-config path is
+    untouched: no flag, no questions - in CI, in scripts, everywhere. Each
+    answered question becomes ONE owner-trust standing rule (``Kind.DIRECTIVE``
+    at ``TrustTier.OWNER``): minting through the SDK with an explicit ``trust=``
+    is exactly the conscious vouch ADR-0017 demands, and the single
+    what-will-be-saved summary (y/N; declining saves nothing) keeps it conscious
+    at the human level without three per-answer warnings.
+
+    Interactive terminals only (the vouch gate's ``_stdin_is_interactive``
+    oracle - one oracle, not two). With a pipe/CI stdin this prints ONE plain
+    stderr line and exits 0: init itself already did its job, and a ``--wizard``
+    copy-pasted into a script must inform, not break the pipeline (the
+    warn-don't-restrict posture).
+    """
+    if not _stdin_is_interactive():
+        _err("rekoll: note: --wizard skipped - it needs an interactive terminal to "
+             "ask its questions (the setup above still completed)")
+        return 0
+
+    _out()
+    _out("Rekoll setup interview - 3 quick questions, all optional.")
+    _out("Press Enter to skip any question. Nothing is saved until you confirm at the end.")
+    _out()
+    # Answers are stored as clear standing rules, not raw fragments: the exact
+    # text below is what every future AI session will literally be told.
+    rules: list[str] = []
+
+    _out("1) How should AI tools explain things to you?")
+    _out("   [1] simply      - plain language, short words, no jargon")
+    _out("   [2] normally    - the usual level of detail (this saves no rule)")
+    _out("   [3] technically - precise and detailed, no oversimplifying")
+    answer = _wizard_ask("   Your pick (1/2/3, or Enter to skip): ")
+    if answer is None:
+        return _wizard_cancelled()
+    picked = answer.lower()
+    if picked in ("1", "s", "simply"):
+        rules.append("Explain things simply, in plain language, and avoid jargon.")
+    elif picked in ("3", "t", "technically"):
+        rules.append("Explain things technically and precisely; do not oversimplify.")
+    elif picked not in ("", "2", "n", "normally"):
+        # A typo skips the question rather than looping (a bounded interview
+        # can never hang); the summary confirmation is the safety net anyway.
+        _out("   (didn't recognize that - skipping this question)")
+
+    _out()
+    _out("2) What should every AI session know about you or this project?")
+    _out('   (one line, e.g. "I am not a programmer - keep answers beginner-friendly")')
+    answer = _wizard_ask("   Your answer (or Enter to skip): ")
+    if answer is None:
+        return _wizard_cancelled()
+    if answer:
+        rules.append(f"Keep in mind about this user and project: {answer}")
+
+    _out()
+    _out("3) Any preferred tone or style for AI replies?")
+    _out('   (e.g. "friendly and brief", or Enter to skip)')
+    answer = _wizard_ask("   Your answer (or Enter to skip): ")
+    if answer is None:
+        return _wizard_cancelled()
+    if answer:
+        rules.append(f"Use this tone and style when replying: {answer}")
+
+    _out()
+    if not rules:
+        _out("Nothing to save - no rules were chosen, and nothing was stored.")
+        _out("Run 'rekoll init --wizard' again any time.")
+        return 0
+
+    _out(f"About to save {len(rules)} standing rule{'s' if len(rules) != 1 else ''}:")
+    for number, rule in enumerate(rules, 1):
+        _out(f"  {number}. {rule}")
+    _out()
+    _out("Honest heads-up: a standing rule is replayed to EVERY AI session that")
+    _out("uses this memory store - automatically, on every recall (your oldest")
+    _out("five rules ride along) - until you delete it with 'rekoll forget <id>'.")
+    answer = _wizard_ask("Save these? [y/N] ")
+    if answer is None or answer.lower() not in ("y", "yes"):
+        _out("Nothing saved. Run 'rekoll init --wizard' again any time.")
+        return 0
+
+    if _semantic_extra_installed():
+        # The wizard opens a Memory (plain init never does); with the
+        # embeddings extra the first open may download the small local model.
+        _err("(one moment - opening the memory store; the first run may download a small model)")
+    mem = _open_memory(args)
+    if mem is None:
+        return 1
+    # ``stored`` holds record.content - the TRUTH after the firewall screen -
+    # never the typed answer: remember() screens content AFTER the summary
+    # (secrets are ALWAYS redacted), so echoing the typed text back as "saved"
+    # would misreport what the store now holds.
+    stored: list[tuple[str, str]] = []
+    redacted = 0
+    try:
+        for rule in rules:
+            record = mem.remember(rule, kind=Kind.DIRECTIVE, source="init-wizard",
+                                  trust=TrustTier.OWNER)
+            stored.append((record.id, record.content))
+            tags = str(record.metadata.get("redactions") or "")
+            if tags:
+                redacted += len(tags.split(","))
+    except (ValueError, sqlite3.Error) as exc:
+        # sqlite3.Error included (disk full, "database is locked" from a
+        # concurrent agent): without it, main()'s generic net would tell the
+        # user the store is in a bad state AFTER earlier rules permanently
+        # stored - a partial save must still be reported truthfully.
+        for record_id, text in stored:
+            _out(f"  saved: {record_id}  {text}")
+        return _fail(f"could not save every rule: {exc}")
+    finally:
+        mem.close()
+    _out(f"Saved {len(stored)} standing rule{'s' if len(stored) != 1 else ''}:")
+    for record_id, text in stored:
+        _out(f"  {record_id}  {text}")
+    if any(text != rule for (_, text), rule in zip(stored, rules)):
+        _out("  (a stored rule above differs from what you typed: secret-looking")
+        _out("   values are never stored - they are replaced with [REDACTED:...])")
+    if redacted:
+        _err(f"note: {redacted} sensitive value{'s' if redacted > 1 else ''} redacted "
+             "before storing (an audit tag is kept, never the value)")
+    _out()
+    _out("Every AI session that reads this memory will now follow these rules.")
+    _out("One honest limit: only your oldest five rules ride along on each")
+    _out("recall. So when you change your mind, remove the old rule first with")
+    _out("'rekoll forget <id>' rather than piling up replacements - re-running")
+    _out("the wizard ADDS rules (identical answers are stored once); it never")
+    _out("edits old ones, and older rules always win the five-rule limit.")
     return 0
 
 
@@ -347,7 +544,14 @@ def _vouch_standing_rule(args: argparse.Namespace) -> bool:
         # warn-and-continue path) rather than wait invisibly for an answer
         # or cancel the write over a dead stderr.
         return True
-    answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
+    try:
+        answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
+    except UnicodeDecodeError:
+        # Undecodable bytes on an interactive stdin (a mis-encoded terminal)
+        # are not an answer - and certainly not a yes. Decline, rather than
+        # letting main()'s net blame "the store or its data" (a
+        # UnicodeDecodeError IS a ValueError) for a terminal-encoding problem.
+        return False
     return answer.strip().lower() in ("y", "yes")
 
 
@@ -934,6 +1138,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "init", parents=[shared],
         help="set this project up (creates ./.rekoll/, updates .gitignore)",
         description="One-time, idempotent project setup. Safe to run again.",
+    )
+    p.add_argument(
+        "--wizard", action="store_true",
+        help="after setup, ask 3 optional questions (interactive terminal only) "
+             "and - after one confirmation - save your answers as standing rules "
+             "every AI session will follow; plain 'rekoll init' never asks anything "
+             "(ADR-0036)",
     )
     p.set_defaults(func=cmd_init)
 
