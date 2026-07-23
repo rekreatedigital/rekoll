@@ -30,7 +30,11 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest>=8"]
 embeddings = ["fastembed>=0.3"]
-mcp = ["mcp>=1.2"]
+# Floor is 1.3, not 1.2: the server hands agents an `instructions` string on
+# initialize (the board polling-rhythm guidance) — `FastMCP(instructions=...)`
+# and `InitializeResult.instructions` both first exist in mcp 1.3.0 (verified;
+# 1.2.x silently drops them). The pinned CI cell installs exactly this floor.
+mcp = ["mcp>=1.3"]
 # ALL benchmark-only dependencies live here — the single canonical location for
 # the efficacy/benchmark harness. Aggregates [embeddings] because real-path
 # quality runs need the real embedder. Never imported on the default path.
