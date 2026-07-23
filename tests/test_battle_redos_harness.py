@@ -10,13 +10,16 @@ marker/secret regex to nonlinear backtracking fails here (complements test_limit
 Budgets are hang-backstops, not performance gates: they catch a catastrophic
 (seconds-to-minutes) blowup, never micro-fluctuations. History (2026-07-23): the
 original 3.0s budget on the marker-dense screen_pieces test — ~1.5s of GENUINE
-work — was only ~2x over real runtime and tripped twice on loaded shared runners
-(windows-latest/3.13 at 3.58s, run 29435204964; macos-latest/3.12 at 3.18s, run
-29433844597) while every other cell stayed green: runner contention, not a
-regression. So absolute budgets here now sit >=10x above worst observed; the
-SCALING property — the thing that actually detects a super-linear regression,
-runner-independently — is asserted by the ratio gates (below, and per-pattern in
-test_limits.py), exactly the lesson test_limits already recorded on 2026-07-02.
+work — was only ~2x over real runtime and tripped repeatedly on loaded shared
+runners while every other cell stayed green: log-proven at 3.58s
+(windows-latest/3.13, run 29435204964) and 3.18s (macos-latest/3.12, run
+29433844597) on 2026-07-15, plus a lane-worker-recorded 4.35s on PR #57's
+test-mcp windows cell on 2026-07-22 (that run's raw log did not persist).
+Runner contention, not a regression. So absolute budgets here now sit >=10x
+above the worst recorded trip; the SCALING property — the thing that actually
+detects a super-linear regression, runner-independently — is asserted by the
+ratio gates (below, and per-pattern in test_limits.py), exactly the lesson
+test_limits already recorded on 2026-07-02.
 """
 
 from __future__ import annotations
@@ -75,15 +78,15 @@ def test_screen_pieces_bounded_on_marker_dense_document():
     # The whole-document scan over the largest ingestible marker-dense doc (10MB
     # bytes / 25k chunk caps). Post-fix it is O((pieces+spans) log spans); the old
     # O(pieces x spans) took MINUTES here — that is what this budget bounds. The
-    # genuine work is ~1.5-3.6s across runners (see the module docstring's flake
-    # history), so 40s = ~11x the worst observed 3.58s; the subquadratic
+    # genuine work is ~1.5-4.4s across runners (see the module docstring's flake
+    # history), so 45s = ~10x the worst recorded trip (4.35s); the subquadratic
     # *scaling* is asserted runner-independently by the ratio test right below.
     doc = "<user>\n" * 300_000  # ~2.1MB, well within max_file_bytes
     pieces = chunk_file("d.txt", doc)
     t0 = time.perf_counter()
     screen_pieces(doc, pieces)
     dt = time.perf_counter() - t0
-    assert dt < 40.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
+    assert dt < 45.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
 
 
 def test_screen_pieces_scales_subquadratically():

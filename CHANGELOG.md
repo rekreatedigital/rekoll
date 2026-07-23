@@ -125,7 +125,7 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   tripwire pins the README's list to the code so the next added key fails CI
   until the README names it.
 - The battle-harness absolute ReDoS budgets are now true hang-backstops
-  (10s / 40s, ≥10x worst observed) — the old 3.0s budget sat only ~2x over
+  (10s / 45s, ≥10x the worst recorded trip) — the old 3.0s budget sat only ~2x over
   the marker-dense test's genuine ~1.5s runtime and tripped twice on loaded
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
