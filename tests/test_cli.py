@@ -86,6 +86,14 @@ class _TtyNeverRead(_TtyStdin):
         raise AssertionError("no prompt may be read in this scenario")
 
 
+class _TtyUndecodable(_TtyStdin):
+    """An interactive stdin feeding bytes the console encoding cannot decode -
+    a mis-encoded terminal. readline() raises exactly like the real stream."""
+
+    def readline(self) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+
 class _DeadStderr:
     """A closed-pipe stderr: every write raises, as after `2>&1 | head` exits."""
 
@@ -394,6 +402,116 @@ def test_init_wizard_mentions_model_download_when_embeddings_installed(project, 
     monkeypatch.setattr(sys, "stdin", _TtyStdin("1\n\n\ny\n"))
     assert main(["init", "--wizard"]) == 0
     assert "one moment" in capsys.readouterr().err
+
+
+def test_init_wizard_no_download_line_without_embeddings_extra(project, capsys, monkeypatch):
+    """T1 (mutation-proven gap): the absence leg. On a keyword-mode machine the
+    wizard must NOT promise a model download - an unconditional 'one moment'
+    line survived every other wizard test."""
+    monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: False)
+    monkeypatch.setattr(sys, "stdin", _TtyStdin("1\n\n\ny\n"))
+    assert main(["init", "--wizard"]) == 0
+    assert "one moment" not in capsys.readouterr().err
+
+
+def test_init_wizard_saved_listing_shows_stored_text_not_typed_text(project, capsys, monkeypatch):
+    """C1: remember() firewall-screens content AFTER the summary, and secrets
+    are ALWAYS redacted - so the post-save listing must echo record.content
+    (the truth), print the cmd_remember-style redaction note, and say plainly
+    that a stored rule differs from what was typed."""
+    secret = "my api_key=sk-live-abc123def456ghi789"
+    monkeypatch.setattr(sys, "stdin", _TtyStdin(f"\n{secret}\n\ny\n"))
+    assert main(["init", "--wizard"]) == 0
+    captured = capsys.readouterr()
+    saved_block = captured.out.split("Saved 1 standing rule")[1]
+    assert "[REDACTED:credential_assignment]" in saved_block   # the stored truth...
+    assert "sk-live-abc123def456ghi789" not in saved_block     # ...never the raw secret
+    assert "differs from what you typed" in saved_block        # the mismatch is named plainly
+    assert "redacted before storing" in captured.err           # the cmd_remember-style note
+    rows = _wizard_directive_rows()
+    assert len(rows) == 1
+    assert "[REDACTED:credential_assignment]" in rows[0].content
+
+
+def test_init_wizard_nfkc_expansion_cannot_defeat_the_stored_cap(project, capsys, monkeypatch):
+    """C1: the 500-char cap bounds STORED characters, not typed ones. U+FDFA
+    NFKC-expands 1 -> 18 chars, so 500 typed chars would store a ~9000-char
+    rule (a permanent per-read token tax) if the trim ran before
+    normalization. Answers are sanitized exactly like stored content BEFORE
+    the trim, so the summary equals the stored text and the rule fits the cap."""
+    monkeypatch.setattr(sys, "stdin", _TtyStdin("\n" + "ﷺ" * 500 + "\n\ny\n"))
+    assert main(["init", "--wizard"]) == 0
+    out = capsys.readouterr().out
+    assert "trimmed to 500 characters" in out
+    rows = _wizard_directive_rows()
+    assert len(rows) == 1
+    prefix = "Keep in mind about this user and project: "
+    assert rows[0].content.startswith(prefix)
+    assert len(rows[0].content) <= len(prefix) + 500
+
+
+def test_init_wizard_partial_save_is_reported_on_sqlite_error(project, capsys, monkeypatch):
+    """C2: a mid-mint sqlite3.Error (disk full, 'database is locked' from a
+    concurrent agent) must not fall through to main()'s generic net after rule
+    1 PERMANENTLY stored - the user would believe nothing was saved. The
+    wizard lists the rules that did store and exits 1."""
+    from rekoll.memory import Memory
+
+    real = Memory.remember
+    calls = {"n": 0}
+
+    def flaky(self, content, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real(self, content, **kwargs)
+
+    monkeypatch.setattr(Memory, "remember", flaky)
+    monkeypatch.setattr(sys, "stdin", _TtyStdin("1\nSam runs this repo\n\ny\n"))
+    assert main(["init", "--wizard"]) == 1
+    captured = capsys.readouterr()
+    assert "saved: rk_" in captured.out                 # the partial truth is listed
+    assert "could not save every rule" in captured.err
+    assert "database is locked" in captured.err
+    rows = _wizard_directive_rows()
+    assert len(rows) == 1                               # rule 1 really is in the store
+
+
+def test_init_wizard_closing_copy_names_the_five_rule_cap(project, capsys, monkeypatch):
+    """T2: the closing copy must not overclaim. Only the OLDEST five rules ride
+    each recall (ADR-0034's cap), so the honest change-your-mind story is
+    forgetting the old rule, not piling up replacements - and this copy must
+    not silently lose that clause."""
+    monkeypatch.setattr(sys, "stdin", _TtyStdin("1\n\n\ny\n"))
+    assert main(["init", "--wizard"]) == 0
+    out = capsys.readouterr().out
+    assert "oldest five" in out.lower()
+    assert "rekoll forget" in out
+
+
+def test_init_wizard_undecodable_stdin_cancels_cleanly(project, capsys, monkeypatch):
+    """C3: invalid bytes on an interactive stdin raise UnicodeDecodeError out
+    of readline(). UnicodeDecodeError IS a ValueError, so uncaught it would hit
+    main()'s net and blame 'the store or its data' for a terminal-encoding
+    problem. The wizard treats it as cancel: plain line, exit 0, nothing saved."""
+    monkeypatch.setattr(sys, "stdin", _TtyUndecodable())
+    assert main(["init", "--wizard"]) == 0
+    captured = capsys.readouterr()
+    assert "wizard cancelled" in captured.out and "nothing was saved" in captured.out
+    assert "bad state" not in captured.err
+    assert not (project / ".rekoll" / "memory.db").exists()
+
+
+def test_directive_vouch_undecodable_stdin_declines(project, capsys, monkeypatch):
+    """C3 (the same edge W4 inherited at the vouch gate): garbage bytes are not
+    an answer - and certainly not a yes. Decline cleanly (Cancelled, exit 1,
+    no store file), never the misleading store-is-in-a-bad-state net message."""
+    monkeypatch.setattr(sys, "stdin", _TtyUndecodable())
+    assert _remember("always use tabs", "--kind", "directive") == 1
+    captured = capsys.readouterr()
+    assert "Cancelled - nothing was stored." in captured.err
+    assert "bad state" not in captured.err
+    assert not (project / ".rekoll").exists()
 
 
 # -- remember ----------------------------------------------------------------

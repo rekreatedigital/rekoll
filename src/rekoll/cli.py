@@ -284,18 +284,35 @@ _WIZARD_ANSWER_MAX = 500
 def _wizard_ask(prompt: str) -> Optional[str]:
     """Show ``prompt`` (stdout, no trailing newline) and read one stdin line.
 
-    Returns ``None`` on EOF - the human left mid-interview, which cancels the
-    whole wizard - otherwise the stripped answer ('' means "skip"), trimmed to
+    Returns ``None`` when no answer can ever arrive - EOF (the human left) or
+    undecodable stdin bytes (a mis-encoded terminal) - which cancels the whole
+    wizard; otherwise the stripped answer ('' means "skip"), trimmed to
     ``_WIZARD_ANSWER_MAX`` characters. Questions ride stdout (unlike the vouch
     gate's stderr prompt): init's stdout is already the human conversation and
     carries no machine-readable contract to protect.
+
+    The answer is sanitized EXACTLY like stored content (NFKC + invisible-char
+    strip, ``firewall.sanitize_unicode``) BEFORE the trim, so the cap bounds
+    what is STORED, not what was typed: NFKC can expand one typed character
+    into many (U+FDFA becomes 18), which would otherwise silently defeat the
+    per-read token bound the cap exists for - and it makes the summary the
+    user confirms equal the stored text (secret redaction aside, which is
+    reported after saving).
     """
+    from .firewall import sanitize_unicode  # deferred, like every non-model import
+
     sys.stdout.write(prompt)
     sys.stdout.flush()
-    line = sys.stdin.readline()
+    try:
+        line = sys.stdin.readline()
+    except UnicodeDecodeError:
+        # Bytes the console encoding cannot decode are not an answer; without
+        # this, main()'s safety net would blame "the store or its data"
+        # (UnicodeDecodeError IS a ValueError) for a terminal-encoding problem.
+        return None
     if line == "":  # EOF (Ctrl+Z / Ctrl+D, or the input source ran dry)
         return None
-    answer = line.strip()
+    answer = sanitize_unicode(line.strip()).strip()
     if len(answer) > _WIZARD_ANSWER_MAX:
         answer = answer[:_WIZARD_ANSWER_MAX].rstrip()
         _out(f"   (long answer trimmed to {_WIZARD_ANSWER_MAX} characters)")
@@ -304,7 +321,7 @@ def _wizard_ask(prompt: str) -> Optional[str]:
 
 def _wizard_cancelled() -> int:
     _out()
-    _out("(input ended - wizard cancelled, nothing was saved)")
+    _out("(input ended or could not be read - wizard cancelled, nothing was saved)")
     return 0
 
 
@@ -379,13 +396,13 @@ def _run_init_wizard(args: argparse.Namespace) -> int:
         _out("Run 'rekoll init --wizard' again any time.")
         return 0
 
-    _out(f"About to save {len(rules)} standing rule{'s' if len(rules) != 1 else ''} (owner trust):")
+    _out(f"About to save {len(rules)} standing rule{'s' if len(rules) != 1 else ''}:")
     for number, rule in enumerate(rules, 1):
         _out(f"  {number}. {rule}")
     _out()
     _out("Honest heads-up: a standing rule is replayed to EVERY AI session that")
-    _out("uses this memory store - automatically, on every recall - until you")
-    _out("delete it with 'rekoll forget <id>'.")
+    _out("uses this memory store - automatically, on every recall (your oldest")
+    _out("five rules ride along) - until you delete it with 'rekoll forget <id>'.")
     answer = _wizard_ask("Save these? [y/N] ")
     if answer is None or answer.lower() not in ("y", "yes"):
         _out("Nothing saved. Run 'rekoll init --wizard' again any time.")
@@ -398,26 +415,46 @@ def _run_init_wizard(args: argparse.Namespace) -> int:
     mem = _open_memory(args)
     if mem is None:
         return 1
+    # ``stored`` holds record.content - the TRUTH after the firewall screen -
+    # never the typed answer: remember() screens content AFTER the summary
+    # (secrets are ALWAYS redacted), so echoing the typed text back as "saved"
+    # would misreport what the store now holds.
     stored: list[tuple[str, str]] = []
+    redacted = 0
     try:
         for rule in rules:
             record = mem.remember(rule, kind=Kind.DIRECTIVE, source="init-wizard",
                                   trust=TrustTier.OWNER)
-            stored.append((record.id, rule))
-    except ValueError as exc:
-        for record_id, rule in stored:  # a partial save must still be reported
-            _out(f"  saved: {record_id}  {rule}")
+            stored.append((record.id, record.content))
+            tags = str(record.metadata.get("redactions") or "")
+            if tags:
+                redacted += len(tags.split(","))
+    except (ValueError, sqlite3.Error) as exc:
+        # sqlite3.Error included (disk full, "database is locked" from a
+        # concurrent agent): without it, main()'s generic net would tell the
+        # user the store is in a bad state AFTER earlier rules permanently
+        # stored - a partial save must still be reported truthfully.
+        for record_id, text in stored:
+            _out(f"  saved: {record_id}  {text}")
         return _fail(f"could not save every rule: {exc}")
     finally:
         mem.close()
     _out(f"Saved {len(stored)} standing rule{'s' if len(stored) != 1 else ''}:")
-    for record_id, rule in stored:
-        _out(f"  {record_id}  {rule}")
+    for record_id, text in stored:
+        _out(f"  {record_id}  {text}")
+    if any(text != rule for (_, text), rule in zip(stored, rules)):
+        _out("  (a stored rule above differs from what you typed: secret-looking")
+        _out("   values are never stored - they are replaced with [REDACTED:...])")
+    if redacted:
+        _err(f"note: {redacted} sensitive value{'s' if redacted > 1 else ''} redacted "
+             "before storing (an audit tag is kept, never the value)")
     _out()
     _out("Every AI session that reads this memory will now follow these rules.")
-    _out("To change one later: 'rekoll forget <id>' removes it. Re-running the")
-    _out("wizard ADDS rules (identical answers are stored once) - it never edits")
-    _out("old ones, so forget the old rule first if you change your mind.")
+    _out("One honest limit: only your oldest five rules ride along on each")
+    _out("recall. So when you change your mind, remove the old rule first with")
+    _out("'rekoll forget <id>' rather than piling up replacements - re-running")
+    _out("the wizard ADDS rules (identical answers are stored once); it never")
+    _out("edits old ones, and older rules always win the five-rule limit.")
     return 0
 
 
@@ -507,7 +544,14 @@ def _vouch_standing_rule(args: argparse.Namespace) -> bool:
         # warn-and-continue path) rather than wait invisibly for an answer
         # or cancel the write over a dead stderr.
         return True
-    answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
+    try:
+        answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
+    except UnicodeDecodeError:
+        # Undecodable bytes on an interactive stdin (a mis-encoded terminal)
+        # are not an answer - and certainly not a yes. Decline, rather than
+        # letting main()'s net blame "the store or its data" (a
+        # UnicodeDecodeError IS a ValueError) for a terminal-encoding problem.
+        return False
     return answer.strip().lower() in ("y", "yes")
 
 
