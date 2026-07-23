@@ -98,11 +98,13 @@ jobs:
         python-version: ["3.10", "3.12"]
         include:
           # This cell pins the mcp version floor declared in pyproject so the
-          # `mcp>=1.2` claim stays tested, on the OS where stdio encoding is
-          # hostile (Windows pipes default to the ANSI codepage).
+          # `mcp>=1.3` claim stays tested, on the OS where stdio encoding is
+          # hostile (Windows pipes default to the ANSI codepage). 1.3.0 is the
+          # first release with server `instructions` (the board guidance the
+          # e2e initialize test asserts); 1.2.x silently dropped it.
           - os: windows-latest
             python-version: "3.10"
-            mcp-version: "==1.2.0"
+            mcp-version: "==1.3.0"
     steps:
       # SHA-pinned to match the supply-chain posture of the other jobs.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -110,7 +112,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install (with the mcp extra)
-        # The [mcp] extra already carries the `mcp>=1.2` floor. Only the pinned
+        # The [mcp] extra already carries the `mcp>=1.3` floor. Only the pinned
         # matrix cell appends an explicit `mcp<constraint>`; other cells must NOT
         # render a bare, unconstrained `mcp` requirement (which would silently
         # override the declared floor). bash on all runners keeps this one line.

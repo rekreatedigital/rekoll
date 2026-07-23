@@ -63,6 +63,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -642,8 +644,22 @@ def board_store(store):
     db = store.root / "parity-board.db"
     mem = Memory(path=str(db), project=PROJECT, embedder=StubEmbedder(), reranker=None)
     mem.remember(BOARD_RULE, kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
-    mem.remember("storage lane shipped", board="major")
-    mem.remember("facade lane shipped", board="major")
+    # The majors leg is oldest-first with a (created_at, id) tiebreak, and id
+    # breaks a same-instant tie by RANDOM id — so two curated items that share a
+    # created_at can invert. Windows' wall clock ticks ~15ms, so three back-to-
+    # back writes can land in one tick and flip the order (~few % of runs). A
+    # real board is curated over time, never twice in one tick; model that by
+    # letting the clock advance between the curated writes, so the oldest-first
+    # assertion below tests ORDER, not id luck. (The board UNIT tests get the
+    # same guarantee for free by seeding explicit, distinct created_at — an
+    # option the public remember() API here deliberately doesn't expose.)
+    def _await_next_tick(rec):
+        while datetime.now(timezone.utc) <= rec.created_at:
+            time.sleep(0.001)
+        return rec
+
+    _await_next_tick(mem.remember("storage lane shipped", board="major"))
+    _await_next_tick(mem.remember("facade lane shipped", board="major"))
     pending = mem.remember("docs pass still open", board="pending")
     for fact in REMEMBERED_FACTS[:3]:
         mem.remember(fact)

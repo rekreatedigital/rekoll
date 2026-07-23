@@ -595,7 +595,7 @@ def _run_server_session(tmp: Path, fn, *, extra_args: tuple[str, ...] = ()):
             env=env,
         )
         with (tmp / "server-stderr.log").open("w", encoding="utf-8") as errlog:
-            # The floor SDK (1.2.0) has no errlog parameter and reads
+            # The floor SDK (1.3.0) has no errlog parameter and reads
             # sys.stderr at call time, which is safe under pytest.
             kwargs = (
                 {"errlog": errlog}

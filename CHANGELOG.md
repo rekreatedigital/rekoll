@@ -112,6 +112,14 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   failure partway through could previously leave a matching `UPDATE` in an open
   transaction that the next unrelated write silently committed — a resolve that
   reported failure taking effect later, with the scan-cache patch never applied.
+- The `[mcp]` extra declared `mcp>=1.2`, but the server's agent-guidance
+  `instructions` string (the board polling-rhythm teaching handed over on
+  initialize) needs `FastMCP(instructions=...)` and `InitializeResult.instructions`,
+  which first exist in **mcp 1.3.0** — 1.2.x silently drops them. The floor is
+  now `mcp>=1.3` and the CI floor cell installs `mcp==1.3.0`, so the declared
+  minimum genuinely runs every shipped MCP feature. (Surfaced by the first
+  public CI run; local dev already used a newer mcp, which is why it passed
+  there.)
 - The board payload's tamper warning counted a record once per leg while naming
   its id once, so a tampered curated major (which also rides the activity feed)
   was reported as "2 board record(s)" followed by a single id.
