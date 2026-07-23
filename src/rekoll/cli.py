@@ -260,22 +260,105 @@ def cmd_init(args: argparse.Namespace) -> int:
 # remember / ingest / forget
 # ---------------------------------------------------------------------------
 
+def _stdin_is_interactive() -> bool:
+    """True only when a human is on the other end of stdin. Fails CLOSED to
+    'not interactive': an absent or broken stdin (pythonw, a closed descriptor)
+    must take the never-prompt path, not attempt a question that would hang or
+    crash."""
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+    except (OSError, ValueError):
+        return False
+    if sys.platform == "win32":
+        # Windows isatty() is True for ANY character device — including NUL, so
+        # `rekoll ... < NUL` (or Git Bash's /dev/null) would "prompt", read
+        # instant EOF, and cancel a write the caller never got to answer
+        # (verified live). Ask the console subsystem itself: GetConsoleMode
+        # succeeds only on a real console that can actually be prompted.
+        try:
+            import ctypes
+            import msvcrt
+
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            mode = ctypes.c_uint32()
+            if not ctypes.windll.kernel32.GetConsoleMode(
+                ctypes.c_void_p(handle), ctypes.byref(mode)
+            ):
+                return False
+        except Exception:
+            # Can't tell for sure (no real fd, an exotic host): keep isatty()'s
+            # answer. Worst case is a prompt that reads instant EOF and cancels
+            # — safe and loud, just blunter than proceeding. (The in-process
+            # test fakes land here by design: StringIO has no fileno.)
+            return True
+    return True
+
+
+def _vouch_standing_rule(args: argparse.Namespace) -> bool:
+    """ADR-0017 at the CLI door: minting a standing rule is a conscious act.
+
+    The SDK refuses ``remember(kind=DIRECTIVE)`` without an explicit ``trust=``;
+    the CLI cannot reuse that friction because ``--trust`` always has a value
+    (its 'owner' default). So the vouch here is a loud warning plus — only in a
+    terminal — a y/N question. Warn loudly, never block (the product's locked
+    posture): with ``--yes``, or with no terminal to ask on, the write proceeds
+    and the warning still prints — informing is free, blocking is what we avoid.
+
+    Returns True to store, False to cancel (the caller reports and exits 1).
+    Called BEFORE the store is opened, so a declined vouch leaves nothing
+    behind — not even a freshly created store file.
+    """
+    _err("rekoll: WARNING: a directive is a STANDING RULE, not an ordinary memory.")
+    _err("  Every AI session that uses this memory store will be told to follow it,")
+    _err("  automatically, on every recall, until you delete it (rekoll forget <id>).")
+    if args.yes:
+        return True
+    if not _stdin_is_interactive():
+        _err("  (no terminal to ask for confirmation on - storing it now; pass --yes")
+        _err("   in scripts to make the choice explicit)")
+        return True
+    # The prompt goes to STDERR: stdout's contract is the machine-readable
+    # "Remembered: rk_..." line, and input() would echo the prompt to stdout.
+    sys.stderr.write("Store this standing rule? [y/N] ")
+    sys.stderr.flush()
+    answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
+    return answer.strip().lower() in ("y", "yes")
+
+
 def cmd_remember(args: argparse.Namespace) -> int:
+    from .firewall import DIRECTIVE_FLOOR  # deferred, like every non-model import here
+
+    kind = Kind(args.kind)
+    trust = TrustTier[args.trust.upper()]
+    # Gate BEFORE opening the store: at/above the floor this write will enter
+    # the instruction channel of every future recall (ADR-0034), so it must be
+    # vouched for (ADR-0017). Below the floor there is nothing to gate — the
+    # directive renders as data, never as a rule — so no question is asked.
+    if kind is Kind.DIRECTIVE and trust >= DIRECTIVE_FLOOR and not _vouch_standing_rule(args):
+        _err("Cancelled - nothing was stored.")
+        return 1
     mem = _open_memory(args)
     if mem is None:
         return 1
     try:
         record = mem.remember(
             args.text,
-            kind=Kind(args.kind),
+            kind=kind,
             source=args.source,
-            trust=TrustTier[args.trust.upper()],
+            trust=trust,
         )
     except ValueError as exc:
         return _fail(str(exc))
     finally:
         mem.close()
     _out(f"Remembered: {record.id}")
+    if kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR:
+        _err(
+            f"note: trust '{args.trust}' is below the standing-rule floor "
+            f"('{DIRECTIVE_FLOOR.name.lower()}') - stored as plain data; recalls "
+            "will NOT apply it as a rule (ADR-0017)"
+        )
     redactions = str(record.metadata.get("redactions") or "")
     if redactions:
         n = len(redactions.split(","))
@@ -796,10 +879,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("text", help="what to remember")
     p.add_argument("--kind", choices=_KIND_CHOICES, default=Kind.RAW_FACT.value,
-                   help="what sort of memory this is (default: %(default)s)")
+                   help="what sort of memory this is (default: %(default)s); "
+                        "'directive' is a STANDING RULE every AI session will follow, "
+                        "so the CLI asks you to confirm it")
     p.add_argument("--source", default="user", help="where it came from (default: %(default)s)")
     p.add_argument("--trust", choices=_TRUST_CHOICES, default=TrustTier.OWNER.name.lower(),
                    help="how much to trust the source (default: %(default)s)")
+    p.add_argument("--yes", "-y", action="store_true",
+                   help="answer yes to any confirmation question (for scripts; "
+                        "the standing-rule warning still prints)")
     _add_redact_pii_flag(p)
     p.set_defaults(func=cmd_remember)
 
