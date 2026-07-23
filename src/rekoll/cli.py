@@ -50,6 +50,11 @@ def _out(message: str = "") -> None:
 
 
 def _err(message: str = "") -> None:
+    if sys.stderr is None:
+        # fd 2 closed at launch: CPython sets sys.stderr to None, and
+        # print(file=None) silently falls back to STDOUT - which would leak
+        # warnings onto the machine-readable result stream. Drop the message.
+        return
     print(message, file=sys.stderr)
 
 
@@ -308,22 +313,60 @@ def _vouch_standing_rule(args: argparse.Namespace) -> bool:
     Returns True to store, False to cancel (the caller reports and exits 1).
     Called BEFORE the store is opened, so a declined vouch leaves nothing
     behind — not even a freshly created store file.
+
+    Every write here is BEST-EFFORT: informing is free, so it must never
+    cancel the write it informs about. These lines run before the store
+    opens, so a dead stderr (a closed `2>&1 | head` pipe) raising out of the
+    gate would abort a mint that stored fine on a quiet day — swallow and
+    proceed instead.
     """
-    _err("rekoll: WARNING: a directive is a STANDING RULE, not an ordinary memory.")
-    _err("  Every AI session that uses this memory store will be told to follow it,")
-    _err("  automatically, on every recall, until you delete it (rekoll forget <id>).")
+    try:
+        _err("rekoll: WARNING: a directive is a STANDING RULE, not an ordinary memory.")
+        _err("  Every AI session that uses this memory store will be told to follow it,")
+        _err("  automatically, on every recall, until you delete it (rekoll forget <id>).")
+    except (OSError, ValueError):
+        pass
     if args.yes:
         return True
     if not _stdin_is_interactive():
-        _err("  (no terminal to ask for confirmation on - storing it now; pass --yes")
-        _err("   in scripts to make the choice explicit)")
+        try:
+            _err("  (no terminal to ask for confirmation on - storing it now; pass --yes")
+            _err("   in scripts to make the choice explicit)")
+        except (OSError, ValueError):
+            pass
         return True
     # The prompt goes to STDERR: stdout's contract is the machine-readable
     # "Remembered: rk_..." line, and input() would echo the prompt to stdout.
-    sys.stderr.write("Store this standing rule? [y/N] ")
-    sys.stderr.flush()
+    try:
+        if sys.stderr is None:
+            return True  # fd 2 closed at launch: no way to show the question
+        sys.stderr.write("Store this standing rule? [y/N] ")
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        # A question the user cannot see is not a question: proceed (the
+        # warn-and-continue path) rather than wait invisibly for an answer
+        # or cancel the write over a dead stderr.
+        return True
     answer = sys.stdin.readline()  # '' on EOF (Ctrl+D / Ctrl+Z) == decline
     return answer.strip().lower() in ("y", "yes")
+
+
+def _stored_trust(mem, record_id: str) -> Optional[TrustTier]:
+    """The trust tier actually ON the stored row, or None when it can't be read.
+
+    ``remember()`` returns the ATTEMPTED write; the trust-aware upsert
+    (ADR-0023) never lowers trust for identical content, so the stored row may
+    keep a HIGHER tier than the attempt. A user-facing claim about how the
+    record will behave must describe the row, not the attempt — and when the
+    row cannot be read back (an adapter without ``get``, an id belonging to no
+    row), the honest answer is 'unknown': the caller then prints no claim at
+    all rather than one it cannot verify.
+    """
+    try:
+        found = mem.adapter.get(scope=mem.scope, ids=[record_id]).records
+    except Exception:
+        return None
+    return found[0].trust_tier if found else None
 
 
 def cmd_remember(args: argparse.Namespace) -> int:
@@ -341,6 +384,7 @@ def cmd_remember(args: argparse.Namespace) -> int:
     mem = _open_memory(args)
     if mem is None:
         return 1
+    stored_trust: Optional[TrustTier] = None
     try:
         record = mem.remember(
             args.text,
@@ -348,17 +392,38 @@ def cmd_remember(args: argparse.Namespace) -> int:
             source=args.source,
             trust=trust,
         )
+        if kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR:
+            # Read the row back BEFORE close: the note below must describe
+            # what the store now HOLDS, not what this command asked for.
+            stored_trust = _stored_trust(mem, record.id)
     except ValueError as exc:
         return _fail(str(exc))
     finally:
         mem.close()
     _out(f"Remembered: {record.id}")
     if kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR:
-        _err(
-            f"note: trust '{args.trust}' is below the standing-rule floor "
-            f"('{DIRECTIVE_FLOOR.name.lower()}') - stored as plain data; recalls "
-            "will NOT apply it as a rule (ADR-0017)"
-        )
+        if stored_trust is not None and stored_trust >= DIRECTIVE_FLOOR:
+            # The trust-aware upsert kept the existing, higher-trust row
+            # (ADR-0023): re-typing a rule at lower trust does NOT demote it.
+            # Claiming 'stored as plain data' here would be false exactly for
+            # the user trying to switch a rule off this way.
+            _err(
+                f"note: this exact text already exists as a standing rule at "
+                f"'{stored_trust.name.lower()}' trust, and trust never silently "
+                "falls (ADR-0023)."
+            )
+            _err(
+                "      It REMAINS an active standing rule. To remove it: "
+                "rekoll forget <the id above>"
+            )
+        elif stored_trust is not None:
+            _err(
+                f"note: trust '{args.trust}' is below the standing-rule floor "
+                f"('{DIRECTIVE_FLOOR.name.lower()}') - stored as plain data; recalls "
+                "will NOT apply it as a rule (ADR-0017)"
+            )
+        # stored_trust None: the row could not be read back, so no claim about
+        # its behavior is printed - never assert what we cannot verify.
     redactions = str(record.metadata.get("redactions") or "")
     if redactions:
         n = len(redactions.split(","))

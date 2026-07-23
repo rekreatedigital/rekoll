@@ -79,7 +79,10 @@ Useful flags:
   script with no terminal proceeds with the warning rather than hanging —
   loud, never locked. Storing a directive at `--trust unverified` skips the
   question entirely: it stays below the trust floor, so it is kept as plain
-  data and never applied as a rule (ADR-0017).
+  data and never applied as a rule (ADR-0017). Re-typing an *existing* rule at
+  a lower trust does not demote it — trust never silently falls (ADR-0023), and
+  the CLI tells you the rule is still active; to actually remove a rule, use
+  `rekoll forget`.
 - Ingested files are screened at `unverified` trust by default — the firewall
   treats them as content you didn't write, which is right for vendored code,
   scraped docs, and other people's notes. If a folder is entirely your own

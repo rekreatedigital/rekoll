@@ -85,6 +85,16 @@ class _TtyNeverRead(_TtyStdin):
         raise AssertionError("no prompt may be read in this scenario")
 
 
+class _DeadStderr:
+    """A closed-pipe stderr: every write raises, as after `2>&1 | head` exits."""
+
+    def write(self, s: str) -> int:
+        raise BrokenPipeError(32, "Broken pipe")  # errno.EPIPE
+
+    def flush(self) -> None:
+        raise BrokenPipeError(32, "Broken pipe")
+
+
 # -- top level ---------------------------------------------------------------
 
 def test_no_args_prints_help_and_exits_zero(capsys):
@@ -318,7 +328,9 @@ def test_below_floor_directive_skips_the_gate_and_notes_it_is_inert(project, cap
     """--trust unverified sits below DIRECTIVE_FLOOR: the record renders as
     data, never as an instruction (ADR-0017), so there is nothing to vouch for
     — no warning, no prompt even in a terminal (the fake's readline raises).
-    A short stderr note says the rule will not be applied."""
+    A short stderr note says the rule will not be applied. (For FRESH content
+    the stored row genuinely holds the below-floor tier, so the note is true —
+    the re-mint-lower case is pinned separately.)"""
     monkeypatch.setattr(sys, "stdin", _TtyNeverRead())
     assert _remember("someday switch to tabs", "--kind", "directive", "--trust", "unverified") == 0
     captured = capsys.readouterr()
@@ -326,6 +338,73 @@ def test_below_floor_directive_skips_the_gate_and_notes_it_is_inert(project, cap
     assert "below the standing-rule floor" in captured.err
     assert "NOT apply it as a rule" in captured.err
     assert captured.out.startswith("Remembered: rk_")
+
+
+def test_directive_mint_at_exactly_floor_trust_still_warns(project, capsys, monkeypatch):
+    """The floor is INCLUSIVE: a trusted_source directive DOES enter the
+    instruction channel (memory.py pins min_trust=int(DIRECTIVE_FLOOR);
+    ADR-0017 says trust_tier >= TRUSTED_SOURCE), so the vouch must fire at
+    exactly the floor too. Kills the `>=` -> `>` gate mutation, which survived
+    the whole suite before this test existed. Also pins the above-floor path's
+    silence on notes: no below-floor line, no ADR-0023 line."""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    assert _remember("always lint before commit", "--kind", "directive",
+                     "--trust", "trusted_source") == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" in captured.err
+    assert "below the standing-rule floor" not in captured.err
+    assert "already exists as a standing rule" not in captured.err
+    assert captured.out.startswith("Remembered: rk_")
+
+
+def test_remint_lower_of_an_existing_rule_never_prints_the_false_inert_note(project, capsys, monkeypatch):
+    """The trust-aware upsert (ADR-0023) NEVER lowers trust for identical
+    content: re-typing an owner rule at --trust unverified keeps the stored
+    row at (owner, active) and the rule keeps surfacing. The old note claimed
+    'stored as plain data; recalls will NOT apply it as a rule' — false on
+    both halves, exactly for the user trying to demote a rule by re-typing it
+    lower. The note must describe the ROW, not the attempt: say the rule
+    already exists at higher trust and REMAINS active."""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    assert _remember("always use tabs", "--kind", "directive", "--yes") == 0  # owner default
+    capsys.readouterr()
+    assert _remember("always use tabs", "--kind", "directive", "--trust", "unverified") == 0
+    captured = capsys.readouterr()
+    assert "NOT apply it as a rule" not in captured.err       # the lie is gone
+    assert "already exists as a standing rule at 'owner' trust" in captured.err
+    assert "REMAINS an active standing rule" in captured.err
+    assert "rekoll: WARNING" not in captured.err              # below-floor ask: no gate
+    # ... and the rule really does keep firing on an unrelated recall:
+    main(["recall", "completely unrelated query", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert "always use tabs" in payload["directives"]
+
+
+def test_directive_mint_survives_a_dead_stderr_and_still_stores(project, capsys, monkeypatch):
+    """Informing is free — so it must never CANCEL the write it informs about.
+    The gate's warning runs before the store opens; with the stderr pipe's
+    read end closed (`... 2>&1 | head -1`), an unguarded write raised out of
+    the gate and aborted a mint that stored fine on main. Best-effort writes:
+    the record still stores, exit 0."""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    monkeypatch.setattr(sys, "stderr", _DeadStderr())
+    assert _remember("always use tabs", "--kind", "directive") == 0
+    assert capsys.readouterr().out.startswith("Remembered: rk_")
+    assert main(["recall", "always tabs", "--kind", "directive"]) == 0  # really stored
+
+
+def test_stderr_none_mint_keeps_stdout_machine_clean(project, capsys, monkeypatch):
+    """fd 2 closed at launch: CPython sets sys.stderr to None, and an unguarded
+    print(file=None) falls back to STDOUT — five warning lines would land on
+    the machine-readable result stream. _err must drop the message instead:
+    stdout stays exactly the one Remembered line."""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    monkeypatch.setattr(sys, "stderr", None)
+    assert _remember("always use tabs", "--kind", "directive") == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Remembered: rk_")
+    assert len(out.splitlines()) == 1
+    assert "STANDING RULE" not in out
 
 
 def test_remember_rejects_content_that_sanitizes_to_nothing(project, capsys):
