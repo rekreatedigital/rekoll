@@ -40,11 +40,14 @@ jobs:
         # single version source) still says something else — e.g. 0.1.0.dev0.
         # The tag and the version bump land in the same release commit.
         if: github.event_name == 'release'
+        env:
+          # Event-controlled strings never interpolate into the script body —
+          # env indirection keeps a hostile tag name data, not code.
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           pkg="$(python -c 'import sys; sys.path.insert(0, "src"); from rekoll._version import __version__; print(__version__)')"
-          tag="${{ github.event.release.tag_name }}"
-          if [ "v${pkg}" != "${tag}" ]; then
-            echo "::error::release tag ${tag} does not match package version ${pkg}"
+          if [ "v${pkg}" != "${RELEASE_TAG}" ]; then
+            echo "::error::release tag ${RELEASE_TAG} does not match package version ${pkg}"
             exit 1
           fi
       - name: Smoke-test the wheel (console script included)

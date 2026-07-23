@@ -76,14 +76,14 @@ def test_screen_pieces_bounded_on_marker_dense_document():
     # bytes / 25k chunk caps). Post-fix it is O((pieces+spans) log spans); the old
     # O(pieces x spans) took MINUTES here — that is what this budget bounds. The
     # genuine work is ~1.5-3.6s across runners (see the module docstring's flake
-    # history), so 30s = ~10x worst observed; the subquadratic *scaling* is
-    # asserted runner-independently by the ratio test right below.
+    # history), so 40s = ~11x the worst observed 3.58s; the subquadratic
+    # *scaling* is asserted runner-independently by the ratio test right below.
     doc = "<user>\n" * 300_000  # ~2.1MB, well within max_file_bytes
     pieces = chunk_file("d.txt", doc)
     t0 = time.perf_counter()
     screen_pieces(doc, pieces)
     dt = time.perf_counter() - t0
-    assert dt < 30.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
+    assert dt < 40.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
 
 
 def test_screen_pieces_scales_subquadratically():
