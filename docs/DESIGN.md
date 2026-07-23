@@ -303,7 +303,7 @@ A pre-build review (migration, non-technical UX, BYO-AI reality, pre-mortem) add
 
 **Trust & survival (handle now):** **zero telemetry** as an architectural guarantee (ADR-0007); a private **security-disclosure** channel + threat model (SECURITY.md); single named **LICENSE** holder + a "you own/secure what you store" disclaimer; a **non-goals** list to decline scope creep in one link; **support via GitHub Discussions** (not a 24/7 Discord); **data-must-still-open-after-upgrade** (SemVer + git-auditable format); an **export** path (anti-lock-in); and a v1 **secret/PII write-path scrub** decision (basic scrub in v1).
 
-**New design additions folded into the plan:** `IngestionSource` reader interface + 4-5 first-party readers; an export command; two-slot AI config; the `rekoll-mcp` Node wrapper; zero-config first run (no questions); a bundled small local embedder (~30MB); a learning-loop model pre-flight check; a `rekoll doctor` self-check; cost guardrails (daily cap) for cloud learning; Windows-first QA + code-signing.
+**New design additions folded into the plan:** `IngestionSource` reader interface + 4-5 first-party readers; an export command; two-slot AI config; the `rekoll-mcp` Node wrapper; zero-config first run (no questions — the `rekoll init --wizard` interview is a separate opt-in, ADR-0036); a bundled small local embedder (~30MB); a learning-loop model pre-flight check; a `rekoll doctor` self-check; cost guardrails (daily cap) for cloud learning; Windows-first QA + code-signing.
 
 ---
 

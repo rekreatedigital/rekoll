@@ -31,6 +31,17 @@ rekoll init
 and tells you in plain language whether you're in semantic or keyword mode.
 It's safe to run twice.
 
+Prefer a guided start? `rekoll init --wizard` adds a short optional interview
+(three questions, Enter skips any): how AI tools should explain things to you,
+what every session should know about you or this project, and your preferred
+tone. Nothing is stored until you confirm once at the end — each answer then
+becomes a **standing rule** that every AI session using this store is told to
+follow, on every recall, until you remove it. The wizard prints each rule's id
+when it saves; `rekoll forget <id>` removes one. Re-running the wizard *adds*
+rules (identical answers are stored only once) — it never edits old ones, so
+forget the old rule first if you change your mind. Plain `rekoll init` never
+asks anything, so scripts and CI stay non-interactive.
+
 Then, day to day:
 
 ```bash
