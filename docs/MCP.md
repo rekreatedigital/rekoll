@@ -2,7 +2,7 @@
 
 Rekoll ships an MCP server, so **any MCP-capable agent** — Claude Code, Cursor,
 Windsurf, OpenClaw, your own — can use it as project memory in **any repo**,
-with no Python code to write. The agent gets five plain tools; everything runs
+with no Python code to write. The agent gets six plain tools; everything runs
 locally; nothing needs an API key.
 
 ## 1. Install
@@ -53,6 +53,7 @@ the working directory; that's how it knows which project's memory to open.
 | `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names), plus `secrets_skipped` (credential-shaped files the walk excluded) and `secrets_stored` (credential-shaped files ingested anyway — see below). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
 | `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
+| `board` | Read the shared live project board — what concurrent sessions did, decided, and left open. Takes **zero arguments** (see below). Returns `rules`, `majors`, `recent`, `pending_open`, `latest`. |
 
 ### `mode` — telling a degraded index from a healthy one
 
@@ -100,6 +101,48 @@ own trusted-tier directives — a model **cannot** write one over MCP (see the t
 model below), so returning them leaks nothing an injected instruction could
 exploit. A memory returned as `context` DATA is still never an instruction; only
 `directives` are rules, and only the operator can mint them.
+
+### `board` — the shared live project board (zero arguments)
+
+Several AI sessions often work on one project at once — an orchestrator, build
+workers, a chat session answering questions. Each session's context is
+private, so none knows what the others just did. `board` is the read they
+share (ADR-0035): call it **once at session start**, and again at natural task
+boundaries, to see what concurrent sessions did, decided, and left open. It
+takes **no arguments at all** — the board's size, scope, and trust gates are
+fixed by the server operator (the `--board-*` flags below), so a calling model
+can never widen what it sees.
+
+The payload has five keys, always present:
+
+- `rules` — the project's standing rules: the same always-on instructions
+  `recall` returns as `directives`. Follow them. They are the only part of the
+  board with instruction weight.
+- `majors` — the curated leg, oldest first: items a human posted with
+  `board=major` (a decision, the current state) or `board=pending` (open work
+  for some session to pick up). Curation is human-side by construction: MCP
+  writes are stamped `unverified`, below the board's trust floor, and
+  `remember` has no board input — nothing that transits a model can post here.
+- `recent` — the newest activity in this project's scope, newest first,
+  trust-labeled.
+- `pending_open` — the FULL count of open `pending` items (not capped by the
+  `majors` leg's limit).
+- `latest` — the newest stored `created_at` among the returned entries (null
+  on an empty board): a cheap freshness hint.
+
+Each entry in `majors`/`recent` carries `id`, `kind`, `trust`, `created_at`,
+`board` (`"major"`, `"pending"`, or null), and `text`. `created_at` is the
+**stored** ISO-8601 timestamp verbatim — never a computed age. `text` is one
+neutralized line of at most 200 characters — or **null when the record sits
+below the trust floor**: the entry is still visible (awareness), but the board
+never amplifies untrusted words to every session. Board entries are DATA in
+the recall sense; only `rules` are instructions.
+
+The payload is byte-deterministic (a pure function of stored rows): unchanged
+`latest` plus unchanged `pending_open` is a cheap freshness hint, and a
+byte-identical payload means nothing new happened. Items are marked done from
+the human side (`rekoll resolve <id>` or `Memory.resolve()`); there is
+deliberately **no MCP resolve tool** in v1.
 
 ### `secrets_stored` — a credential was indexed
 
@@ -149,6 +192,9 @@ any of these; that's the point.
 | `--trust` | `REKOLL_MCP_TRUST` | `unverified` | Trust stamped on MCP writes (`unverified` or `trusted_source`) |
 | `--root` | `REKOLL_MCP_ROOT` | launch directory | The only directory `ingest_path` may read |
 | `--redact-pii` | `REKOLL_MCP_REDACT_PII` | off | Redact emails / US SSNs / phone numbers from every write (secrets are always redacted) |
+| `--board-recent` | `REKOLL_MCP_BOARD_RECENT` | `10` | `board` tool: max activity-feed entries (0 disables the leg; ceiling 50) |
+| `--board-majors` | `REKOLL_MCP_BOARD_MAJORS` | `10` | `board` tool: max curated major/pending entries (0 disables the leg; ceiling 50) |
+| `--board-rules` | `REKOLL_MCP_BOARD_RULES` | `5` | `board` tool: max standing rules (0 disables the leg; ceiling 50) |
 
 > **`--redact-pii` is operator-only and not retroactive.** Like trust, it is
 > fixed at launch and appears in no tool schema, so the calling model can never

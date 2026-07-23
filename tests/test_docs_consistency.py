@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parents[1]
 # DOCUMENTED surface, so update DESIGN.md (§3/§6 actions; §0/§8/§12 tools),
 # docs/MCP.md, README.md, and these sets together.
 PINNED_DEFENSE_ACTIONS = {"ALLOW", "REDACT", "QUARANTINE"}
-PINNED_MCP_TOOLS = {"remember", "recall", "ingest_path", "forget", "status"}
+PINNED_MCP_TOOLS = {"remember", "recall", "ingest_path", "forget", "status", "board"}
 
 
 def _read(rel: str) -> str:
@@ -141,10 +141,15 @@ PINNED_MCP_INGEST_KEYS = {
     "files", "chunks", "skipped", "filtered",
     "secrets_skipped", "secrets_stored", "total",
 }
+# The board tool's payload (ADR-0035): the builder's CONSTANT key set plus the
+# constant per-entry key set. Both are LLM-facing, documented surfaces.
+PINNED_MCP_BOARD_KEYS = {"rules", "majors", "recent", "pending_open", "latest"}
+PINNED_MCP_BOARD_ENTRY_KEYS = {"id", "kind", "trust", "created_at", "board", "text"}
 
 
-def _live_payload_keys() -> tuple[set, set]:
-    """``recall`` / ``status`` result keys, from the real tool bodies.
+def _live_payload_keys() -> tuple[set, set, set, set]:
+    """``recall`` / ``status`` / ``board`` result keys, from the real tool
+    bodies.
 
     The bodies are plain functions (that is why they live outside
     ``build_server``), so this needs no ``mcp`` extra — it runs on the default
@@ -157,28 +162,44 @@ def _live_payload_keys() -> tuple[set, set]:
                  reranker=None, default_trust=TrustTier.UNVERIFIED)
     try:
         mem.remember("we chose Postgres over BigQuery for cost")
+        mem.remember("a curated board item", board="major",
+                     trust=TrustTier.TRUSTED_SOURCE)
         config = mcp_server.ServerConfig(
             path=":memory:", tenant="default", project="docs", agent="default",
             trust=TrustTier.UNVERIFIED, root=REPO,
         )
-        return set(mcp_server._recall(mem, "why postgres", 3)), set(mcp_server._status(mem, config))
+        board = mcp_server._board(mem, config)
+        assert board["majors"], "seed guarantees a curated entry to snapshot"
+        return (
+            set(mcp_server._recall(mem, "why postgres", 3)),
+            set(mcp_server._status(mem, config)),
+            set(board),
+            set(board["majors"][0]),
+        )
     finally:
         mem.close()
 
 
 def test_mcp_tool_result_keys_are_pinned():
-    recall_keys, status_keys = _live_payload_keys()
+    recall_keys, status_keys, board_keys, board_entry_keys = _live_payload_keys()
     assert recall_keys == PINNED_MCP_RECALL_KEYS
     assert status_keys == PINNED_MCP_STATUS_KEYS
     assert set(mcp_server._INGEST_RESULT_KEYS) == PINNED_MCP_INGEST_KEYS
+    assert board_keys == PINNED_MCP_BOARD_KEYS
+    assert board_entry_keys == PINNED_MCP_BOARD_ENTRY_KEYS
 
 
-def test_mcp_md_documents_every_recall_and_ingest_result_key():
-    """docs/MCP.md enumerates these two payloads explicitly, so every key an
+def test_mcp_md_documents_every_recall_ingest_and_board_result_key():
+    """docs/MCP.md enumerates these payloads explicitly, so every key an
     agent can read must appear there. (``status``'s keys are self-describing
-    prose in the same table; its snapshot above is the tripwire.)"""
+    prose in the same table; its snapshot above is the tripwire.) The board's
+    entry keys are included: an agent reads them off every ``majors``/``recent``
+    element."""
     mcp_md = _read("docs/MCP.md")
-    for key in PINNED_MCP_RECALL_KEYS | PINNED_MCP_INGEST_KEYS:
+    for key in (
+        PINNED_MCP_RECALL_KEYS | PINNED_MCP_INGEST_KEYS
+        | PINNED_MCP_BOARD_KEYS | PINNED_MCP_BOARD_ENTRY_KEYS
+    ):
         assert f"`{key}`" in mcp_md, (
             f"docs/MCP.md never names the `{key}` key that an MCP tool returns — "
             "an agent reads this payload; document it in the same PR that adds it"

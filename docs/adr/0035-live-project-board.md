@@ -218,8 +218,8 @@ identity mechanism to back it.
 
 * Concurrent sessions on one store finally share "what is current" — bounded,
   deterministic, trust-labeled, injection-neutralized, and identical no matter
-  which door serves it (the builder is the single rendering path Lane B and the
-  CLI/MCP lanes will call).
+  which door serves it (the builder is the single rendering path the SDK
+  facade and the CLI/MCP doors all call).
 * The storage contract grows four OPTIONAL methods + one typed result
   (`BoardSnapshot`); a third-party adapter that skips them keeps working, and
   one that implements them is held by three new conformance checks in

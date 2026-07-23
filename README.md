@@ -128,8 +128,8 @@ pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll" 
 claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
 ```
 
-The agent gets five tools (`remember`, `recall`, `ingest_path`, `forget`,
-`status`) over this project's private store. Scope and trust are pinned
+The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
+`status`, `board`) over this project's private store. Scope and trust are pinned
 server-side — the calling model can't hop projects or promote its own writes,
 and everything it recalls arrives as firewalled DATA, never instructions. Setup
 for Cursor + generic clients, the trust model, and all knobs: **[docs/MCP.md](docs/MCP.md)**.
