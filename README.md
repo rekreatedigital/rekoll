@@ -3,6 +3,17 @@
 **Injection-hardened, storage-agnostic, private memory for AI agents.**
 Give your agent durable memory of a whole codebase + database — that it can't be tricked into trusting, and that never leaves your infrastructure.
 
+[![CI](https://github.com/rekreatedigital/rekoll/actions/workflows/ci.yml/badge.svg)](https://github.com/rekreatedigital/rekoll/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+![Python 3.10 – 3.13](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-3776ab.svg)
+![Local-first: no API key](https://img.shields.io/badge/local--first-no%20API%20key-0aa344.svg)
+[![Security policy](https://img.shields.io/badge/security-policy-8957e5.svg)](SECURITY.md)
+
+<p align="center">
+  <img src="assets/demo.svg" width="860"
+       alt="Terminal session: rekoll init creates a local store and reports semantic search mode; rekoll remember saves a decision; rekoll recall returns it with its trust tier — all with no API key.">
+</p>
+
 > **Status: pre-alpha, but usable.** Working today: the `rekoll` CLI, the
 > `Memory` facade, local semantic + keyword (hybrid) search with cross-encoder
 > reranking, the injection firewall, a bring-your-own-database adapter contract,
@@ -153,6 +164,14 @@ pytest
 
 ## License
 
-[MIT](LICENSE) © Rekreate Digital. You own and are responsible for whatever data you store with Rekoll.
+[MIT](LICENSE) © [Rekreate Digital](https://rekreatedigital.com). You own and are responsible for whatever data you store with Rekoll.
 
-*Rekoll is not affiliated with [Recoll](https://www.recoll.org/), the desktop full-text search tool.*
+---
+
+<p align="center">
+  Built and maintained by <a href="https://rekreatedigital.com"><strong>Rekreate Digital</strong></a><br>
+  <sub>We design and build AI systems that hold up in production —
+  <a href="https://rekreatedigital.com">work with us</a>.</sub>
+</p>
+
+<sub>Rekoll is not affiliated with <a href="https://www.recoll.org/">Recoll</a>, the desktop full-text search tool.</sub>

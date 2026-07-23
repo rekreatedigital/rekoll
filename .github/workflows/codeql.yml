@@ -1,0 +1,45 @@
+name: CodeQL
+
+# Static security analysis (DESIGN §9). Free on public repos. This is the
+# ADVANCED setup — a committed, SHA-pinned workflow rather than GitHub's
+# click-to-enable default setup — so the scan config is version-controlled and
+# reviewable like every other job here, and a re-pointed tag cannot change what
+# runs. Findings land in the repo's Security tab (Code scanning alerts).
+#
+# Deliberately NOT a required status check: it is an advisory signal, and a
+# solo maintainer should never be merge-blocked by a scanner's queue time.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly sweep so newly-published CodeQL queries reach existing code even
+    # when nothing changes. Fixed early-Monday UTC slot.
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (python)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required to upload results to the Security tab
+    steps:
+      # SHA-pinned to match ci.yml's supply-chain posture.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          languages: python
+          # security-extended adds lower-severity security queries on top of the
+          # default suite; the codebase is small enough that the extra signal is
+          # worth the extra runtime.
+          queries: security-extended
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: "/language:python"
