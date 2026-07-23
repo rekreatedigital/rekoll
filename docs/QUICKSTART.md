@@ -1,9 +1,13 @@
 # Quickstart — pick your door
 
 Rekoll gives your project a private, durable memory that AI tools can use but
-can't be tricked by. Everything below runs on your machine: **no API key,
-nothing leaves your box** — semantic mode downloads its small model once at
-first use, then saving and searching work fully offline.
+can't be tricked by. Everything below runs on your machine: **no API key, no
+telemetry** (usage tracking — Rekoll phones home to no one), **nothing leaves
+your box**, and **nothing you store is ever used to train an AI**. That's not a
+policy that could quietly change — the default install simply contains no code
+that could send your data anywhere, and CI enforces it (ADR-0007). Semantic
+mode downloads its small model once at first use, then saving and searching
+work fully offline.
 
 Rekoll isn't on PyPI yet. Until it is, install from git:
 

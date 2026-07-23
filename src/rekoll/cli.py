@@ -261,6 +261,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     _out('  print(mem.recall("why postgres?").context())')
     _out()
     _out("Everything stays on this machine. No API key. Reads never call an LLM.")
+    # Both promises below are true-by-code, not policy (ADR-0007): the default
+    # install CONTAINS no telemetry or upload code, and a CI network-egress
+    # test keeps it that way.
+    _out("No telemetry (usage tracking): Rekoll phones home to no one - nothing")
+    _out("you do here is sent anywhere, and nothing you store is ever used to")
+    _out("train an AI.")
     if args.wizard:
         return _run_init_wizard(args)
     return 0

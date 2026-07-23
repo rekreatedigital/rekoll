@@ -211,6 +211,20 @@ def test_init_memory_path_explains_and_creates_nothing(project, capsys):
     assert not (project / ".rekoll").exists()
 
 
+def test_init_makes_the_full_privacy_promise(project, capsys):
+    """The W5 discriminating test: the init success banner must state ALL the
+    honest-privacy halves where a new user actually looks — local-only, zero
+    telemetry (ADR-0007: enforced by the ABSENCE of code, not policy), and
+    never-used-to-train-an-AI. `init --wizard` prints this same banner first,
+    so the promise rides both paths."""
+    assert main(["init"]) == 0
+    out = capsys.readouterr().out
+    assert "Everything stays on this machine" in out
+    assert "No telemetry" in out
+    assert "sent anywhere" in out          # the plain-English half of the claim
+    assert "train an AI" in out
+
+
 # -- init --wizard: the opt-in first-run interview (ADR-0036) ----------------
 
 def _wizard_directive_rows():
