@@ -34,7 +34,12 @@ from pathlib import Path
 from typing import Optional
 
 from ._version import __version__
-from .adapters.base import BOARD_LIMIT_CEILING, BOARD_TAG_MAJOR, BOARD_TAG_PENDING
+from .adapters.base import (
+    BOARD_LIMIT_CEILING,
+    BOARD_METADATA_KEY,
+    BOARD_TAG_MAJOR,
+    BOARD_TAG_PENDING,
+)
 from .model import Kind, Status, TrustTier
 
 DEFAULT_DB_PATH = "./.rekoll/memory.db"
@@ -565,22 +570,23 @@ def _vouch_standing_rule(args: argparse.Namespace) -> bool:
     return answer.strip().lower() in ("y", "yes")
 
 
-def _stored_trust(mem, record_id: str) -> Optional[TrustTier]:
-    """The trust tier actually ON the stored row, or None when it can't be read.
+def _stored_row(mem, record_id: str):
+    """The row actually IN the store, or None when it can't be read back.
 
     ``remember()`` returns the ATTEMPTED write; the trust-aware upsert
-    (ADR-0023) never lowers trust for identical content, so the stored row may
-    keep a HIGHER tier than the attempt. A user-facing claim about how the
-    record will behave must describe the row, not the attempt — and when the
-    row cannot be read back (an adapter without ``get``, an id belonging to no
-    row), the honest answer is 'unknown': the caller then prints no claim at
-    all rather than one it cannot verify.
+    (ADR-0023) never lowers trust for identical content — a lower-trust
+    re-write is dropped ENTIRELY, so the stored row may keep a HIGHER tier
+    AND none of the attempt's metadata (e.g. a ``--board`` tag). Every
+    user-facing claim below must describe the row, not the attempt — and when
+    the row cannot be read back (an adapter without ``get``, an id belonging
+    to no row), the honest answer is 'unknown': the caller then prints no
+    claim at all rather than one it cannot verify.
     """
     try:
         found = mem.adapter.get(scope=mem.scope, ids=[record_id]).records
     except Exception:
         return None
-    return found[0].trust_tier if found else None
+    return found[0] if found else None
 
 
 def cmd_remember(args: argparse.Namespace) -> int:
@@ -601,6 +607,7 @@ def cmd_remember(args: argparse.Namespace) -> int:
     mem = _open_memory(args)
     if mem is None:
         return 1
+    stored = None
     stored_trust: Optional[TrustTier] = None
     try:
         record = mem.remember(
@@ -613,8 +620,10 @@ def cmd_remember(args: argparse.Namespace) -> int:
         if (kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR) or args.board is not None:
             # Read the row back BEFORE close: the notes below must describe
             # what the store now HOLDS, not what this command asked for
-            # (the trust-aware upsert may have kept a higher-trust row).
-            stored_trust = _stored_trust(mem, record.id)
+            # (the trust-aware upsert may have kept a higher-trust row —
+            # and dropped this attempt's board tag with it).
+            stored = _stored_row(mem, record.id)
+            stored_trust = stored.trust_tier if stored is not None else None
     except ValueError as exc:
         return _fail(str(exc))
     finally:
@@ -646,7 +655,27 @@ def cmd_remember(args: argparse.Namespace) -> int:
     if args.board is not None and record.status is not Status.QUARANTINED:
         # Board notes describe the STORED row (like the directive notes above).
         # A quarantined write is covered by the quarantine note below instead.
-        if kind is Kind.DIRECTIVE and stored_trust is not None and stored_trust >= DIRECTIVE_FLOOR:
+        stored_board = None
+        if stored is not None and stored.metadata.get(BOARD_METADATA_KEY) is not None:
+            stored_board = str(stored.metadata.get(BOARD_METADATA_KEY))
+        if stored is not None and stored_board != args.board:
+            # The trust-aware upsert kept an existing, higher-trust row and
+            # dropped this write ENTIRELY (ADR-0023) — including its board
+            # tag. The notes below would describe a tag that is NOT in the
+            # store; say what actually happened instead (a PR #62 review
+            # finding: the old gate read only trust and printed a false
+            # dual-leg note here, or nothing at all).
+            _err(
+                f"note: this exact text already exists at "
+                f"'{stored.trust_tier.name.lower()}' trust, so this write - including "
+                f"its board={args.board!r} tag - was NOT stored (trust never "
+                "silently falls, ADR-0023)."
+            )
+            _err(
+                "      The board does NOT show it. To curate the existing record, "
+                "re-run at its original trust, or forget it first."
+            )
+        elif kind is Kind.DIRECTIVE and stored_trust is not None and stored_trust >= DIRECTIVE_FLOOR:
             # Verified behavior, allowed on purpose: the rules leg and the
             # curated leg do NOT dedup, so a board-tagged standing rule shows
             # up in both. Inform loudly (the one surprise: resolving the
@@ -909,10 +938,17 @@ def _board_entry_lines(entry: dict) -> None:
     )
 
 
-def _render_board_human(scope_key: str, path: str, payload: dict) -> None:
+def _render_board_human(
+    scope_key: str, path: str, payload: dict, legs_requested: bool = True
+) -> None:
     """The compact human board: store+scope header (the status convention, so a
     session can SEE which board it is reading — the anti-fragmentation graft),
-    then rules, curated items oldest-first, and the newest activity."""
+    then rules, curated items oldest-first, and the newest activity.
+
+    ``legs_requested`` is False when the caller disabled every leg (all limits
+    0): an empty render then means 'you asked for nothing', not 'the board is
+    empty' — claiming emptiness there would be false on a board that holds
+    items (a PR #62 review finding)."""
     if path == ":memory:":
         _out("Store:  :memory: (temporary)")
     else:
@@ -925,7 +961,10 @@ def _render_board_human(scope_key: str, path: str, payload: dict) -> None:
     )
     if empty:
         _out()
-        _out('Board is empty. Post with: rekoll remember "..." --board major')
+        if legs_requested:
+            _out('Board is empty. Post with: rekoll remember "..." --board major')
+        else:
+            _out("All board legs disabled (--recent/--majors/--rules 0).")
         return
     if payload["rules"]:
         _out()
@@ -997,7 +1036,10 @@ def cmd_board(args: argparse.Namespace) -> int:
         # recall --json: stored content must survive a cp1252 console.
         _out(json.dumps(payload))
         return 0
-    _render_board_human(scope.key(), args.path, payload)
+    _render_board_human(
+        scope.key(), args.path, payload,
+        legs_requested=bool(args.rules or args.majors or args.recent),
+    )
     return 0
 
 
@@ -1482,6 +1524,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--majors", type=_board_limit, default=10, metavar="N",
                    help="max curated major/pending entries (default: %(default)s; 0 "
                         f"disables the leg; ceiling {BOARD_LIMIT_CEILING})")
+    # The literal 5 == board.DEFAULT_BOARD_RULES_LIMIT. Restated because this
+    # module defers every non-model import (importing .board here would pull
+    # firewall at CLI start); pinned equal by test_cli_board.py so it can't
+    # drift (a PR #62 review finding).
     p.add_argument("--rules", type=_board_limit, default=5, metavar="N",
                    help="max standing rules (default: %(default)s - the same five "
                         "recall pins; 0 disables the leg; ceiling "

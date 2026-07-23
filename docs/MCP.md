@@ -120,9 +120,12 @@ The payload has five keys, always present:
   board with instruction weight.
 - `majors` — the curated leg, oldest first: items a human posted with
   `board=major` (a decision, the current state) or `board=pending` (open work
-  for some session to pick up). Curation is human-side by construction: MCP
-  writes are stamped `unverified`, below the board's trust floor, and
-  `remember` has no board input — nothing that transits a model can post here.
+  for some session to pick up). Curation is human-side by construction:
+  `remember` has no board input, so nothing that transits a model can post
+  here — at ANY configured trust. (At the default `unverified` trust, model
+  writes also sit below the board's trust floor; with `--trust trusted_source`
+  they reach the floor, which affects only whether their text shows in the
+  `recent` leg — never curation.)
 - `recent` — the newest activity in this project's scope, newest first,
   trust-labeled.
 - `pending_open` — the FULL count of open `pending` items (not capped by the

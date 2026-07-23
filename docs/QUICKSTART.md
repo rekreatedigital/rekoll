@@ -158,8 +158,8 @@ error (scope isolation working as designed). Pass the triple explicitly at
 every door:
 
 ```bash
-rekoll board --path /team/mem.db --project myapp                            # CLI door
-claude mcp add rekoll -- rekoll-mcp --path /team/mem.db --project myapp     # MCP door
+rekoll board --path /team/mem.db --tenant default --project myapp --agent default   # CLI door
+claude mcp add rekoll -- rekoll-mcp --path /team/mem.db --tenant default --project myapp --agent default  # MCP door
 ```
 
 One machine only: the shared medium is the SQLite file itself, and SQLite's

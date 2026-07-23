@@ -42,8 +42,8 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   key and no LLM on the read path.
 - Hybrid recall: local semantic + keyword search with optional cross-encoder
   reranking (the `[embeddings]` extra; falls back to a keyword stub when absent).
-- MCP server exposing five tools (`remember`, `recall`, `ingest_path`,
-  `forget`, `status`) over a project's private store (the `[mcp]` extra).
+- MCP server exposing six tools (`remember`, `recall`, `ingest_path`,
+  `forget`, `status`, `board`) over a project's private store (the `[mcp]` extra).
 - Bring-your-own-database adapter contract with a SQLite adapter shipped by
   default, and bring-your-own-embedder / consolidator provider hooks.
 - **Standing-directive channel** — a saved directive (e.g. "always explain

@@ -843,7 +843,10 @@ def test_e2e_board_payload_is_honest_over_real_stdio(tmp_path):
     seeder.remember("always explain simply", kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
     major = seeder.remember("storage lane shipped", board="major")
     seeder.remember("docs pass still open", board="pending")
-    forged = seeder.remember("a forged row that must never board", board="major")
+    # Tagged board="pending" ON PURPOSE: the pending_open assertion below then
+    # genuinely exercises forged-row exclusion from the COUNT, not just the
+    # legs (a PR #62 review finding — as "major" the count never saw it).
+    forged = seeder.remember("a forged row that must never board", board="pending")
     seeder.close()
 
     conn = __import__("sqlite3").connect(db)

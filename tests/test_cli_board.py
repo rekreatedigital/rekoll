@@ -484,3 +484,51 @@ def test_quarantined_board_write_says_the_tag_is_inert(project, capsys):
     payload = _board_json(capsys)
     assert payload["majors"] == [] and payload["recent"] == []
     assert payload["pending_open"] == 0
+
+
+# --- PR #62 review regressions: notes must describe what the store HOLDS ----
+
+def test_board_tag_dropped_by_trust_upsert_prints_honest_note_for_directive(project, capsys):
+    """Re-remembering an existing OWNER rule at lower trust with --board: the
+    trust-aware upsert (ADR-0023) drops the write - tag included. The CLI must
+    say the tag was NOT stored, and must NOT print the dual-leg 'TWICE' note
+    (which would describe a tag that is not in the store)."""
+    text = "always use tabs"
+    assert main(["remember", text, "--kind", "directive", "--yes"]) == 0
+    capsys.readouterr()
+    assert main([
+        "remember", text, "--kind", "directive",
+        "--trust", "trusted_source", "--board", "major", "--yes",
+    ]) == 0
+    err = capsys.readouterr().err
+    assert "was NOT stored" in err
+    assert "TWICE" not in err
+    assert main(["board", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["majors"] == []
+
+
+def test_board_tag_dropped_by_trust_upsert_is_not_silent_for_plain_facts(project, capsys):
+    """The same drop for a non-directive: previously the CLI printed only
+    'Remembered:' - a silent false success while the board never shows the
+    item. The honest not-stored note must appear, and the board must agree."""
+    text = "we chose postgres"
+    assert main(["remember", text]) == 0  # owner trust by default
+    capsys.readouterr()
+    assert main(["remember", text, "--trust", "trusted_source", "--board", "major"]) == 0
+    err = capsys.readouterr().err
+    assert "was NOT stored" in err
+    assert main(["board", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["majors"] == []
+
+
+def test_cli_rules_default_equals_the_shared_constant():
+    """cli.py restates the rules default as a literal 5 (the module defers all
+    non-model imports, so it can't import .board at parser-build time); this
+    pin makes any drift from DEFAULT_BOARD_RULES_LIMIT loud."""
+    from rekoll.board import DEFAULT_BOARD_RULES_LIMIT
+    from rekoll.cli import _build_parser
+
+    args = _build_parser().parse_args(["board"])
+    assert args.rules == DEFAULT_BOARD_RULES_LIMIT
