@@ -13,7 +13,7 @@ searching work fully offline.
 Rekoll isn't on PyPI yet. Until it is, install from git:
 
 ```bash
-pip install "rekoll[embeddings] @ git+https://github.com/ryankyleocampo-github/rekoll"
+pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"
 ```
 
 That gives you real semantic search (a small local model, downloaded once).
@@ -204,7 +204,7 @@ Rekoll ships an MCP server — any MCP-capable agent (Claude Code, Cursor,
 Windsurf, …) can use this project's memory, no Python code to write:
 
 ```bash
-pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll"   # or: pip install -e "/path/to/rekoll[mcp]"
+pip install "rekoll[mcp] @ git+https://github.com/rekreatedigital/rekoll"   # or: pip install -e "/path/to/rekoll[mcp]"
 claude mcp add rekoll -- rekoll-mcp   # Claude Code; other clients: see MCP.md
 ```
 

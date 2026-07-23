@@ -9,7 +9,7 @@ Rekoll is maintained by named, accountable people — no pseudonyms (see
 
 ## Contact
 
-- **General:** open a [Discussion](https://github.com/ryankyleocampo-github/rekoll/discussions) or an issue.
+- **General:** open a [Discussion](https://github.com/rekreatedigital/rekoll/discussions) or an issue.
 - **Security:** never public — see [SECURITY.md](SECURITY.md) for private reporting.
 - **Code of Conduct:** conduct@rekreatedigital.com
 

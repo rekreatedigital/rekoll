@@ -4,11 +4,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔒 Report a security vulnerability (private)
-    url: https://github.com/ryankyleocampo-github/rekoll/security/advisories/new
+    url: https://github.com/rekreatedigital/rekoll/security/advisories/new
     about: Never file security issues publicly. Use private reporting — see SECURITY.md.
   - name: 💬 Questions & ideas (Discussions)
-    url: https://github.com/ryankyleocampo-github/rekoll/discussions
+    url: https://github.com/rekreatedigital/rekoll/discussions
     about: Ask questions, share ideas, or float a feature before opening an issue.
   - name: 🚫 Read the non-goals first
-    url: https://github.com/ryankyleocampo-github/rekoll/blob/main/NON_GOALS.md
+    url: https://github.com/rekreatedigital/rekoll/blob/main/NON_GOALS.md
     about: Some things are deliberately out of scope. A 2-minute read may save you time.

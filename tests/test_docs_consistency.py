@@ -206,6 +206,25 @@ def test_mcp_md_documents_every_recall_ingest_and_board_result_key():
         )
 
 
+def test_readme_recall_json_keys_match_the_cli_payload():
+    """The README once advertised ``{context, ids, mode, count}`` for
+    ``rekoll recall --json`` while the payload had grown to seven keys (the
+    PR #62 review's drift finding). The CLI's ``_recall_payload`` is
+    key-identical to the MCP ``recall`` tool by design (its docstring, plus the
+    three-doors parity suite), and the MCP side is snapshotted live above — so
+    pinning the README's enumerated set to ``PINNED_MCP_RECALL_KEYS`` closes
+    the loop: the next added key fails here until the README names it too."""
+    readme = _read("README.md")
+    m = re.search(r"`rekoll recall --json` emits\s*\n?`\{([^}]*)\}`", readme)
+    assert m, "README no longer enumerates the recall --json keys"
+    advertised = {k.strip() for k in m.group(1).split(",")}
+    assert advertised == PINNED_MCP_RECALL_KEYS, (
+        f"README advertises recall --json keys {sorted(advertised)} but the "
+        f"payload's keys are {sorted(PINNED_MCP_RECALL_KEYS)} — update the "
+        "README sentence and this pin in the same PR"
+    )
+
+
 def test_mcp_md_explains_the_degraded_mode_an_agent_must_act_on():
     """`mode` is only useful if the doc says what the degraded value MEANS —
     the whole point of issue #25 is that a degraded ranking is otherwise
