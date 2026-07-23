@@ -141,10 +141,19 @@ def test_init_reports_search_mode_in_plain_language(project, capsys, monkeypatch
     # In a bare env this is keyword mode; with the extra it is semantic. Pin both.
     monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: False)
     assert main(["init"]) == 0
-    assert 'pip install "rekoll[embeddings]"' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert 'pip install "rekoll[embeddings]"' in out
+    # Keyword mode fetches nothing, so it must not promise (or disclose) a
+    # model download.
+    assert "a download, not an upload" not in out
     monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: True)
     assert main(["init"]) == 0
-    assert "real semantic search" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "real semantic search" in out
+    # Semantic mode's one-time model fetch is real outbound traffic the egress
+    # tests deliberately exempt, so the banner that promises "nothing is sent
+    # anywhere" must disclose it right where it makes that promise.
+    assert "a download, not an upload" in out
 
 
 def test_init_appends_to_existing_gitignore_preserving_content(project, capsys):
@@ -209,6 +218,20 @@ def test_init_memory_path_explains_and_creates_nothing(project, capsys):
     assert "temporary" in out and "nothing to set up" in out
     assert "store file: :memory:" not in out
     assert not (project / ".rekoll").exists()
+
+
+def test_init_makes_the_full_privacy_promise(project, capsys):
+    """The W5 discriminating test: the init success banner must state ALL the
+    honest-privacy halves where a new user actually looks — local-only, zero
+    telemetry (ADR-0007: enforced by the ABSENCE of code, not policy), and
+    never-used-to-train-an-AI. `init --wizard` prints this same banner first,
+    so the promise rides both paths."""
+    assert main(["init"]) == 0
+    out = capsys.readouterr().out
+    assert "Everything stays on this machine" in out
+    assert "No telemetry" in out
+    assert "sent anywhere" in out          # the plain-English half of the claim
+    assert "train an AI" in out
 
 
 # -- init --wizard: the opt-in first-run interview (ADR-0036) ----------------

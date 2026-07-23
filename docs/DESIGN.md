@@ -49,6 +49,9 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - The RRF **interleave** alternative (§7); real **LongMemEval/LoCoMo** gates (only a
   keyword smoke fixture exists); the Node/`npx` MCP wrapper, the REST API,
   DB-schema/row ingestion, and the TS client.
+- The SDK's planned `wrap(llm_client, scope=...)` two-line on-ramp (§8) —
+  recall-before, remember-after around a caller's own LLM client. No `wrap`
+  exists in the package today.
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named
@@ -202,7 +205,7 @@ Eight cooperating layers:
 Progressive disclosure is the enforced law: zero-config local-private-LLM-free defaults; every powerful capability behind exactly **three uniform knobs** — `storage={provider, config}`, `model={base_url,...}` (only for optional learning), `learning={consolidate, reflect, freshness}` (off by default). A CI test asserts the zero-arg path needs no key and calls no LLM.
 
 - **Door 1 — MCP server** (vibe-coder default in Claude Code/Cursor/Windsurf): a deliberately **small** surface — **5 shipped tools** (`remember`, `recall`, `ingest_path`, `forget`, `status`; see [MCP.md](MCP.md)) — rejecting MemPalace's 33-tool ontology; `recall_schema` + `memory_review` are planned additions gated on the layers they expose (P5 schema ingestion, L4 review). Registration goes through the host's own CLI (`claude mcp add rekoll -- rekoll-mcp`, never hand-editing JSON; the CLI is `rekoll` — there is no `mem` command). Still planned around it: idempotent host-detecting auto-registration, repo mining, prompted read-only DB-schema introspection, and Stop + PreCompact auto-capture hooks through one cross-platform capture entrypoint (Windows-safe; auto-captures land at low trust so the firewall can quarantine).
-- **Door 2 — one-line Python SDK:** `pip install rekoll` → `from rekoll import Memory; mem = Memory()` — zero-config, local, private, no key, no LLM on reads. `remember/recall/forget` mirror the MCP verbs 1:1 (async twins available); `scope` is the one tenancy primitive; results are plain dataclasses (`.text/.score/.scope/.provenance/.trust`); `wrap(llm_client, scope=...)` is the two-line on-ramp (recall-before, remember-after).
+- **Door 2 — one-line Python SDK:** `pip install rekoll` → `from rekoll import Memory; mem = Memory()` — zero-config, local, private, no key, no LLM on reads. `remember/recall/forget` mirror the MCP verbs 1:1 (async twins available); `scope` is the one tenancy primitive; results are plain dataclasses (`.text/.score/.scope/.provenance/.trust`); a planned `wrap(llm_client, scope=...)` two-line on-ramp (recall-before, remember-after) is not yet shipped.
 - **Door 3 — self-host service:** one container, BYO key, point at your Supabase/Postgres, REST + MCP-over-HTTP, per-tenant, local/private still the in-container default, auth **deny-by-default**.
 
 A stable enumerated public contract (SDK verbs, MCP tool schemas, REST `/v1` routes, CLI, config precedence) is frozen under SemVer and snapshot-tested so accidental breaks fail CI.
