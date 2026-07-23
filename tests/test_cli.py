@@ -9,6 +9,7 @@ the 'embeddings' extra installed.
 from __future__ import annotations
 
 import codecs
+import io
 import json
 import os
 import sqlite3
@@ -52,6 +53,36 @@ def project(tmp_path, monkeypatch):
 
 def _remember(text: str, *extra: str) -> int:
     return main(["remember", text, *extra])
+
+
+# Stdin fakes for the standing-rule vouch (the directive confirmation gate).
+# Tests must pin stdin EXPLICITLY: under plain pytest stdin is already non-TTY,
+# but under `pytest -s` it can be a real terminal — an unpinned test would hang
+# on the prompt. A raising readline turns "prompted when it must not" into a
+# clean assertion failure instead of a hang.
+
+class _PipeStdin:
+    """A non-TTY stdin (a script/pipe) whose readline PROVES no prompt ran."""
+
+    def isatty(self) -> bool:
+        return False
+
+    def readline(self) -> str:  # pragma: no cover - reaching this IS the failure
+        raise AssertionError("the CLI must never prompt without a terminal")
+
+
+class _TtyStdin(io.StringIO):
+    """A fake interactive terminal: isatty() True, typed input pre-loaded."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+class _TtyNeverRead(_TtyStdin):
+    """An interactive terminal that PROVES the prompt was skipped entirely."""
+
+    def readline(self) -> str:  # pragma: no cover - reaching this IS the failure
+        raise AssertionError("no prompt may be read in this scenario")
 
 
 # -- top level ---------------------------------------------------------------
@@ -171,7 +202,10 @@ def test_remember_stores_and_prints_the_id_on_stdout(project, capsys):
     assert (project / ".rekoll" / "memory.db").is_file()
 
 
-def test_remember_honors_kind_and_trust_flags(project, capsys):
+def test_remember_honors_kind_and_trust_flags(project, capsys, monkeypatch):
+    # Above-floor directive => the vouch warning fires; pin stdin non-TTY so
+    # this can never prompt (nor hang under `pytest -s`).
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
     assert _remember("always run the linter first", "--kind", "directive", "--trust", "curated") == 0
     capsys.readouterr()
     assert main(["status"]) == 0
@@ -179,6 +213,119 @@ def test_remember_honors_kind_and_trust_flags(project, capsys):
     directive_lines = [ln for ln in out.splitlines() if ln.strip().startswith("directive:")]
     assert directive_lines and directive_lines[0].strip().endswith("1")
     assert main(["recall", "linter", "--kind", "directive"]) == 0
+
+
+# -- remember --kind directive: the standing-rule vouch (ADR-0017 at Door 1) --
+
+def test_directive_mint_at_default_trust_warns_standing_rule_on_stderr(project, capsys, monkeypatch):
+    """THE discriminating test for the W4 lane: on main, a directive minted at
+    the --trust DEFAULT (owner) stores with zero friction — the CLI silently
+    supplies the 'explicit' trust ADR-0017 exists to demand. Now the highest-
+    power write in the product must warn loudly on stderr — and stderr only:
+    stdout keeps its machine contract (the stored-id line)."""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    assert _remember("always use tabs", "--kind", "directive") == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" in captured.err
+    assert "rekoll forget" in captured.err            # the way out is named
+    assert captured.out.startswith("Remembered: rk_")
+    assert "STANDING RULE" not in captured.out        # warning never touches stdout
+
+
+def test_directive_mint_without_terminal_proceeds_with_warning(project, capsys, monkeypatch):
+    """The locked 'warn, don't restrict' posture: no terminal + no --yes must
+    neither prompt nor hang nor fail — the pipe gets the loud warning and the
+    record REALLY stores. (_PipeStdin.readline raises: a prompt would fail.)"""
+    monkeypatch.setattr(sys, "stdin", _PipeStdin())
+    assert _remember("always deploy on fridays", "--kind", "directive") == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" in captured.err
+    assert "--yes" in captured.err                    # scripts are told the explicit path
+    assert captured.out.startswith("Remembered: rk_")
+    assert main(["recall", "deploy fridays", "--kind", "directive"]) == 0  # actually stored
+
+
+def test_directive_mint_with_devnull_stdin_proceeds_instead_of_cancelling(project, capsys, monkeypatch):
+    """Windows trap, caught live: isatty() is True for ANY character device —
+    NUL included — so `rekoll ... < NUL` (Git Bash: < /dev/null) used to
+    'prompt', read instant EOF, and cancel a write the caller never got to
+    answer (a locked door). The console-subsystem cross-check must classify
+    NUL as non-interactive: proceed with the loud warning, exit 0. Portable:
+    on POSIX /dev/null's isatty() is already False and takes the same path."""
+    devnull = open(os.devnull, "r", encoding="utf-8")
+    try:
+        monkeypatch.setattr(sys, "stdin", devnull)
+        assert _remember("always use tabs", "--kind", "directive") == 0
+    finally:
+        devnull.close()
+    captured = capsys.readouterr()
+    assert "STANDING RULE" in captured.err
+    assert "Store this standing rule?" not in captured.err  # never 'asked' a device
+    assert "Cancelled" not in captured.err
+    assert captured.out.startswith("Remembered: rk_")
+
+
+@pytest.mark.parametrize("flag", ["--yes", "-y"])
+def test_directive_mint_yes_flag_skips_the_prompt_but_still_warns(project, capsys, monkeypatch, flag):
+    """--yes answers for scripts and power users. The warning still prints:
+    informing is free, blocking is what we avoid. The fake terminal's readline
+    raises, PROVING the prompt is skipped, not answered."""
+    monkeypatch.setattr(sys, "stdin", _TtyNeverRead())
+    assert _remember("always use tabs", "--kind", "directive", flag) == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" in captured.err
+    assert "Store this standing rule?" not in captured.err  # no question was asked
+    assert captured.out.startswith("Remembered: rk_")
+
+
+@pytest.mark.parametrize("typed", ["y\n", "Y\n", "yes\n"])
+def test_directive_mint_interactive_yes_stores(project, capsys, monkeypatch, typed):
+    monkeypatch.setattr(sys, "stdin", _TtyStdin(typed))
+    assert _remember("always run tests before pushing", "--kind", "directive") == 0
+    captured = capsys.readouterr()
+    assert "Store this standing rule? [y/N]" in captured.err  # asked, on stderr
+    assert captured.out.startswith("Remembered: rk_")
+    capsys.readouterr()
+    assert main(["recall", "tests before pushing", "--kind", "directive"]) == 0
+
+
+@pytest.mark.parametrize("typed", ["n\n", "\n", ""])  # explicit no, bare Enter, EOF
+def test_directive_mint_interactive_decline_cancels_and_stores_nothing(project, capsys, monkeypatch, typed):
+    """N is the default: anything but an explicit yes cancels. Exit code 1 (the
+    CLI's operational-failure lane; 2 stays argparse-only), stdout stays empty
+    (nothing was stored, so no id line), and the gate runs BEFORE the store is
+    opened — a declined first-ever remember creates no store file at all."""
+    monkeypatch.setattr(sys, "stdin", _TtyStdin(typed))
+    assert _remember("always use tabs", "--kind", "directive") == 1
+    captured = capsys.readouterr()
+    assert "Cancelled - nothing was stored." in captured.err
+    assert captured.out == ""
+    assert not (project / ".rekoll").exists()  # not even the store came into being
+
+
+def test_non_directive_remember_prints_no_standing_rule_warning(project, capsys, monkeypatch):
+    """Zero noise on the common path: an ordinary remember (even at owner
+    trust) is not a rule and must neither warn nor prompt. (The clean-stderr
+    happy path is also pinned by test_remember_stores_and_prints_the_id_on_stdout.)"""
+    monkeypatch.setattr(sys, "stdin", _TtyNeverRead())  # a prompt would raise
+    assert _remember("we picked SQLite for zero ops", "--kind", "observation") == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" not in captured.err
+    assert captured.out.startswith("Remembered: rk_")
+
+
+def test_below_floor_directive_skips_the_gate_and_notes_it_is_inert(project, capsys, monkeypatch):
+    """--trust unverified sits below DIRECTIVE_FLOOR: the record renders as
+    data, never as an instruction (ADR-0017), so there is nothing to vouch for
+    — no warning, no prompt even in a terminal (the fake's readline raises).
+    A short stderr note says the rule will not be applied."""
+    monkeypatch.setattr(sys, "stdin", _TtyNeverRead())
+    assert _remember("someday switch to tabs", "--kind", "directive", "--trust", "unverified") == 0
+    captured = capsys.readouterr()
+    assert "STANDING RULE" not in captured.err
+    assert "below the standing-rule floor" in captured.err
+    assert "NOT apply it as a rule" in captured.err
+    assert captured.out.startswith("Remembered: rk_")
 
 
 def test_remember_rejects_content_that_sanitizes_to_nothing(project, capsys):
