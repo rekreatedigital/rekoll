@@ -23,14 +23,16 @@ pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"
 rekoll init                                                                        # OK output, BUT see finding 1
 rekoll remember "..." (×5, real project facts)                                     # OK, exit 0
 rekoll recall "how do we make sure we don't lose data if the server dies?"         # correct #1 hit
-rekoll recall "what's blocking the live status dots for client apps?"              # correct #1 hit
+rekoll recall "what's blocking <a specific in-progress feature>?"                  # correct #1 hit
 ```
 
 Both recall queries were deliberate paraphrases with **zero keyword overlap** with the
-stored text ("lose data if the server dies" vs. a memory about "offsite backups …
-sha256-verified tar.gz to Google Drive"). Both ranked the right memory first. Semantic
-retrieval is real, not keyword luck. Recall output rendered the trust envelope as
-promised: `(raw_fact | trust: owner | id: rk_…)`.
+stored text ("lose data if the server dies" vs. a stored memory describing the
+project's offsite-backup procedure in infrastructure terms — no shared words). Both
+ranked the right memory first. Semantic retrieval is real, not keyword luck. Recall
+output rendered the trust envelope as promised: `(raw_fact | trust: owner | id: rk_…)`.
+*(The verbatim project memories are redacted here — this file is public; the adopting
+repo is not.)*
 
 ## Findings
 
