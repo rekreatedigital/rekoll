@@ -38,8 +38,8 @@ It aims to be the first agent-memory layer that is *all five at once*:
 from a local clone. Don't copy the source in.
 
 ```bash
-pip install "git+https://github.com/ryankyleocampo-github/rekoll"                       # keyword search, zero deps
-pip install "rekoll[embeddings] @ git+https://github.com/ryankyleocampo-github/rekoll"  # + real semantic search (recommended)
+pip install "git+https://github.com/rekreatedigital/rekoll"                       # keyword search, zero deps
+pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"  # + real semantic search (recommended)
 pip install -e "/path/to/rekoll[embeddings]"        # from a local clone
 ```
 
@@ -57,9 +57,12 @@ rekoll status        # what's stored here
 ```
 
 `rekoll recall --context` prints a safe, LLM-ready block you can paste (or pipe)
-into any AI tool; `rekoll recall --json` emits `{context, ids, mode, count}` for
-scripts — `mode` names the search pipeline that actually ran, so a degraded
-index can't hide; and `rekoll doctor` checks your setup if anything misbehaves.
+into any AI tool; `rekoll recall --json` emits
+`{context, directives, ids, mode, count, abstained, top_vector_score}` for
+scripts — the same keys the MCP `recall` tool returns. `mode` names the search
+pipeline that actually ran, so a degraded index can't hide; `directives` carries
+your standing rules; `abstained`/`top_vector_score` expose the abstain gate. And
+`rekoll doctor` checks your setup if anything misbehaves.
 
 **Same store, from Python:**
 
@@ -124,7 +127,7 @@ Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
 memory — no Python code to write:
 
 ```bash
-pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll"   # or -e from a clone; bare "rekoll[mcp]" once on PyPI
+pip install "rekoll[mcp] @ git+https://github.com/rekreatedigital/rekoll"   # or -e from a clone; bare "rekoll[mcp]" once on PyPI
 claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
 ```
 
@@ -137,7 +140,7 @@ for Cursor + generic clients, the trust model, and all knobs: **[docs/MCP.md](do
 ### Develop Rekoll itself
 
 ```bash
-git clone https://github.com/ryankyleocampo-github/rekoll && cd rekoll
+git clone https://github.com/rekreatedigital/rekoll && cd rekoll
 python -m venv .venv && . .venv/Scripts/activate   # or: source .venv/bin/activate
 pip install -e ".[dev,embeddings]"
 pytest
@@ -151,3 +154,5 @@ pytest
 ## License
 
 [MIT](LICENSE) © Rekreate Digital. You own and are responsible for whatever data you store with Rekoll.
+
+*Rekoll is not affiliated with [Recoll](https://www.recoll.org/), the desktop full-text search tool.*

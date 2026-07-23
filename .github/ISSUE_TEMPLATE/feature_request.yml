@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         **Before you file:** does this conflict with
-        [NON_GOALS.md](https://github.com/ryankyleocampo-github/rekoll/blob/main/NON_GOALS.md)?
+        [NON_GOALS.md](https://github.com/rekreatedigital/rekoll/blob/main/NON_GOALS.md)?
         Requests that conflict with the non-goals will be declined — kindly, but
         firmly. Open-ended ideas are often better as a **Discussion** first.
   - type: textarea

@@ -44,9 +44,9 @@ rekoll = "rekoll.cli:main"
 rekoll-mcp = "rekoll.mcp_server:main"
 
 [project.urls]
-Homepage = "https://github.com/ryankyleocampo-github/rekoll"
-Source = "https://github.com/ryankyleocampo-github/rekoll"
-Issues = "https://github.com/ryankyleocampo-github/rekoll/issues"
+Homepage = "https://github.com/rekreatedigital/rekoll"
+Source = "https://github.com/rekreatedigital/rekoll"
+Issues = "https://github.com/rekreatedigital/rekoll/issues"
 
 # Built-in adapter, discoverable by third parties via the same group.
 [project.entry-points."rekoll.adapters"]

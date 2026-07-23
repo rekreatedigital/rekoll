@@ -90,8 +90,16 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   tier. Sharing stays explicit: same `--path` AND the same scope triple at
   every door (docs/QUICKSTART.md documents the cross-door scope trap).
 - Benchmark harness with a recall-quality regression gate over a sealed split.
+- **Release workflow** (`.github/workflows/release.yml`) — publishes to PyPI via
+  OIDC Trusted Publishing (no long-lived token to steal) on a published GitHub
+  Release, with a manual TestPyPI dry-run path; SHA-pinned actions; the build
+  job holds no publish credential and a guard refuses to publish when the
+  release tag disagrees with `src/rekoll/_version.py`.
 
 ### Changed
+
+- Version `0.0.0` → `0.1.0.dev0` — an honest in-development marker for the
+  run-up to the first tagged release (`0.1.0` lands with the tag itself).
 
 - CI `audit` job now audits the installed dependency closure of the optional
   extras (`.[dev,mcp,embeddings,bench]`) instead of the empty runtime-dep set of
@@ -107,5 +115,19 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
 - The board payload's tamper warning counted a record once per leg while naming
   its id once, so a tampered curated major (which also rides the activity feed)
   was reported as "2 board record(s)" followed by a single id.
+- Every repo link (README, QUICKSTART, pyproject `[project.urls]`, issue
+  templates, MAINTAINERS) still pointed at the pre-transfer personal-account
+  URL `ryankyleocampo-github/rekoll`; they now point at
+  `rekreatedigital/rekoll` — the pyproject ones would have shipped as the PyPI
+  project links.
+- The README described `rekoll recall --json` as emitting 4 keys; the payload
+  has 7. The sentence now enumerates them exactly, and a docs-consistency
+  tripwire pins the README's list to the code so the next added key fails CI
+  until the README names it.
+- The battle-harness absolute ReDoS budgets are now true hang-backstops
+  (10s / 30s, ≥10x worst observed work) — the old 3.0s budget sat only ~2x over
+  the marker-dense test's genuine ~1.5s runtime and tripped twice on loaded
+  shared runners (2026-07-15, Windows and macOS) with every other cell green.
+  Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
 [Unreleased]: https://github.com/rekreatedigital/rekoll/commits/main

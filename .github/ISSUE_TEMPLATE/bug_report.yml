@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: Rekoll version
-      placeholder: "0.0.0 (or git commit)"
+      placeholder: "output of `rekoll --version` (or a git commit)"
     validations: { required: true }
   - type: dropdown
     id: os

@@ -7,9 +7,16 @@ it feeds adversarial floods engineered to trigger catastrophic backtracking in e
 pattern family and asserts screen() stays fast. A future edit that regresses a
 marker/secret regex to nonlinear backtracking fails here (complements test_limits).
 
-Budgets are deliberately generous (worst observed at the 100k cap was ~0.33s); they
-catch a catastrophic (seconds-to-minutes) blowup, not micro-fluctuations, so they do
-not flake on a busy CI box.
+Budgets are hang-backstops, not performance gates: they catch a catastrophic
+(seconds-to-minutes) blowup, never micro-fluctuations. History (2026-07-23): the
+original 3.0s budget on the marker-dense screen_pieces test — ~1.5s of GENUINE
+work — was only ~2x over real runtime and tripped twice on loaded shared runners
+(windows-latest/3.13 at 3.58s, run 29435204964; macos-latest/3.12 at 3.18s, run
+29433844597) while every other cell stayed green: runner contention, not a
+regression. So absolute budgets here now sit >=10x above worst observed; the
+SCALING property — the thing that actually detects a super-linear regression,
+runner-independently — is asserted by the ratio gates (below, and per-pattern in
+test_limits.py), exactly the lesson test_limits already recorded on 2026-07-02.
 """
 
 from __future__ import annotations
@@ -48,8 +55,10 @@ _FLOODS = {
     "header_markup_flood":   lambda n: ">#*=_~- " * (n // 8),
 }
 
-# Generous: a catastrophic-backtracking regression turns these into seconds→minutes.
-_BUDGET_S = 3.0
+# Hang-backstop: worst observed at the 100k cap is ~0.33s (30x headroom); a
+# catastrophic-backtracking regression turns these into minutes and blows past
+# any budget. Mild super-linearity is test_limits' ratio gate's job, not this.
+_BUDGET_S = 10.0
 
 
 @pytest.mark.parametrize("label", sorted(_FLOODS))
@@ -65,13 +74,16 @@ def test_screen_is_linear_on_adversarial_flood(label, redact_pii):
 def test_screen_pieces_bounded_on_marker_dense_document():
     # The whole-document scan over the largest ingestible marker-dense doc (10MB
     # bytes / 25k chunk caps). Post-fix it is O((pieces+spans) log spans); the old
-    # O(pieces x spans) took minutes here. Budget bounds a quadratic regression.
+    # O(pieces x spans) took MINUTES here — that is what this budget bounds. The
+    # genuine work is ~1.5-3.6s across runners (see the module docstring's flake
+    # history), so 30s = ~10x worst observed; the subquadratic *scaling* is
+    # asserted runner-independently by the ratio test right below.
     doc = "<user>\n" * 300_000  # ~2.1MB, well within max_file_bytes
     pieces = chunk_file("d.txt", doc)
     t0 = time.perf_counter()
     screen_pieces(doc, pieces)
     dt = time.perf_counter() - t0
-    assert dt < 3.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
+    assert dt < 30.0, f"screen_pieces took {dt:.2f}s on a marker-dense doc (quadratic regression?)"
 
 
 def test_screen_pieces_scales_subquadratically():
