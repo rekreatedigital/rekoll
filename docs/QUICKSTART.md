@@ -10,10 +10,10 @@ name a provider, ADR-0015), and an automated test (CI) enforces it (ADR-0007).
 Semantic mode downloads its small model once at first use, then saving and
 searching work fully offline.
 
-Rekoll isn't on PyPI yet. Until it is, install from git:
+Install from PyPI:
 
 ```bash
-pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"
+pip install "rekoll[embeddings]"
 ```
 
 That gives you real semantic search (a small local model, downloaded once).
@@ -204,7 +204,7 @@ Rekoll ships an MCP server — any MCP-capable agent (Claude Code, Cursor,
 Windsurf, …) can use this project's memory, no Python code to write:
 
 ```bash
-pip install "rekoll[mcp] @ git+https://github.com/rekreatedigital/rekoll"   # or: pip install -e "/path/to/rekoll[mcp]"
+pip install "rekoll[mcp]"                # or: pip install -e "/path/to/rekoll[mcp]"
 claude mcp add rekoll -- rekoll-mcp   # Claude Code; other clients: see MCP.md
 ```
 

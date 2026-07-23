@@ -35,8 +35,8 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 ## How you'll use it (three doors, one engine)
 
-1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(Working today via a git install — see [docs/MCP.md](docs/MCP.md); `pip install "rekoll[mcp]"` lands with the PyPI release, and the Node/`npx` wrapper that hides Python entirely is still coming.)*
-2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. Installable from git today; `pip install rekoll` lands with the PyPI release.
+1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(`pip install "rekoll[mcp]"` — see [docs/MCP.md](docs/MCP.md); the Node/`npx` wrapper that hides Python entirely is still coming.)*
+2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. `pip install rekoll` and go.
 3. **Self-host service** — one container pointed at your own database.
 
 **Do you need an AI key?** No — saving and searching memory uses a local model, no key, no internet, free. Only the *optional* learning loop calls an LLM, and you can bring any model (OpenAI, Claude, Gemini, local Ollama, …) or run it locally.
@@ -45,16 +45,15 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 ## Quickstart
 
-**Install (today):** Rekoll isn't on PyPI yet, so install straight from git — or
-from a local clone. Don't copy the source in.
+**Install** (from [PyPI](https://pypi.org/project/rekoll/)):
 
 ```bash
-pip install "git+https://github.com/rekreatedigital/rekoll"                       # keyword search, zero deps
-pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"  # + real semantic search (recommended)
-pip install -e "/path/to/rekoll[embeddings]"        # from a local clone
+pip install "rekoll[embeddings]"   # + real semantic search (recommended)
+pip install rekoll                 # keyword search, zero dependencies
 ```
 
-(`pip install rekoll` will work once it's published to PyPI.)
+(Bleeding edge, straight from git:
+`pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"`.)
 
 **60 seconds, any project** — website, mobile app, agent repo; no Python code needed:
 
@@ -138,7 +137,7 @@ Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
 memory — no Python code to write:
 
 ```bash
-pip install "rekoll[mcp] @ git+https://github.com/rekreatedigital/rekoll"   # or -e from a clone; bare "rekoll[mcp]" once on PyPI
+pip install "rekoll[mcp]"                # or -e from a clone while developing
 claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
 ```
 
