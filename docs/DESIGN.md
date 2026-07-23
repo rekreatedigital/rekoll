@@ -25,7 +25,7 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   data-vs-instructions envelope; quarantine-by-trust (ADR-0013).
 - CI gates: storage conformance; a stub-embedder recall **smoke** fixture; and
   zero-network / zero-LLM / zero-dependency invariant tests.
-- The **MCP server** (`rekoll-mcp`, optional `mcp` extra): five tools over the
+- The **MCP server** (`rekoll-mcp`, optional `mcp` extra): six tools over the
   facade with server-pinned scope + trust (writes stamped UNVERIFIED by default,
   no directive writes, ingest confined to a root) — ADR-0008 Door 1. The
   no-Python Node/`npx` wrapper around it is still planned.
@@ -204,7 +204,7 @@ Eight cooperating layers:
 
 Progressive disclosure is the enforced law: zero-config local-private-LLM-free defaults; every powerful capability behind exactly **three uniform knobs** — `storage={provider, config}`, `model={base_url,...}` (only for optional learning), `learning={consolidate, reflect, freshness}` (off by default). A CI test asserts the zero-arg path needs no key and calls no LLM.
 
-- **Door 1 — MCP server** (vibe-coder default in Claude Code/Cursor/Windsurf): a deliberately **small** surface — **5 shipped tools** (`remember`, `recall`, `ingest_path`, `forget`, `status`; see [MCP.md](MCP.md)) — rejecting MemPalace's 33-tool ontology; `recall_schema` + `memory_review` are planned additions gated on the layers they expose (P5 schema ingestion, L4 review). Registration goes through the host's own CLI (`claude mcp add rekoll -- rekoll-mcp`, never hand-editing JSON; the CLI is `rekoll` — there is no `mem` command). Still planned around it: idempotent host-detecting auto-registration, repo mining, prompted read-only DB-schema introspection, and Stop + PreCompact auto-capture hooks through one cross-platform capture entrypoint (Windows-safe; auto-captures land at low trust so the firewall can quarantine).
+- **Door 1 — MCP server** (vibe-coder default in Claude Code/Cursor/Windsurf): a deliberately **small** surface — **6 shipped tools** (`remember`, `recall`, `ingest_path`, `forget`, `status`, `board`; see [MCP.md](MCP.md)) — rejecting MemPalace's 33-tool ontology; `recall_schema` + `memory_review` are planned additions gated on the layers they expose (P5 schema ingestion, L4 review). Registration goes through the host's own CLI (`claude mcp add rekoll -- rekoll-mcp`, never hand-editing JSON; the CLI is `rekoll` — there is no `mem` command). Still planned around it: idempotent host-detecting auto-registration, repo mining, prompted read-only DB-schema introspection, and Stop + PreCompact auto-capture hooks through one cross-platform capture entrypoint (Windows-safe; auto-captures land at low trust so the firewall can quarantine).
 - **Door 2 — one-line Python SDK:** `pip install rekoll` → `from rekoll import Memory; mem = Memory()` — zero-config, local, private, no key, no LLM on reads. `remember/recall/forget` mirror the MCP verbs 1:1 (async twins available); `scope` is the one tenancy primitive; results are plain dataclasses (`.text/.score/.scope/.provenance/.trust`); a planned `wrap(llm_client, scope=...)` two-line on-ramp (recall-before, remember-after) is not yet shipped.
 - **Door 3 — self-host service:** one container, BYO key, point at your Supabase/Postgres, REST + MCP-over-HTTP, per-tenant, local/private still the in-container default, auth **deny-by-default**.
 

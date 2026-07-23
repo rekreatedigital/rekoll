@@ -42,8 +42,8 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   key and no LLM on the read path.
 - Hybrid recall: local semantic + keyword search with optional cross-encoder
   reranking (the `[embeddings]` extra; falls back to a keyword stub when absent).
-- MCP server exposing five tools (`remember`, `recall`, `ingest_path`,
-  `forget`, `status`) over a project's private store (the `[mcp]` extra).
+- MCP server exposing six tools (`remember`, `recall`, `ingest_path`,
+  `forget`, `status`, `board`) over a project's private store (the `[mcp]` extra).
 - Bring-your-own-database adapter contract with a SQLite adapter shipped by
   default, and bring-your-own-embedder / consolidator provider hooks.
 - **Standing-directive channel** — a saved directive (e.g. "always explain
@@ -74,8 +74,21 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   and `mem.remember(..., board="major"|"pending")` tags a curated item without
   changing its record id. The board is a free read: it builds no embedder and
   credits nothing to the was-it-used ledger. `BoardResult` and `BoardSnapshot`
-  are exported from the package root. The CLI and MCP board surfaces land in a
-  follow-up lane.
+  are exported from the package root.
+- **Live-project-board doors** (ADR-0035) — the board now serves at every door,
+  byte-identical (pinned by the three-doors parity suite). CLI: `rekoll board`
+  (`--json` for scripts; `--recent/--majors/--rules` caps; an empty board exits
+  0 — a status view, not a search), `rekoll resolve <id>...` (active →
+  superseded only, never deletes; prints `Resolved N of M.` and exits 0 — a
+  status verb), and `rekoll remember --board major|pending` (orthogonal to the
+  standing-rule confirmation; below-floor and dual-leg cases get honest stderr
+  notes). MCP: a sixth tool, `board`, with **zero arguments** — its leg caps
+  are operator-only server config (`--board-recent/--board-majors/--board-rules`
+  or `REKOLL_MCP_BOARD_*`; flags win, 0 disables a leg), so a calling model can
+  never widen the board. Deliberately absent in v1: an MCP resolve tool and any
+  board input on MCP `remember` — nothing model-transited can reach the curated
+  tier. Sharing stays explicit: same `--path` AND the same scope triple at
+  every door (docs/QUICKSTART.md documents the cross-door scope trap).
 - Benchmark harness with a recall-quality regression gate over a sealed split.
 
 ### Changed

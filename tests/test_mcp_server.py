@@ -29,6 +29,7 @@ from rekoll.mcp_server import (
     MAX_K,
     MAX_QUERY_CHARS,
     ServerConfig,
+    _board,
     _contained_path,
     _forget,
     _ingest_path,
@@ -619,11 +620,19 @@ def test_e2e_tool_schemas_expose_no_scope_or_trust_knobs(tmp_path):
         return await session.list_tools()
 
     tools = _run_server_session(tmp_path, fn).tools
-    assert {t.name for t in tools} == {"remember", "recall", "ingest_path", "forget", "status"}
+    assert {t.name for t in tools} == {
+        "remember", "recall", "ingest_path", "forget", "status", "board",
+    }
     forbidden = {"project", "tenant", "agent", "scope", "trust", "trust_tier"}
     for tool in tools:
         props = set((tool.inputSchema or {}).get("properties", {}))
         assert not (props & forbidden), f"{tool.name} exposes {props & forbidden}"
+    # The board tool goes further: ZERO properties of any name — no limit, path,
+    # or floor knob exists for a calling model to widen the board with
+    # (ADR-0035: its caps are operator-only ServerConfig fields).
+    board = next(t for t in tools if t.name == "board")
+    board_props = (board.inputSchema or {}).get("properties", {})
+    assert board_props == {}, f"board schema must be empty, exposes {set(board_props)}"
 
 
 @requires_mcp
@@ -737,6 +746,210 @@ def test_e2e_redact_pii_flag_threads_to_screen(tmp_path):
     assert "[REDACTED:email]" in rec.content and "alice@corp.example" not in rec.content
     assert rec.metadata.get("redactions") == "email"  # class-only, no reversible fp
     adapter.close()
+
+
+# -- board: the zero-argument live-project-board tool (ADR-0035) ---------------
+#
+# Unit layer: the plain `_board` body + the operator-only caps in config.
+# E2e layer: the real server over stdio — schema emptiness is pinned in
+# test_e2e_tool_schemas_expose_no_scope_or_trust_knobs above; here the payload
+# itself is proven honest (forged/quarantined rows in NO key and NO count,
+# created_at crossing as the STORED ISO string, no server-path leak) and the
+# caps proven operator-pinned.
+
+BOARD_KEYS = {"rules", "majors", "recent", "pending_open", "latest"}
+
+
+def test_load_config_board_caps_defaults_env_and_flag_precedence(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a scope-safe cwd for the derived project
+    cfg = load_config([], environ={})
+    assert (cfg.board_recent, cfg.board_majors, cfg.board_rules) == (10, 10, 5)
+    env = {
+        "REKOLL_MCP_BOARD_RECENT": "3",
+        "REKOLL_MCP_BOARD_MAJORS": "2",
+        "REKOLL_MCP_BOARD_RULES": "1",
+    }
+    cfg = load_config([], environ=env)
+    assert (cfg.board_recent, cfg.board_majors, cfg.board_rules) == (3, 2, 1)
+    cfg = load_config(["--board-recent", "4"], environ=env)
+    assert cfg.board_recent == 4  # flags win over env
+    assert cfg.board_majors == 2
+    # 0 is legal everywhere: it disables that leg, like every other board cap.
+    cfg = load_config(["--board-rules", "0"], environ={})
+    assert cfg.board_rules == 0
+
+
+@pytest.mark.parametrize("bad", ["-1", "51", "banana"])
+def test_load_config_refuses_bad_board_caps_from_flag_and_env(bad, capsys):
+    """The builder's limit rule enforced at LAUNCH (argparse skips validating
+    defaults, so the env path must be refused post-parse exactly like trust)."""
+    with pytest.raises(SystemExit):
+        load_config(["--board-majors", bad], environ={})
+    with pytest.raises(SystemExit):
+        load_config([], environ={"REKOLL_MCP_BOARD_MAJORS": bad})
+    assert "REKOLL_MCP_BOARD_MAJORS" in capsys.readouterr().err
+
+
+def _board_config(tmp_path, **caps) -> ServerConfig:
+    return ServerConfig(
+        path=":memory:", tenant="default", project="unit", agent="default",
+        trust=TrustTier.UNVERIFIED, root=tmp_path, **caps,
+    )
+
+
+def test_board_body_is_the_builder_payload_verbatim(tmp_path):
+    """No re-shaping, no extra keys: `_board` returns byte-for-byte what
+    build_board_payload computes for the same store at the config's caps."""
+    import json
+
+    from rekoll.board import build_board_payload
+    from rekoll.model import Kind
+
+    mem = _mem(project="unit", default_trust=TrustTier.OWNER)
+    mem.remember("always explain simply", kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    mem.remember("storage lane shipped", board="major")
+    mem.remember("docs pass still open", board="pending")
+    out = _board(mem, _board_config(tmp_path))
+    direct = build_board_payload(mem.adapter, mem.scope)
+    assert json.dumps(out) == json.dumps(direct)
+    assert set(out) == BOARD_KEYS
+
+
+def test_board_caps_thread_from_config_and_zero_disables(tmp_path):
+    from rekoll.model import Kind
+
+    mem = _mem(project="unit", default_trust=TrustTier.OWNER)
+    mem.remember("always explain simply", kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    for i in range(3):
+        mem.remember(f"activity item {i}")
+    out = _board(mem, _board_config(tmp_path, board_recent=1, board_rules=0))
+    assert len(out["recent"]) == 1
+    assert out["rules"] == []
+    assert set(out) == BOARD_KEYS  # disabling a leg never drops its key
+
+
+@requires_mcp
+def test_e2e_board_payload_is_honest_over_real_stdio(tmp_path):
+    """THE board e2e: seed trusted rows via the SDK on the server's store, plant
+    a forged (raw active, trust 0) row by hand-edit, let the server itself
+    quarantine an injection — then the wire payload must (a) carry the pinned
+    key set, (b) show the forged and quarantined rows in NO key and NO count,
+    (c) return created_at as the STORED ISO string verbatim, and (d) name no
+    server path anywhere (the honesty-test pattern)."""
+    from rekoll.model import Kind
+
+    db = tmp_path / "mem.db"
+    seeder = Memory(path=str(db), project="e2e", embedder=StubEmbedder(), reranker=None)
+    seeder.remember("always explain simply", kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    major = seeder.remember("storage lane shipped", board="major")
+    seeder.remember("docs pass still open", board="pending")
+    # Tagged board="pending" ON PURPOSE: the pending_open assertion below then
+    # genuinely exercises forged-row exclusion from the COUNT, not just the
+    # legs (a PR #62 review finding — as "major" the count never saw it).
+    forged = seeder.remember("a forged row that must never board", board="pending")
+    seeder.close()
+
+    conn = __import__("sqlite3").connect(db)
+    conn.execute(
+        "UPDATE verbatim_records SET trust_tier = 0, status = 'active' WHERE id = ?",
+        (forged.id,),
+    )
+    conn.commit()
+    conn.close()
+
+    async def fn(session):
+        poisoned = _payload(await session.call_tool("remember", {"content": INJECTION}))
+        board = _payload(await session.call_tool("board", {}))
+        return poisoned, board
+
+    poisoned, board = _run_server_session(tmp_path, fn)
+    assert poisoned["quarantined"] is True
+
+    assert set(board) == BOARD_KEYS
+    surfaced = [e["id"] for e in board["majors"] + board["recent"]]
+    assert forged.id not in surfaced, "forged (active, trust-0) row boarded"
+    assert poisoned["id"] not in surfaced, "quarantined row boarded"
+    assert "forged row" not in json.dumps(board)
+    assert board["pending_open"] == 1  # only the real pending; nothing forged counts
+
+    # created_at is the STORED value verbatim (its ISO serialization) — never a
+    # computed age, never a read-time clock.
+    adapter = get_adapter("sqlite", path=str(db))
+    try:
+        (stored,) = adapter.get(scope=_e2e_scope(), ids=[major.id]).records
+    finally:
+        adapter.close()
+    by_id = {e["id"]: e for e in board["majors"]}
+    assert by_id[major.id]["created_at"] == stored.created_at.isoformat()
+
+    # No server-path leak: neither the store's absolute location nor the tmp
+    # root may appear anywhere in the payload (L-mcp-rootleak discipline).
+    dumped = json.dumps(board)
+    assert str(tmp_path) not in dumped and str(tmp_path.as_posix()) not in dumped
+    assert "mem.db" not in dumped
+
+
+@requires_mcp
+def test_e2e_board_caps_are_operator_pinned(tmp_path):
+    """--board-recent / --board-rules size the legs at LAUNCH; the tool takes no
+    argument that could widen them back (schema emptiness pinned above)."""
+    from rekoll.model import Kind
+
+    db = tmp_path / "mem.db"
+    seeder = Memory(path=str(db), project="e2e", embedder=StubEmbedder(), reranker=None)
+    seeder.remember("always explain simply", kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    for i in range(3):
+        seeder.remember(f"activity item {i}")
+    seeder.close()
+
+    async def fn(session):
+        return _payload(await session.call_tool("board", {}))
+
+    board = _run_server_session(
+        tmp_path, fn, extra_args=("--board-recent", "1", "--board-rules", "0")
+    )
+    assert len(board["recent"]) == 1
+    assert board["rules"] == []
+    assert set(board) == BOARD_KEYS
+
+
+@requires_mcp
+def test_e2e_server_instructions_teach_the_board_polling_rhythm(tmp_path):
+    """The D2 guidance crosses the wire: initialize() hands the client an
+    instructions string that names board, the session-start call, and the
+    byte-identical-means-nothing-new check. (Own stdio setup rather than
+    _run_server_session: the harness drives tools after initialize(), and the
+    instructions ride the InitializeResult itself.)"""
+    import inspect
+
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    async def _inner():
+        src = str(Path(__file__).resolve().parent.parent / "src")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("REKOLL_MCP_")}
+        env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "rekoll.mcp_server", "--path", str(tmp_path / "mem.db"),
+                  "--project", "e2e", "--root", str(tmp_path)],
+            cwd=str(tmp_path), env=env,
+        )
+        with (tmp_path / "server-stderr.log").open("w", encoding="utf-8") as errlog:
+            kwargs = (
+                {"errlog": errlog}
+                if "errlog" in inspect.signature(stdio_client).parameters
+                else {}
+            )
+            async with stdio_client(params, **kwargs) as (read, write):
+                async with ClientSession(read, write) as session:
+                    init = await session.initialize()
+                    return init.instructions or ""
+
+    instructions = asyncio.run(_inner())
+    assert "board" in instructions
+    assert "session start" in instructions
+    assert "byte-identical" in instructions
 
 
 @requires_mcp

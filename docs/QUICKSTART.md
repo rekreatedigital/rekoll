@@ -115,9 +115,60 @@ Useful flags:
   screening). Turn it on before you first index PII-bearing content, and the audit
   trail keeps only a class label (`email`), never the value.
 
+### The shared project board
+
+When several AI sessions work on one project at once (say an orchestrator and
+a couple of build agents), each session's chat is private — none of them knows
+what the others just did. The **board** is the little status page they all
+share, stored in the same memory file:
+
+```bash
+rekoll remember "auth refactor merged to main" --board major   # post a decision / state
+rekoll remember "docs still need a pass" --board pending       # post an open item
+rekoll board                                                   # read the board
+rekoll resolve rk_1a2b...                                      # mark an item done
+```
+
+`rekoll board` shows three things: your standing **rules**, the curated
+**major / pending** items (with the count of still-open pending ones), and the
+newest **activity** in this project. `--json` prints the same board as one
+JSON object for scripts — byte-identical to what the SDK (`Memory().board()`)
+and the MCP `board` tool return. An empty board exits `0` (it's a status view
+like `rekoll status`, not a search), and `resolve` also exits `0` even when
+nothing changed — the printed count (`Resolved 1 of 2.`) is the honest report.
+Resolving **marks** an item done (it leaves the board and recall; the record
+stays in the store for audit); deleting is `rekoll forget`'s job. Posting at
+`--trust unverified` stores the tag but keeps the item OFF the curated list —
+curation needs `trusted_source` trust or better, so a tag alone can never
+promote untrusted content into every session's view.
+
+**Sharing a board between sessions** takes two explicit things at every door —
+v1 has no discovery on purpose (a config file in a repo that could point
+Rekoll at a store would let a hostile clone silently retarget every session's
+memory):
+
+1. the same `--path` to the same store file, and
+2. the same scope triple `--tenant` / `--project` / `--agent`.
+
+Watch the cross-door scope trap: the MCP server derives its project name from
+the launch folder's NAME, while the CLI and SDK default to
+`project="default"`. So a CLI session and an MCP session **in the same
+folder do NOT share a board by default** — same file, different scopes, no
+error (scope isolation working as designed). Pass the triple explicitly at
+every door:
+
+```bash
+rekoll board --path /team/mem.db --tenant default --project myapp --agent default   # CLI door
+claude mcp add rekoll -- rekoll-mcp --path /team/mem.db --tenant default --project myapp --agent default  # MCP door
+```
+
+One machine only: the shared medium is the SQLite file itself, and SQLite's
+locking is not reliable on network drives (NFS/SMB).
+
 For scripts: results go to stdout, messages to stderr; exit code `0` = success,
 `1` = nothing found / operational problem, `2` = bad usage. `recall` exits `1`
-when there are no matches, like `grep`.
+when there are no matches, like `grep`. `board` and `resolve` exit `0` even
+when empty / nothing moved — they are status commands, not searches.
 
 ## Door 2: a Python app, via the SDK
 
@@ -157,8 +208,9 @@ pip install "rekoll[mcp] @ git+https://github.com/ryankyleocampo-github/rekoll" 
 claude mcp add rekoll -- rekoll-mcp   # Claude Code; other clients: see MCP.md
 ```
 
-The agent gets five tools (`remember`, `recall`, `ingest_path`, `forget`,
-`status`) over this project's store, with scope and trust pinned server-side.
+The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
+`status`, `board`) over this project's store, with scope and trust pinned
+server-side.
 Setup for Cursor + generic clients, the trust model, and all knobs:
 **[MCP.md](MCP.md)**. Only the no-Python Node/`npx` wrapper is still planned —
 today the server needs a Python environment. (An agent without MCP support can

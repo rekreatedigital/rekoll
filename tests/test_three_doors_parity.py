@@ -620,6 +620,154 @@ def test_standing_directive_key_is_identical_across_doors(directive_store):
         sdk.close()
 
 
+# -- the live project board across all three doors (ADR-0035) -------------------
+#
+# The board's parity contract is stricter than recall's ordered-id one: the
+# PAYLOAD ITSELF is byte-deterministic (a pure function of stored rows, fixed
+# key order), so the three doors are pinned BYTE-IDENTICAL — json.dumps of the
+# SDK's BoardResult.to_dict(), the CLI's `board --json` stdout, and the MCP
+# `board` tool result must be the same string. A one-byte drift means a door
+# re-shaped the payload, which is the exact bug class the shared builder
+# (rekoll.board.build_board_payload) exists to make impossible.
+
+BOARD_RULE = "Resolve pending items before starting new work."
+
+
+@pytest.fixture(scope="module")
+def board_store(store):
+    """A twin of ``store`` with a seeded board: one rule, curated majors and a
+    pending item, plain activity, and one below-floor row (text withheld). A
+    SEPARATE db reusing ``store``'s shim env/root, so the shared fixtures — and
+    every recall-parity assertion on them — stay untouched."""
+    db = store.root / "parity-board.db"
+    mem = Memory(path=str(db), project=PROJECT, embedder=StubEmbedder(), reranker=None)
+    mem.remember(BOARD_RULE, kind=Kind.DIRECTIVE, trust=TrustTier.OWNER)
+    mem.remember("storage lane shipped", board="major")
+    mem.remember("facade lane shipped", board="major")
+    pending = mem.remember("docs pass still open", board="pending")
+    for fact in REMEMBERED_FACTS[:3]:
+        mem.remember(fact)
+    mem.remember("an unverified drive-by note", trust=TrustTier.UNVERIFIED)
+    quarantined = mem.adapter.count(scope=mem.scope, status=Status.QUARANTINED.value)
+    mem.close()
+    assert quarantined == 0
+    return SimpleNamespace(db=str(db), root=store.root, env=store.env,
+                           pending_id=pending.id)
+
+
+def _sdk_board_line(board_store) -> str:
+    mem = Memory(path=board_store.db, project=PROJECT,
+                 embedder=StubEmbedder(), reranker=None)
+    try:
+        return json.dumps(mem.board().to_dict())
+    finally:
+        mem.close()
+
+
+def _cli_board_line(board_store) -> str:
+    """Door 2: ``python -m rekoll board --json`` — the RAW stdout line, so the
+    comparison is bytes-on-the-wire, not a parsed-and-redumped approximation."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "rekoll", "board", "--json",
+         "--path", board_store.db, "--project", PROJECT],
+        capture_output=True, encoding="utf-8", errors="replace",
+        env=board_store.env, cwd=str(board_store.root), timeout=120,
+    )
+    assert proc.returncode == 0, f"CLI board failed:\n{proc.stderr}"
+    assert "rekoll: warning:" not in proc.stderr, proc.stderr  # nothing withheld
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    assert len(lines) == 1, f"board --json must print exactly one line:\n{proc.stdout}"
+    return lines[0]
+
+
+def _cli_resolve(board_store, record_id: str) -> str:
+    proc = subprocess.run(
+        [sys.executable, "-m", "rekoll", "resolve", record_id,
+         "--path", board_store.db, "--project", PROJECT],
+        capture_output=True, encoding="utf-8", errors="replace",
+        env=board_store.env, cwd=str(board_store.root), timeout=120,
+    )
+    assert proc.returncode == 0, f"CLI resolve failed:\n{proc.stderr}"
+    return proc.stdout.strip()
+
+
+def _mcp_board(board_store) -> dict:
+    """Door 3: the real stdio server, `board` called with ZERO arguments."""
+    pytest.importorskip("mcp")
+
+    async def _inner():
+        import inspect
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
+        env = dict(board_store.env)
+        env["REKOLL_MCP_PATH"] = board_store.db
+        env["REKOLL_MCP_PROJECT"] = PROJECT
+        env["REKOLL_MCP_ROOT"] = str(board_store.root)
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "rekoll.mcp_server"],
+            cwd=str(board_store.root),
+            env=env,
+        )
+        with (board_store.root / "mcp-board-stderr.log").open("w", encoding="utf-8") as errlog:
+            kwargs = (
+                {"errlog": errlog}
+                if "errlog" in inspect.signature(stdio_client).parameters
+                else {}
+            )
+            async with stdio_client(params, **kwargs) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    return _payload(await session.call_tool("board", {}))
+
+    return asyncio.run(_inner())
+
+
+def test_board_payload_is_byte_identical_across_sdk_and_cli(board_store):
+    """The no-extra leg of THE board pin: the CLI's one stdout line IS the
+    SDK's json.dumps — byte-for-byte, key order included — and it is a real
+    board (every leg populated, the below-floor entry present with text null)."""
+    sdk_line = _sdk_board_line(board_store)
+    cli_line = _cli_board_line(board_store)
+    assert cli_line == sdk_line
+
+    payload = json.loads(sdk_line)
+    assert payload["rules"] == [BOARD_RULE]
+    assert [e["board"] for e in payload["majors"]] == ["major", "major", "pending"]
+    assert payload["pending_open"] == 1
+    withheld = [e for e in payload["recent"] if e["text"] is None]
+    assert withheld and all(e["trust"] == "unverified" for e in withheld)
+
+
+def test_board_payload_is_byte_identical_across_all_three_doors(board_store):
+    """THE board parity pin (needs the mcp extra; skips cleanly without): one
+    seeded store, three doors, ONE byte string — and after a CLI resolve, all
+    doors byte-agree on the NEW board too (the resolved item gone everywhere,
+    pending_open down). Fresh MCP session per read: board_snapshot reads a
+    fresh snapshot, so a foreign commit is visible to the next poll."""
+    sdk_line = _sdk_board_line(board_store)
+    cli_line = _cli_board_line(board_store)
+    mcp_line = json.dumps(_mcp_board(board_store))
+    assert sdk_line == cli_line == mcp_line
+
+    before = json.loads(sdk_line)
+    assert board_store.pending_id in [e["id"] for e in before["majors"]]
+
+    assert _cli_resolve(board_store, board_store.pending_id) == "Resolved 1 of 1."
+
+    sdk_after = _sdk_board_line(board_store)
+    cli_after = _cli_board_line(board_store)
+    mcp_after = json.dumps(_mcp_board(board_store))
+    assert sdk_after == cli_after == mcp_after
+    assert sdk_after != sdk_line  # the byte-compare change check really moved
+    after = json.loads(sdk_after)
+    surfaced = [e["id"] for e in after["majors"] + after["recent"]]
+    assert board_store.pending_id not in surfaced
+    assert after["pending_open"] == 0
+
+
 def test_standing_directive_crosses_doors_even_under_abstain(directive_store):
     """The channel is abstain-proof through every door: with min_score forcing an
     abstain (zero ranked hits) the standing rule STILL rides ``directives``,

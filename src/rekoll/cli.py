@@ -34,6 +34,12 @@ from pathlib import Path
 from typing import Optional
 
 from ._version import __version__
+from .adapters.base import (
+    BOARD_LIMIT_CEILING,
+    BOARD_METADATA_KEY,
+    BOARD_TAG_MAJOR,
+    BOARD_TAG_PENDING,
+)
 from .model import Kind, Status, TrustTier
 
 DEFAULT_DB_PATH = "./.rekoll/memory.db"
@@ -564,26 +570,27 @@ def _vouch_standing_rule(args: argparse.Namespace) -> bool:
     return answer.strip().lower() in ("y", "yes")
 
 
-def _stored_trust(mem, record_id: str) -> Optional[TrustTier]:
-    """The trust tier actually ON the stored row, or None when it can't be read.
+def _stored_row(mem, record_id: str):
+    """The row actually IN the store, or None when it can't be read back.
 
     ``remember()`` returns the ATTEMPTED write; the trust-aware upsert
-    (ADR-0023) never lowers trust for identical content, so the stored row may
-    keep a HIGHER tier than the attempt. A user-facing claim about how the
-    record will behave must describe the row, not the attempt — and when the
-    row cannot be read back (an adapter without ``get``, an id belonging to no
-    row), the honest answer is 'unknown': the caller then prints no claim at
-    all rather than one it cannot verify.
+    (ADR-0023) never lowers trust for identical content — a lower-trust
+    re-write is dropped ENTIRELY, so the stored row may keep a HIGHER tier
+    AND none of the attempt's metadata (e.g. a ``--board`` tag). Every
+    user-facing claim below must describe the row, not the attempt — and when
+    the row cannot be read back (an adapter without ``get``, an id belonging
+    to no row), the honest answer is 'unknown': the caller then prints no
+    claim at all rather than one it cannot verify.
     """
     try:
         found = mem.adapter.get(scope=mem.scope, ids=[record_id]).records
     except Exception:
         return None
-    return found[0].trust_tier if found else None
+    return found[0] if found else None
 
 
 def cmd_remember(args: argparse.Namespace) -> int:
-    from .firewall import DIRECTIVE_FLOOR  # deferred, like every non-model import here
+    from .firewall import BOARD_FLOOR, DIRECTIVE_FLOOR  # deferred, like every non-model import here
 
     kind = Kind(args.kind)
     trust = TrustTier[args.trust.upper()]
@@ -591,12 +598,16 @@ def cmd_remember(args: argparse.Namespace) -> int:
     # the instruction channel of every future recall (ADR-0034), so it must be
     # vouched for (ADR-0017). Below the floor there is nothing to gate — the
     # directive renders as data, never as a rule — so no question is asked.
+    # --board is deliberately ORTHOGONAL to this gate: a board tag is metadata
+    # sugar (ADR-0035), and it must neither add a second question nor let a
+    # curated label smuggle a rule past the vouch.
     if kind is Kind.DIRECTIVE and trust >= DIRECTIVE_FLOOR and not _vouch_standing_rule(args):
         _err("Cancelled - nothing was stored.")
         return 1
     mem = _open_memory(args)
     if mem is None:
         return 1
+    stored = None
     stored_trust: Optional[TrustTier] = None
     try:
         record = mem.remember(
@@ -604,11 +615,15 @@ def cmd_remember(args: argparse.Namespace) -> int:
             kind=kind,
             source=args.source,
             trust=trust,
+            board=args.board,
         )
-        if kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR:
-            # Read the row back BEFORE close: the note below must describe
-            # what the store now HOLDS, not what this command asked for.
-            stored_trust = _stored_trust(mem, record.id)
+        if (kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR) or args.board is not None:
+            # Read the row back BEFORE close: the notes below must describe
+            # what the store now HOLDS, not what this command asked for
+            # (the trust-aware upsert may have kept a higher-trust row —
+            # and dropped this attempt's board tag with it).
+            stored = _stored_row(mem, record.id)
+            stored_trust = stored.trust_tier if stored is not None else None
     except ValueError as exc:
         return _fail(str(exc))
     finally:
@@ -637,6 +652,51 @@ def cmd_remember(args: argparse.Namespace) -> int:
             )
         # stored_trust None: the row could not be read back, so no claim about
         # its behavior is printed - never assert what we cannot verify.
+    if args.board is not None and record.status is not Status.QUARANTINED:
+        # Board notes describe the STORED row (like the directive notes above).
+        # A quarantined write is covered by the quarantine note below instead.
+        stored_board = None
+        if stored is not None and stored.metadata.get(BOARD_METADATA_KEY) is not None:
+            stored_board = str(stored.metadata.get(BOARD_METADATA_KEY))
+        if stored is not None and stored_board != args.board:
+            # The trust-aware upsert kept an existing, higher-trust row and
+            # dropped this write ENTIRELY (ADR-0023) — including its board
+            # tag. The notes below would describe a tag that is NOT in the
+            # store; say what actually happened instead (a PR #62 review
+            # finding: the old gate read only trust and printed a false
+            # dual-leg note here, or nothing at all).
+            _err(
+                f"note: this exact text already exists at "
+                f"'{stored.trust_tier.name.lower()}' trust, so this write - including "
+                f"its board={args.board!r} tag - was NOT stored (trust never "
+                "silently falls, ADR-0023)."
+            )
+            _err(
+                "      The board does NOT show it. To curate the existing record, "
+                "re-run at its original trust, or forget it first."
+            )
+        elif kind is Kind.DIRECTIVE and stored_trust is not None and stored_trust >= DIRECTIVE_FLOOR:
+            # Verified behavior, allowed on purpose: the rules leg and the
+            # curated leg do NOT dedup, so a board-tagged standing rule shows
+            # up in both. Inform loudly (the one surprise: resolving the
+            # curated copy retires the rule — it is one record).
+            _err(
+                f"note: this standing rule is also tagged board={args.board!r}, so the "
+                "board shows it TWICE - as a rule AND as a curated item (one record,"
+            )
+            _err(
+                "      two legs; they do not dedup). 'rekoll resolve <the id above>' "
+                "retires the STANDING RULE too (active -> superseded)."
+            )
+        elif stored_trust is not None and stored_trust < BOARD_FLOOR:
+            _err(
+                f"note: trust '{stored_trust.name.lower()}' is below the board floor "
+                f"('{BOARD_FLOOR.name.lower()}') - the '{args.board}' tag is stored, but"
+            )
+            _err(
+                "      the curated leg only shows items at or above the floor. The "
+                "activity feed still lists it (text withheld). (ADR-0035)"
+            )
     redactions = str(record.metadata.get("redactions") or "")
     if redactions:
         n = len(redactions.split(","))
@@ -644,6 +704,8 @@ def cmd_remember(args: argparse.Namespace) -> int:
     if record.status is Status.QUARANTINED:
         _err("note: the firewall QUARANTINED this memory - it looks like a prompt injection")
         _err("      from an untrusted source. It is stored for audit but will never appear in recall.")
+        if args.board is not None:
+            _err("      (its board tag is inert too: a quarantined record never boards)")
     return 0
 
 
@@ -850,6 +912,183 @@ def cmd_status(args: argparse.Namespace) -> int:
         _out("Search mode installed: real semantic search ('embeddings' extra present)")
     else:
         _out('Search mode installed: basic keyword matching (pip install "rekoll[embeddings]" to upgrade)')
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# board / resolve — the live project board (ADR-0035)
+# ---------------------------------------------------------------------------
+
+def _board_entry_lines(entry: dict) -> None:
+    """One board entry, recall-list style: the text line, then a detail line.
+
+    ``text`` is already one neutralized, capped line (the builder's contract);
+    ``None`` means the entry sits below the board's trust floor — show that it
+    exists without amplifying words the floor withheld.
+    """
+    tag = entry.get("board")
+    prefix = f"[{str(tag).upper()}] " if tag else ""
+    text = entry.get("text")
+    if text is None:
+        text = "(text withheld below the trust floor)"
+    _out(f"  {prefix}{text}")
+    _out(
+        f"      ({entry.get('kind')} | trust: {entry.get('trust')} | "
+        f"id: {entry.get('id')} | {entry.get('created_at') or 'no timestamp'})"
+    )
+
+
+def _render_board_human(
+    scope_key: str, path: str, payload: dict, legs_requested: bool = True
+) -> None:
+    """The compact human board: store+scope header (the status convention, so a
+    session can SEE which board it is reading — the anti-fragmentation graft),
+    then rules, curated items oldest-first, and the newest activity.
+
+    ``legs_requested`` is False when the caller disabled every leg (all limits
+    0): an empty render then means 'you asked for nothing', not 'the board is
+    empty' — claiming emptiness there would be false on a board that holds
+    items (a PR #62 review finding)."""
+    if path == ":memory:":
+        _out("Store:  :memory: (temporary)")
+    else:
+        db = Path(path).expanduser()
+        _out(f"Store:  {db}  ({_human_size(db.stat().st_size)})")
+    _out(f"Scope:  {scope_key}")
+    empty = (
+        not payload["rules"] and not payload["majors"] and not payload["recent"]
+        and not payload["pending_open"]
+    )
+    if empty:
+        _out()
+        if legs_requested:
+            _out('Board is empty. Post with: rekoll remember "..." --board major')
+        else:
+            _out("All board legs disabled (--recent/--majors/--rules 0).")
+        return
+    if payload["rules"]:
+        _out()
+        _out("## Rules")
+        for rule in payload["rules"]:
+            first, *rest = rule.split("\n")
+            _out(f"  - {first}")
+            for line in rest:
+                _out(f"    {line}")
+    if payload["majors"] or payload["pending_open"]:
+        _out()
+        _out(f"## Major / pending  ({payload['pending_open']} open pending)")
+        for entry in payload["majors"]:
+            _board_entry_lines(entry)
+    if payload["recent"]:
+        _out()
+        _out("## Recent activity")
+        for entry in payload["recent"]:
+            _board_entry_lines(entry)
+
+
+def cmd_board(args: argparse.Namespace) -> int:
+    """Render the live project board WITHOUT building an embedder — the board
+    is a plain, bounded, zero-LLM, zero-embedding read (ADR-0035), served
+    adapter-direct exactly like ``cmd_status`` (``Memory()`` would load — and
+    on first use download — a model for a read that never embeds anything).
+
+    Exit code 0 even when the board is empty — deliberately NOT recall's grep
+    convention. ``recall`` answers a QUERY, so "nothing found" is a result a
+    script branches on (exit 1). ``board`` is a STATUS VIEW like ``status``:
+    an empty board is not a failed lookup, it IS the current state, reported
+    successfully. Machine callers read the payload, not the exit code.
+    """
+    if not _require_store(args):
+        return 1
+    if _refuse_foreign_store(args.path):
+        return 1
+    from .adapters.registry import get_adapter
+    from .board import build_board_payload
+    from .model import Scope
+
+    scope = Scope(tenant=args.tenant, project=args.project, agent=args.agent)
+    try:
+        adapter = get_adapter("sqlite", path=args.path)
+    except sqlite3.Error as exc:
+        return _fail(f"could not open the store: {exc}")
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            payload = build_board_payload(
+                adapter,
+                scope,
+                recent_limit=args.recent,
+                major_limit=args.majors,
+                rules_limit=args.rules,
+            )
+    except sqlite3.Error as exc:  # e.g. a truncated/corrupt db that still opened
+        return _fail(f"could not read the store: {exc}")
+    finally:
+        adapter.close()
+    for w in caught:
+        # Tamper warnings (withheld records, ADR-0019) ride stderr so stdout
+        # stays exactly one parseable object under --json, clean text otherwise.
+        _err(f"rekoll: warning: {w.message}")
+    if args.json:
+        # ONE object, byte-identical to build_board_payload's dict — the same
+        # payload the SDK's BoardResult.to_dict() and the MCP `board` tool
+        # serve (pinned by the three-doors parity suite). ensure_ascii like
+        # recall --json: stored content must survive a cp1252 console.
+        _out(json.dumps(payload))
+        return 0
+    _render_board_human(
+        scope.key(), args.path, payload,
+        legs_requested=bool(args.rules or args.majors or args.recent),
+    )
+    return 0
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+    """Mark board items done, WITHOUT building an embedder.
+
+    Adapter-direct on purpose (the ``cmd_status`` discipline): ``Memory()``
+    would construct — and on first use download — an embedding model for what
+    is a plain status UPDATE. The transition policy is ``Memory.resolve``'s,
+    restated: ACTIVE -> SUPERSEDED and nothing else (the adapter's
+    effective-status gate lives in the UPDATE itself, so a quarantined, forged,
+    proposed, already-resolved, cross-scope, or unknown id is a SILENT per-id
+    no-op — never a resurrection). Resolve MARKS, it never deletes: the bytes
+    stay in the store for audit; the item just leaves the board and recall.
+
+    Exit 0 even when nothing transitioned: resolve is a STATUS VERB — "make
+    these done" — and an already-done item is not a failure. Scripts read the
+    count from stdout ("Resolved N of M."); contrast ``forget``, whose
+    zero-match exits 1 (a delete that deleted nothing usually IS a mistake).
+    """
+    if not _require_store(args):
+        return 1
+    if _refuse_foreign_store(args.path):
+        return 1
+    # Same CRLF hygiene as forget: ids piped through Windows `$(...)` arrive
+    # with glued \r and would silently transition nothing.
+    ids = [i.strip() for i in args.ids if i.strip()]
+    if not ids:
+        return _fail("no ids given (did the board/recall pipeline produce nothing?)")
+    from .adapters.registry import get_adapter
+    from .model import Scope
+
+    scope = Scope(tenant=args.tenant, project=args.project, agent=args.agent)
+    try:
+        adapter = get_adapter("sqlite", path=args.path)
+    except sqlite3.Error as exc:
+        return _fail(f"could not open the store: {exc}")
+    try:
+        resolved = 0
+        for rid in ids:
+            if adapter.set_status(
+                scope=scope, record_id=rid, status=Status.SUPERSEDED.value
+            ):
+                resolved += 1
+    except sqlite3.Error as exc:
+        return _fail(f"could not update the store: {exc}")
+    finally:
+        adapter.close()
+    _out(f"Resolved {resolved} of {len(ids)}.")
     return 0
 
 
@@ -1078,6 +1317,22 @@ def _cosine_threshold(value: str) -> float:
     return f
 
 
+def _board_limit(value: str) -> int:
+    """Validate a board leg limit exactly like the payload builder (ADR-0035):
+    0 disables the leg; negative or over the shared ceiling is refused at parse
+    time (exit 2) so a nonsense limit gets a clean usage error instead of the
+    builder's ValueError being blamed on 'the store or its data'."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"must be a whole number (got {value!r})")
+    if n < 0 or n > BOARD_LIMIT_CEILING:
+        raise argparse.ArgumentTypeError(
+            f"must be between 0 and {BOARD_LIMIT_CEILING} (0 disables this board leg)"
+        )
+    return n
+
+
 def _scope_part(value: str) -> str:
     """Reject at parse time what Scope would reject with a traceback later."""
     if not value or "/" in value or "\x00" in value:
@@ -1173,6 +1428,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--yes", "-y", action="store_true",
                    help="answer yes to any confirmation question (for scripts; "
                         "the standing-rule warning still prints)")
+    p.add_argument("--board", choices=[BOARD_TAG_MAJOR, BOARD_TAG_PENDING], default=None,
+                   help="also pin this memory on the shared project board (ADR-0035): "
+                        "'major' = a curated decision or state, 'pending' = an open item "
+                        "for some session to pick up ('rekoll resolve <id>' marks it "
+                        "done). Curated visibility needs trust at or above "
+                        "'trusted_source'; see 'rekoll board'")
     _add_redact_pii_flag(p)
     p.set_defaults(func=cmd_remember)
 
@@ -1241,6 +1502,54 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Report on the store: counts by kind, embedder, size. Loads no model.",
     )
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser(
+        "board", parents=[shared],
+        help="the shared live project board (rules, majors, recent activity)",
+        description=(
+            "Show the live project board (ADR-0035): the standing rules, the "
+            "curated major/pending items, and the newest activity in this scope "
+            "- what every concurrent AI session on this store should see. Loads "
+            "no model. Exit code 0 even when the board is empty (a status view, "
+            "not a search): read the payload, not the exit code."
+        ),
+    )
+    p.add_argument("--json", action="store_true",
+                   help="print one JSON object {rules, majors, recent, pending_open, "
+                        "latest} - byte-identical to the SDK's Memory.board().to_dict() "
+                        "and the MCP board tool (tamper warnings go to stderr)")
+    p.add_argument("--recent", type=_board_limit, default=10, metavar="N",
+                   help="max activity-feed entries (default: %(default)s; 0 disables "
+                        f"the leg; ceiling {BOARD_LIMIT_CEILING})")
+    p.add_argument("--majors", type=_board_limit, default=10, metavar="N",
+                   help="max curated major/pending entries (default: %(default)s; 0 "
+                        f"disables the leg; ceiling {BOARD_LIMIT_CEILING})")
+    # The literal 5 == board.DEFAULT_BOARD_RULES_LIMIT. Restated because this
+    # module defers every non-model import (importing .board here would pull
+    # firewall at CLI start); pinned equal by test_cli_board.py so it can't
+    # drift (a PR #62 review finding).
+    p.add_argument("--rules", type=_board_limit, default=5, metavar="N",
+                   help="max standing rules (default: %(default)s - the same five "
+                        "recall pins; 0 disables the leg; ceiling "
+                        f"{BOARD_LIMIT_CEILING})")
+    p.set_defaults(func=cmd_board)
+
+    p = sub.add_parser(
+        "resolve", parents=[shared],
+        help="mark board items done (active -> superseded; never deletes)",
+        description=(
+            "Mark board items done: active -> superseded, nothing else. The "
+            "record's bytes stay in the store for audit; the item just leaves "
+            "the board and recall. Ids that don't transition (unknown, already "
+            "resolved, another scope, quarantined) are silent no-ops - the "
+            "printed count is the honest report, and the exit code stays 0 "
+            "(a status verb, not a delete; contrast 'rekoll forget')."
+        ),
+    )
+    p.add_argument("ids", nargs="+", metavar="id",
+                   help="record id(s) to resolve, e.g. rk_1a2b... (get them from "
+                        "'rekoll board' or 'rekoll board --json')")
+    p.set_defaults(func=cmd_resolve)
 
     p = sub.add_parser(
         "doctor", parents=[shared],
