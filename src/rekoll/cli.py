@@ -241,6 +241,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         _out(line)
     if _semantic_extra_installed():
         _out("  search mode: real semantic search  (the 'embeddings' extra is installed)")
+        _out("    (your first 'remember' fetches the small search model once -")
+        _out("     a download, not an upload; after that, fully offline)")
     else:
         _out("  search mode: basic keyword matching")
         _out('    for real semantic search, run:  pip install "rekoll[embeddings]"')
@@ -262,8 +264,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     _out()
     _out("Everything stays on this machine. No API key. Reads never call an LLM.")
     # Both promises below are true-by-code, not policy (ADR-0007): the default
-    # install CONTAINS no telemetry or upload code, and a CI network-egress
-    # test keeps it that way.
+    # path RUNS no telemetry or upload code - the opt-in provider layer is
+    # never even imported unless the user names a provider (ADR-0015) - and
+    # CI network-egress tests keep it that way (test_invariants.py).
     _out("No telemetry (usage tracking): Rekoll phones home to no one - nothing")
     _out("you do here is sent anywhere, and nothing you store is ever used to")
     _out("train an AI.")

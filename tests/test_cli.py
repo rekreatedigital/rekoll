@@ -141,10 +141,19 @@ def test_init_reports_search_mode_in_plain_language(project, capsys, monkeypatch
     # In a bare env this is keyword mode; with the extra it is semantic. Pin both.
     monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: False)
     assert main(["init"]) == 0
-    assert 'pip install "rekoll[embeddings]"' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert 'pip install "rekoll[embeddings]"' in out
+    # Keyword mode fetches nothing, so it must not promise (or disclose) a
+    # model download.
+    assert "a download, not an upload" not in out
     monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: True)
     assert main(["init"]) == 0
-    assert "real semantic search" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "real semantic search" in out
+    # Semantic mode's one-time model fetch is real outbound traffic the egress
+    # tests deliberately exempt, so the banner that promises "nothing is sent
+    # anywhere" must disclose it right where it makes that promise.
+    assert "a download, not an upload" in out
 
 
 def test_init_appends_to_existing_gitignore_preserving_content(project, capsys):

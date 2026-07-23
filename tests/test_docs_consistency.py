@@ -96,15 +96,17 @@ def test_design_marks_wrap_as_planned_until_it_ships():
     exists anywhere in src/ (owner decision 2026-07: fix docs now, build
     later). Pin the honest wording: every DESIGN.md line that mentions the
     `wrap(...)` on-ramp must say "planned" on that same line, and the old
-    present-tense sales phrasing stays dead. The hasattr guard makes shipping
-    wrap() fail THIS test, forcing the docs flip to present tense in the same
-    PR — the exact drift this file exists to catch."""
+    present-tense sales phrasing stays dead. The hasattr guards trip the two
+    obvious landing spots (module-level `rekoll.wrap` and a `Memory.wrap`
+    method), forcing the docs flip to present tense in the same PR; a wrap()
+    shipped anywhere else still needs this pin retired by hand."""
     import rekoll
 
-    assert not hasattr(rekoll, "wrap"), (
-        "wrap() has shipped — reword DESIGN.md §8 (and its Planned block) to "
-        "present tense and retire this pin in the same PR"
-    )
+    for spot in (rekoll, rekoll.Memory):
+        assert not hasattr(spot, "wrap"), (
+            "wrap() has shipped — reword DESIGN.md §8 (and its Planned block) "
+            "to present tense and retire this pin in the same PR"
+        )
     design = _read("docs/DESIGN.md")
     wrap_lines = [line for line in design.splitlines() if "wrap(" in line]
     assert wrap_lines, "DESIGN.md no longer mentions the wrap() on-ramp at all"
