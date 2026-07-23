@@ -3,15 +3,19 @@
 All notable changes to Rekoll are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project aims to adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
-once it starts tagging releases.
-
-Rekoll is **pre-alpha and not yet published to PyPI**, so there are no tagged
-releases yet — everything below lives under **Unreleased** until the first `0.x`
-tag. A dedicated **Security** heading is kept per the governance commitment in
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+A dedicated **Security** heading is kept per the governance commitment in
 [docs/DESIGN.md](docs/DESIGN.md) §9.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.1.0] - 2026-07-24
+
+The first public release — Rekoll is on PyPI: `pip install rekoll`.
+Still pre-alpha in spirit: young, honest about its gaps, and built in the open
+(1,250 tests across Linux/macOS/Windows on Python 3.10–3.13).
 
 ### Security
 
@@ -138,4 +142,5 @@ tag. A dedicated **Security** heading is kept per the governance commitment in
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/commits/main
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/rekreatedigital/rekoll/releases/tag/v0.1.0
