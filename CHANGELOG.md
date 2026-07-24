@@ -9,7 +9,21 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Provenance pointers on recall** (ADR-0037 §8): every recalled hit that came
+  from a file now says which file. The CLI's human line gains
+  `| from: CLAUDE.md#4`, and the SDK (`RecallResult.sources()`), `recall --json`
+  and the MCP `recall` tool gain a nullable `sources` list parallel to `ids` —
+  `{"file", "chunk"}` per hit, `null` for a `remember`ed fact with no file.
+  Correct a wrong memory where the truth lives instead of patching the index.
+  `ContextEnvelope.render()` is byte-for-byte unchanged (ADR-0013). (#75, read half)
+
+### Fixed
+
+- `ingest` no longer leaks compile-time warnings provoked by the *ingested*
+  file's source (e.g. `SyntaxWarning: invalid escape sequence` on Python
+  3.12+) into CLI/MCP output; rekoll's own warnings still surface (#89).
 
 ## [0.1.1] - 2026-07-24
 

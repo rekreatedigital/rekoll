@@ -29,6 +29,10 @@ present tense for capabilities that are planned, not yet shipped. Current realit
   facade with server-pinned scope + trust (writes stamped UNVERIFIED by default,
   no directive writes, ingest confined to a root) — ADR-0008 Door 1. The
   no-Python Node/`npx` wrapper around it is still planned.
+- **Provenance pointers on recall** (ADR-0037 §8): a hit that came from a file
+  names it — `| from: CLAUDE.md#4` on the CLI's human line, and a nullable
+  `sources` entry in the SDK / `recall --json` / MCP payloads, byte-identical
+  across the three doors. `ContextEnvelope.render()` is unchanged.
 
 **Planned — NOT yet implemented (described in present tense below):**
 - The learned consolidation loop (L3) and legible graduation gate (L4). No LLM
