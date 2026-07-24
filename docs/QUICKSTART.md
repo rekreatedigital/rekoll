@@ -13,8 +13,8 @@ searching work fully offline.
 Install from PyPI. Which command you want depends on the door:
 
 ```bash
-pipx install "rekoll[embeddings]"   # doors 1 & 3 (CLI, MCP) — recommended
-pip install "rekoll[embeddings]"    # door 2 (Python SDK) — into your project's venv
+pipx install "rekoll[embeddings,mcp]"   # doors 1 & 3 (CLI, MCP) — recommended
+pip install "rekoll[embeddings]"        # door 2 (Python SDK) — into your project's venv
 ```
 
 [pipx](https://pipx.pypa.io) gives Rekoll its own private environment, so

@@ -36,7 +36,8 @@ Create `.mcp.json` in the project root:
 
 Claude Code picks that up automatically the next time it opens the project.
 Because it's a file in the repo, it's config-as-code: everyone who clones the
-project gets the same memory server without doing anything.
+project gets the same memory server — approve it once when Claude Code asks
+(a security check on project-supplied servers), and it just works.
 
 **Claude Code — the `claude` CLI**, if you have it. Run this inside your project:
 
