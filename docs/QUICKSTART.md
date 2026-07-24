@@ -82,11 +82,15 @@ Useful flags:
   ```
 
 - `rekoll recall "query" --json` — one JSON object for scripts and agents:
-  `{context, directives, ids, mode, count, abstained, top_vector_score}` (the same
-  shape the MCP `recall` tool returns). `directives` is your project's **standing
-  rules** — the always-on instructions returned on *every* recall, whatever you
-  searched for, so a saved rule never vanishes just because it didn't rank in
-  (ADR-0034). `mode` names the search that actually ran — `vector+lexical+rerank`
+  `{context, directives, ids, sources, mode, count, abstained, top_vector_score}`
+  (the same shape the MCP `recall` tool returns). `directives` is your project's
+  **standing rules** — the always-on instructions returned on *every* recall,
+  whatever you searched for, so a saved rule never vanishes just because it
+  didn't rank in (ADR-0034). `sources` says where each hit came from, in the same
+  order as `ids`: `{"file": "runbook.md", "chunk": 2}` for something you
+  `ingest`ed, `null` for something you `remember`ed — so when a memory is wrong
+  you can fix it in the file it came from instead of only in the index. `mode`
+  names the search that actually ran — `vector+lexical+rerank`
   is a full hybrid ranking, while `lexical-only: embedder mismatch` means the
   semantic leg is switched off and you should trust the *order* less. It still
   prints the object (and still exits `1`, like `grep`) when nothing matched, so a

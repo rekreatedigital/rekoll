@@ -121,12 +121,19 @@ def test_design_marks_wrap_as_planned_until_it_ships():
 
 def test_design_marks_memory_plus_index_as_planned_until_it_ships():
     """ADR-0037 designs tracked sources / `remember --to` / provenance
-    pointers without building any of it (issue #75). Same honesty pin as the
-    wrap() one above: while none of the three obvious landing spots exist —
-    a Memory sources/adopt/sync surface, a `sources` CLI subcommand, a
-    `remember --to` flag — every DESIGN.md line naming the feature must say
-    "planned" on that same line. Whichever lane ships a piece retires or
-    reworks this pin in the same PR."""
+    pointers (issue #75). Same honesty pin as the wrap() one above: while none
+    of the three obvious landing spots exist — a Memory sources/adopt/sync
+    surface, a `sources` CLI subcommand, a `remember --to` flag — every
+    DESIGN.md line naming the feature must say "planned" on that same line.
+    Whichever lane ships a piece retires or reworks this pin in the same PR.
+
+    Lane (c) — **provenance pointers on recall — HAS shipped** (§8: the CLI's
+    `from: FILE#CHUNK` and the `sources` payload key), so DESIGN.md now states
+    that half in the present tense and this pin was narrowed to the WRITE half:
+    the registry and `remember --to`. It is deliberately NOT retired — those two
+    are what still must not be advertised as live. Note the collision of names:
+    `RecallResult.sources()` (shipped, per-hit provenance) is a different surface
+    from a `Memory.sources` registry (planned); only the latter trips this pin."""
     import argparse
 
     import rekoll
@@ -172,7 +179,8 @@ def test_design_marks_memory_plus_index_as_planned_until_it_ships():
 # LLM-FACING surface, so the docs edit lands in the same PR.
 
 PINNED_MCP_RECALL_KEYS = {
-    "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
+    "context", "directives", "ids", "sources", "mode", "count", "abstained",
+    "top_vector_score",
 }
 PINNED_MCP_STATUS_KEYS = {
     "memories", "scope", "store", "write_trust", "writable_kinds",

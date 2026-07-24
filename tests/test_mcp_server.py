@@ -190,9 +190,13 @@ def test_recall_returns_envelope_ids_and_mode_only():
     _remember(mem, "we chose Postgres over BigQuery for cost", "raw_fact")
     out = _recall(mem, "why postgres", 3)
     assert set(out) == {
-        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "sources", "mode", "count", "abstained",
+        "top_vector_score",
     }
     assert out["directives"] == []  # no standing rules stored (ADR-0034 empty case)
+    # Provenance pointers (ADR-0037 §8): parallel to ids, null for a remembered
+    # fact — the key is always present, so the payload shape stays constant.
+    assert out["sources"] == [None] * len(out["ids"])
     assert ENVELOPE_HEADER in out["context"]
     assert "Postgres" in out["context"]
     assert out["count"] == len(out["ids"]) and all(i.startswith("rk_") for i in out["ids"])

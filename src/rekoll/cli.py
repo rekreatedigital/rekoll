@@ -860,17 +860,48 @@ def _recall_payload(result) -> dict:
     the ``context`` string. ``directives`` is the SAME list rendered into
     ``context``'s ``# Trusted directives`` block (one envelope, one source), so
     the two never disagree.
+
+    ``sources`` is the provenance-pointer channel (ADR-0037 §8): one entry per
+    ranked hit, positionally parallel to ``ids`` — ``{"file", "chunk"}`` when the
+    hit was ingested from a file, ``null`` when it was not (a ``remember``ed
+    record has no file). Built by ``RecallResult.sources()``, the one builder
+    both machine doors call, so the field cannot drift between them.
     """
     env = result.envelope()  # build once: context and directives share it
     return {
         "context": env.render(),
         "directives": list(env.directives),
         "ids": result.ids(),
+        "sources": result.sources(),
         "mode": result.mode,
         "count": len(result),
         "abstained": result.abstained,
         "top_vector_score": result.top_vector_score,
     }
+
+
+def _source_pointer(record) -> str:
+    """`` | from: FILE#CHUNK`` for a hit that came from a file, else ``''``.
+
+    The provenance pointer on the human recall line (ADR-0037 §8): a wrong
+    memory that came from a file must be corrected IN that file, so the line
+    says which one. Omitted entirely — no empty ``from:`` — when the record has
+    no ``source_file``, which every ``remember``ed record legitimately doesn't.
+    The chunk index is dropped (not printed as ``#None``) on the rarer records
+    that carry a file with no index; ``Provenance`` allows that pair.
+
+    Deliberately NOT in ``ContextEnvelope.render()``: the envelope is a pure,
+    byte-stable function of its hits by contract (ADR-0013, re-affirmed by
+    ADR-0034 §4), and pointers are an errata workflow for the human or agent
+    driving the read, not evidence for the model. The pointer rides this line
+    and the machine payloads only.
+    """
+    prov = record.provenance
+    if prov.source_file is None:
+        return ""
+    if prov.chunk_index is None:
+        return f" | from: {prov.source_file}"
+    return f" | from: {prov.source_file}#{prov.chunk_index}"
 
 
 def cmd_recall(args: argparse.Namespace) -> int:
@@ -923,7 +954,10 @@ def cmd_recall(args: argparse.Namespace) -> int:
         _out(f"[{rank}] {first}")
         for line in rest:
             _out(f"    {line}")
-        _out(f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} | id: {record.id})")
+        _out(
+            f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} "
+            f"| id: {record.id}{_source_pointer(record)})"
+        )
     return 0
 
 
@@ -1534,9 +1568,11 @@ def _build_parser() -> argparse.ArgumentParser:
     fmt.add_argument("--ids", action="store_true",
                      help="print matching ids only, one per line (pipe into 'rekoll forget')")
     fmt.add_argument("--json", action="store_true",
-                     help="print one JSON object {context, directives, ids, mode, count, "
-                          "abstained, top_vector_score}; 'directives' is the standing rules "
-                          "that always apply (ADR-0034), 'mode' names the retrieval pipeline "
+                     help="print one JSON object {context, directives, ids, sources, mode, "
+                          "count, abstained, top_vector_score}; 'directives' is the standing "
+                          "rules that always apply (ADR-0034), 'sources' says which file each "
+                          "hit came from (parallel to 'ids'; null for a remembered fact), "
+                          "'mode' names the retrieval pipeline "
                           "that ran (e.g. 'lexical-only: embedder mismatch' when degraded), "
                           "and 'abstained' is true when --min-score refused the query")
     p.set_defaults(func=cmd_recall)

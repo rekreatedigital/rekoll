@@ -352,11 +352,33 @@ def _recall(mem: Memory, query: str, k: int, min_score: Optional[float] = None) 
     # returning them leaks nothing an injected instruction could exploit; a
     # recalled DATA memory still never becomes an instruction. Built from one
     # envelope so ``directives`` and ``context`` can never disagree.
+    #
+    # ``sources`` is the provenance-pointer channel (ADR-0037 §8, owner decision
+    # D4): one entry per ranked hit, parallel to ``ids`` — the file a hit was
+    # ingested from, or null for a remembered fact that has none. Without it an
+    # agent that recalls a WRONG memory can only "fix" the index, and the file it
+    # came from re-poisons the store on the next ingest.
+    #
+    # This DOES cross the counts-not-names door rule (L-mcp-rootleak), so it is a
+    # decided exception, not a drift — bounded by three facts:
+    #   * the pointer names a file whose CONTENT this same payload is already
+    #     handing the model in ``context``; it reveals strictly less than the hit
+    #     it labels. The rule's targets are different: the server's absolute
+    #     layout, and the names of files the operator's policy EXCLUDED
+    #     (``secrets_skipped`` / ``filtered`` — content the model never sees).
+    #   * ``source_file`` is stored RELATIVE to the ingest root
+    #     (``Memory.ingest_path``), never absolute, so no server path rides out
+    #     (tests/test_mcp_server_honesty.py pins that).
+    #   * read-side only: MCP still cannot adopt a source, vouch trust, or write
+    #     a file (ADR-0037 §7) — the pointer is a reference, not a capability.
+    # Built by ``RecallResult.sources()``, the same builder the CLI door calls,
+    # so the two machine doors cannot drift.
     env = result.envelope()
     return {
         "context": env.render(),
         "directives": list(env.directives),
         "ids": result.ids(),
+        "sources": result.sources(),
         "mode": result.mode,
         "count": len(result),
         "abstained": result.abstained,
@@ -629,6 +651,14 @@ def build_server(config: ServerConfig):
         a rekoll reindex) and these hits are keyword-ranked, so trust their
         ORDER less; a trailing "(stub-embedder)" means no real semantics are
         installed. k is capped at 25.
+
+        `sources` says where each hit CAME FROM — one entry per hit, in the same
+        order as `ids`: `{"file": "CLAUDE.md", "chunk": 4}` when it was indexed
+        from a file, or null when it was not (a fact saved with remember has no
+        file). Use it when a recalled memory is WRONG or out of date: the file is
+        the truth, so tell the human to correct it there — re-indexing that file
+        supersedes the stale chunk, while "fixing" the memory alone leaves the
+        file to re-poison it on the next ingest.
 
         `min_score` (optional) turns on the ABSTAIN gate: a floor on the top-1
         vector cosine similarity in [-1, 1]. If the closest memory is not at

@@ -421,6 +421,24 @@ def test_cli_json_is_a_new_view_of_the_same_recall_not_a_new_ranking(store, sdk)
         assert payload["mode"] == EXPECTED_MODE
 
 
+def test_sdk_and_cli_agree_on_provenance_pointers(store, sdk):
+    """The no-extra leg of the ADR-0037 §8 pin (the three-door version below
+    needs the mcp extra): the SDK's ``RecallResult.sources()`` and the CLI's
+    ``--json`` ``sources`` are the SAME list, positionally parallel to ``ids``,
+    with the ingested-vs-remembered split really exercised."""
+    seen_file = seen_null = 0
+    for query in QUERIES:
+        result = sdk.recall(query, k=K)
+        payload = _cli_json(store, query)
+        assert result.sources() == payload["sources"], f"pointers diverged on {query!r}"
+        assert len(payload["sources"]) == len(payload["ids"])
+        seen_file += sum(1 for s in payload["sources"] if s is not None)
+        seen_null += sum(1 for s in payload["sources"] if s is None)
+    assert seen_file and seen_null, (
+        f"one leg went unexercised (file={seen_file}, null={seen_null})"
+    )
+
+
 def test_cli_json_reports_mode_even_when_nothing_matched(store, sdk):
     """The degraded-and-empty case is the one a machine caller most needs to
     read: no directives are stored, so the door returns zero hits, exit 1 — and
@@ -491,7 +509,7 @@ def test_mode_crosses_every_door(store, sdk):
 
 
 def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
-    """The two machine doors return the SAME four keys, so a caller can move a
+    """The two machine doors return the SAME keys, so a caller can move a
     script from the CLI to MCP (or an agent the other way) without reshaping
     what it reads. Divergence here is how the mode gap crept in the first time.
     """
@@ -501,15 +519,86 @@ def test_cli_json_and_mcp_recall_hand_back_one_payload_shape(store):
     cli_payload = _cli_json(store, query)
 
     assert set(cli_payload) == set(mcp_payload) == {
-        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "sources", "mode", "count", "abstained",
+        "top_vector_score",
     }
     assert cli_payload["ids"] == mcp_payload["ids"]
+    assert cli_payload["sources"] == mcp_payload["sources"]  # provenance (ADR-0037 §8)
     assert cli_payload["mode"] == mcp_payload["mode"]
     assert cli_payload["count"] == mcp_payload["count"]
     assert cli_payload["context"] == mcp_payload["context"]  # one envelope, one renderer
     assert cli_payload["abstained"] == mcp_payload["abstained"]  # abstain gate (ADR-0028/0031)
     assert cli_payload["top_vector_score"] == mcp_payload["top_vector_score"]
     assert cli_payload["directives"] == mcp_payload["directives"]  # standing channel (ADR-0034)
+
+
+# -- provenance pointers across all three doors (ADR-0037 §8) -------------------
+
+def test_provenance_pointers_are_identical_across_all_three_doors(store, sdk):
+    """THE ADR-0037 §8 cross-door pin: ``sources`` — where each hit CAME FROM —
+    is identical at SDK (``RecallResult.sources()``), CLI ``--json`` and the real
+    MCP stdio server, for every query.
+
+    The corpus makes both cases real: ``REMEMBERED_FACTS`` carry no file (null),
+    ``INGESTED_DOCS`` chunks carry file + chunk index. A door that built its own
+    pointer — or dropped the key — diverges here, which is the whole reason this
+    field is built once in ``RecallResult.sources()`` and merely rendered by the
+    two machine doors.
+    """
+    calls = [(q, K) for q in QUERIES]
+    mcp_out, _ = _mcp_recall_bulk(store, calls)
+
+    seen_file = 0
+    seen_null = 0
+    for query in QUERIES:
+        sdk_sources = sdk.recall(query, k=K).sources()
+        cli_sources = _cli_json(store, query)["sources"]
+        mcp_sources = mcp_out[(query, K)]["sources"]
+        assert sdk_sources == cli_sources == mcp_sources, (
+            f"provenance pointers diverged across doors on {query!r}:\n"
+            f"    sdk {sdk_sources}\n    cli {cli_sources}\n    mcp {mcp_sources}"
+        )
+        # Positional contract: one entry per ranked hit, same order as ids.
+        assert len(cli_sources) == len(_cli_json(store, query)["ids"])
+        for entry in cli_sources:
+            if entry is None:
+                seen_null += 1
+                continue
+            seen_file += 1
+            assert set(entry) == {"file", "chunk"}
+            assert entry["file"] in INGESTED_DOCS, entry
+            assert isinstance(entry["chunk"], int) and entry["chunk"] >= 0
+
+    # Neither leg may be vacuous: the ingested docs and the remembered facts BOTH
+    # have to show up, or this pin would pass on an all-null (pre-feature) list.
+    assert seen_file, "no ingested hit surfaced — the file-pointer leg went unexercised"
+    assert seen_null, "no remembered hit surfaced — the null leg went unexercised"
+
+
+def test_cli_human_line_names_the_file_a_hit_came_from(store):
+    """The human door's half of §8: an ingested hit's detail line carries
+    ``| from: FILE#CHUNK``, a ``remember``ed one carries no pointer at all (not
+    an empty ``from:``). Run through the real CLI subprocess, so this is the
+    text a person actually sees."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "rekoll", "recall", "embedding model swap reindex",
+         "-k", "20", "--path", store.db, "--project", PROJECT],
+        capture_output=True, encoding="utf-8", errors="replace",
+        env=store.env, cwd=str(store.root), timeout=120,
+    )
+    assert proc.returncode == 0, f"CLI recall failed:\n{proc.stderr}"
+    detail = [line.strip() for line in proc.stdout.splitlines()
+              if line.strip().startswith("(") and "| id: rk_" in line]
+    assert detail, f"no detail lines in CLI output:\n{proc.stdout}"
+
+    pointed = [line for line in detail if "| from: " in line]
+    plain = [line for line in detail if "| from: " not in line]
+    assert pointed, f"no hit named its source file:\n{proc.stdout}"
+    assert plain, f"no remembered hit stayed pointer-free:\n{proc.stdout}"
+    for line in pointed:
+        assert re.search(r"\| from: (runbook|decisions)\.md#\d+\)$", line), line
+    for line in plain:
+        assert line.endswith(")") and "from:" not in line, line
 
 
 # The abstain gate is a COSINE floor; on the stub corpus every top-1 cosine is

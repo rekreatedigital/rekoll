@@ -102,10 +102,12 @@ rekoll status        # what's stored here
 
 `rekoll recall --context` prints a safe, LLM-ready block you can paste (or pipe)
 into any AI tool; `rekoll recall --json` emits
-`{context, directives, ids, mode, count, abstained, top_vector_score}` for
+`{context, directives, ids, sources, mode, count, abstained, top_vector_score}` for
 scripts — the same keys the MCP `recall` tool returns. `mode` names the search
 pipeline that actually ran, so a degraded index can't hide; `directives` carries
-your standing rules; `abstained`/`top_vector_score` expose the abstain gate. And
+your standing rules; `sources` says which file each hit came from (`null` for a
+remembered fact), so a wrong memory gets fixed where the truth lives;
+`abstained`/`top_vector_score` expose the abstain gate. And
 `rekoll doctor` checks your setup if anything misbehaves.
 
 **Same store, from Python:**
