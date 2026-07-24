@@ -174,10 +174,18 @@ def _require_store(args: argparse.Namespace) -> bool:
     The cwd is excluded from the "directory exists" branch on purpose: for a
     bare ``--path mem.db`` the parent IS the cwd, which always exists and says
     nothing about whether setup ever ran.
+
+    A non-default ``--path`` is echoed into the hinted commands: without it,
+    following the hint verbatim writes the DEFAULT store and the user's
+    original command fails again — the same "hint sends you in a circle"
+    disease this function exists to cure. (Path comparison, not string:
+    argparse runs the default through ``_db_path`` too, so the stored value is
+    already expanded.)
     """
     if _store_exists(args.path):
         return True
     _err(f"rekoll: error: no memory store at {args.path}")
+    at = "" if Path(args.path) == Path(DEFAULT_DB_PATH) else f" --path {args.path}"
     store_dir = Path(args.path).expanduser().parent
     initialized = False
     try:
@@ -186,9 +194,9 @@ def _require_store(args: argparse.Namespace) -> bool:
         initialized = False
     if initialized:
         _err(f"hint: {store_dir} is here but holds no store yet - start one with "
-             "'rekoll remember \"something worth keeping\"' (or 'rekoll ingest .')")
+             f"'rekoll remember \"something worth keeping\"{at}' (or 'rekoll ingest .{at}')")
     else:
-        _err("hint: run 'rekoll init', then 'rekoll remember \"something worth keeping\"'")
+        _err(f"hint: run 'rekoll init{at}', then 'rekoll remember \"something worth keeping\"{at}'")
     return False
 
 

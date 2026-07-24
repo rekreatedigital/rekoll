@@ -1286,6 +1286,21 @@ def test_no_store_hint_never_suggests_init_when_the_store_dir_exists(project, ca
         assert "rekoll remember" in err
 
 
+def test_no_store_hint_echoes_a_custom_path(project, capsys):
+    """A hint the user can't follow verbatim is a hint that lies: without the
+    --path echo, the suggested commands write the DEFAULT store and the user's
+    original command fails again, in a loop. Both hint branches carry it."""
+    (project / "sub2").mkdir()               # parent exists -> "start one" branch
+    assert main(["status", "--path", "sub2/mem.db"]) == 1
+    err = capsys.readouterr().err
+    assert "rekoll remember" in err and "--path" in err and "mem.db" in err
+    assert main(["status", "--path", "sub3/mem.db"]) == 1   # no dir -> init branch
+    err = capsys.readouterr().err
+    assert "rekoll init --path" in err and "mem.db" in err
+    assert main(["status"]) == 1             # the default path stays clean
+    assert "--path" not in capsys.readouterr().err
+
+
 # -- scoping -----------------------------------------------------------------
 
 def test_scopes_are_isolated_between_projects(project, capsys):
