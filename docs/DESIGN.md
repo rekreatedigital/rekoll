@@ -52,6 +52,12 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - The SDK's planned `wrap(llm_client, scope=...)` two-line on-ramp (§8) —
   recall-before, remember-after around a caller's own LLM client. No `wrap`
   exists in the package today.
+- The **"memory + index" integration (ADR-0037) — planned, not yet implemented.**
+  Tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer
+  and re-index it on explicit sync) are planned; write-through `remember --to`
+  is planned; provenance pointers on recall are planned. No `sources`/adopt
+  verb, no `--to` flag, and no recall file-pointer rendering exist in the
+  package today — the files-are-truth model is design only (issue #75).
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named
@@ -294,8 +300,9 @@ A single **tight monorepo** (not Hindsight's 16-separately-licensed sub-packages
 
 A pre-build review (migration, non-technical UX, BYO-AI reality, pre-mortem) added these. All three headline promises survived; each gained a precise rule.
 
-**Adopting Rekoll when you already have memory — three doors, never a forced delete:**
-- **Import once** via the pluggable `IngestionSource` readers (folder-of-markdown/CLAUDE.md, git-notes, a competitor export e.g. Mem0 JSON, a generic DB-table). Imports are **read-only on the originals**, **idempotent** (content-addressed, ADR-0006), keep the **original timestamps**, and carry a visible "imported from X" tag.
+**Adopting Rekoll when you already have memory — four doors, never a forced delete:**
+- **Integrate (planned, ADR-0037 — not yet implemented):** adopt the existing legible layer as tracked sources — the files stay the truth, Rekoll is the retrieval + safety index over them, re-ingested only on explicit commands. Docs present this integrated mode FIRST; today's `.rekoll`-only dual-store behavior is the fallback where no legible layer exists.
+- **Import once** via the pluggable `IngestionSource` readers (folder-of-markdown/CLAUDE.md, git-notes, a competitor export e.g. Mem0 JSON, a generic DB-table). Imports are **read-only on the originals**, **idempotent** (content-addressed, ADR-0006), keep the **original timestamps**, carry a visible "imported from X" tag, and stay strictly **opt-in** (never the default onboarding path — ADR-0037 §9).
 - **Coexist** by pointing Rekoll at the user's **existing** Postgres/Supabase (own namespaced schema beside their data).
 - **Wrap, don't replace** an existing agent during a trial, with a one-flag cutover to "Rekoll is the single source of truth."
 - Honest limit: content + dates + tags transfer faithfully; another tool's internal scores/links are **rebuilt** on import, not copied. Bulk imports run through the **same firewall** as live writes (a prime poisoning vector).
