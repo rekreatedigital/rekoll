@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import re
+import warnings
 
 __all__ = [
     "chunk_text",
@@ -105,7 +106,22 @@ def chunk_python(text: str, *, max_size: int = CODE_MAX) -> list[str]:
     for now they go through ``chunk_text`` (ADR-0012).
     """
     try:
-        tree = ast.parse(text)
+        with warnings.catch_warnings():
+            # The ingested file is DATA; warnings its source provokes at parse
+            # time (e.g. SyntaxWarning / DeprecationWarning for an invalid
+            # escape sequence like "foo\_bar") are ITS lint noise, not ours,
+            # and must never reach rekoll's output (#89). Scoped to exactly
+            # this parse of ingested bytes: rekoll's own warnings (secrets
+            # stored/skipped, symlink skips, tamper notices) keep flowing.
+            # simplefilter inside catch_warnings — not catch_warnings(action=
+            # "ignore"), which is 3.11+ — so 3.10 works. "ignore" also beats a
+            # user's -W error here: their global warning config should not be
+            # able to turn a target file's lint noise into a failed ingest.
+            # catch_warnings mutates process-global filter state (not
+            # thread-safe); nothing in rekoll parses on threads today, so the
+            # window is real only for host apps that ingest concurrently.
+            warnings.simplefilter("ignore")
+            tree = ast.parse(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         # SyntaxError: not valid Python -> fall back to text chunking (ADR-0012).
         # ValueError: source with embedded NUL. RecursionError / MemoryError
