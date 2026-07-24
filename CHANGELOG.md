@@ -9,7 +9,24 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- `rekoll init` now creates the memory store file itself, so `rekoll status`
+  (and `board`/`recall`) work immediately after setup instead of reporting
+  "no memory store — run 'rekoll init'" (#71). `init` also now refuses a
+  `--path` pointing at a non-rekoll SQLite database, and the no-store hints
+  echo a custom `--path` so they can be followed verbatim.
+
+### Changed
+
+- Onboarding docs (#74): a project-root `.mcp.json` is documented beside the
+  `claude` CLI hint (Claude Code's VS Code extension ships no CLI), install
+  guidance is pipx-first with an honest SDK caveat, and docs/MCP.md is
+  PyPI-first now that `pip install rekoll` is real.
+- ADR-0037 designs the "memory + index" integration (#75) — tracked file
+  sources, write-through `remember --to`, provenance pointers on recall.
+  Design only: nothing is implemented, and a tripwire test pins DESIGN.md's
+  wording to say so until it ships.
 
 ## [0.1.0] - 2026-07-24
 
