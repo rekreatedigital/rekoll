@@ -1,6 +1,6 @@
 # ADR-0037 — Memory + index: legible files stay the truth; Rekoll is the tracked retrieval + safety layer over them
 
-**Status:** Proposed (design accepted for planning; owner decisions listed in §10 — NOTHING in this ADR is implemented) · **Date:** 2026-07-24 · **Extends:** ADR-0006 (content-addressed ids), ADR-0016 (ingest trust default), ADR-0023 (trust-aware upsert), ADR-0025 (tombstones/supersession), ADR-0035 (board — §5 `set_status`, §6 no-discovery posture), ADR-0036 (opt-in wizard) · **Interacts with:** ADR-0002 (provenance foundational), ADR-0004 (frozen kinds), ADR-0013 (envelope byte-identity), ADR-0017/0034 (directive vouch + standing channel), ADR-0031 (door parity), ADR-0033 (warn-loudly posture)
+**Status:** Accepted (owner resolved every §10 decision on 2026-07-24, adopting each recommendation — NOTHING in this ADR is implemented yet; the DESIGN.md tripwire pins that) · **Date:** 2026-07-24 · **Extends:** ADR-0006 (content-addressed ids), ADR-0016 (ingest trust default), ADR-0023 (trust-aware upsert), ADR-0025 (tombstones/supersession), ADR-0035 (board — §5 `set_status`, §6 no-discovery posture), ADR-0036 (opt-in wizard) · **Interacts with:** ADR-0002 (provenance foundational), ADR-0004 (frozen kinds), ADR-0013 (envelope byte-identity), ADR-0017/0034 (directive vouch + standing channel), ADR-0031 (door parity), ADR-0033 (warn-loudly posture)
 
 ## Context
 
@@ -317,6 +317,10 @@ anti-lock-in story: the conversion pitch is harmful in exactly the repos most
 likely to adopt (issue #75). Accepted as proposed — no overrule.
 
 ## 10. Owner decisions (plain language, one recommendation each)
+
+> **Resolved 2026-07-24 — owner adopted every recommendation below as-is**
+> (recorded on issue #75). Kept in full for the reasoning; the picked option
+> is the one marked "(recommended)" in each bullet.
 
 - **D1 — default trust tier at adopt time.** Options: `TRUSTED_SOURCE`
   (recommended) / `UNVERIFIED` / `OWNER`. Why: trusted-source makes the file
