@@ -893,6 +893,100 @@ def test_recall_finds_by_meaningful_keywords(project, capsys):
     assert "rk_" in captured.out  # ids are shown so forget can use them
 
 
+# -- recall: provenance pointers (ADR-0037 §8) ---------------------------------
+
+def _detail_lines(out: str) -> list[str]:
+    """The ``(kind | trust: … | id: …)`` line under each hit."""
+    return [line.strip() for line in out.splitlines()
+            if line.strip().startswith("(") and "| id: rk_" in line]
+
+
+def test_source_pointer_renders_every_provenance_shape():
+    """The three shapes ``Provenance`` actually permits, at the rendering seam:
+    file+chunk, file with no chunk (never ``#None``), and no file at all (no
+    ``from:`` fragment, so the line reads exactly as it always did)."""
+    from types import SimpleNamespace
+
+    from rekoll.cli import _source_pointer
+
+    def _rec(**prov):
+        return SimpleNamespace(provenance=SimpleNamespace(**prov))
+
+    assert _source_pointer(
+        _rec(source_file="CLAUDE.md", chunk_index=4)
+    ) == " | from: CLAUDE.md#4"
+    assert _source_pointer(
+        _rec(source_file="CLAUDE.md", chunk_index=0)
+    ) == " | from: CLAUDE.md#0"  # chunk 0 is a real chunk, not a missing one
+    assert _source_pointer(
+        _rec(source_file="NOTES.md", chunk_index=None)
+    ) == " | from: NOTES.md"
+    assert _source_pointer(_rec(source_file=None, chunk_index=None)) == ""
+    assert _source_pointer(_rec(source_file=None, chunk_index=7)) == ""
+
+
+def test_recall_human_line_names_the_file_an_ingested_hit_came_from(project, capsys):
+    """A hit that came from a FILE says which file, and which chunk — so a wrong
+    memory is corrected where truth lives (ADR-0037 §8). Without the pointer the
+    user "fixes" the index and the file re-poisons it on the next ingest."""
+    (project / "runbook.md").write_text(
+        "# Runbook\n\nPage the on-call before touching Grafana.\n\n"
+        "## Kafka\n\nA stuck partition means the payments pod is mid-rebalance.\n",
+        encoding="utf-8",
+    )
+    assert main(["ingest", "runbook.md"]) == 0
+    capsys.readouterr()
+    assert main(["recall", "stuck kafka partition payments pod"]) == 0
+    lines = _detail_lines(capsys.readouterr().out)
+    assert lines, "recall printed no detail lines"
+    assert any("| from: runbook.md#" in line for line in lines), lines
+    # The pointer is the LAST field on the line, after the id — the id stays
+    # copy-pasteable into `rekoll forget`.
+    for line in lines:
+        if "| from: " in line:
+            assert line.endswith(")")
+            assert line.index("| id: rk_") < line.index("| from: ")
+
+
+def test_recall_human_line_carries_no_pointer_for_a_remembered_fact(project, capsys):
+    """``remember``ed records legitimately have no file, so the pointer is
+    omitted ENTIRELY — never an empty ``from:`` and never a fabricated path."""
+    _remember("we chose Postgres over BigQuery for cost")
+    capsys.readouterr()
+    assert main(["recall", "postgres bigquery cost"]) == 0
+    lines = _detail_lines(capsys.readouterr().out)
+    assert lines, "recall printed no detail lines"
+    for line in lines:
+        assert "from:" not in line, line
+        assert line.endswith(")"), line
+
+
+def test_recall_json_sources_are_parallel_to_ids_and_null_for_remembered(project, capsys):
+    """The machine half: ``sources`` is positionally parallel to ``ids`` — a
+    ``{file, chunk}`` object for an ingested hit, ``null`` for a remembered one —
+    over a store that holds BOTH, so the mixed case is really exercised."""
+    (project / "decisions.md").write_text(
+        "# Decisions\n\nPostgres won over BigQuery on egress cost.\n",
+        encoding="utf-8",
+    )
+    assert main(["ingest", "decisions.md"]) == 0
+    _remember("the deploy window is Tuesday 14:00 UTC")
+    capsys.readouterr()
+    assert main(["recall", "postgres egress cost deploy window", "-k", "10", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert len(payload["sources"]) == len(payload["ids"]) == payload["count"]
+    entries = [s for s in payload["sources"] if s is not None]
+    assert entries, f"no ingested hit surfaced: {payload['sources']}"
+    assert any(s is None for s in payload["sources"]), (
+        f"no remembered hit surfaced: {payload['sources']}"
+    )
+    for entry in entries:
+        assert set(entry) == {"file", "chunk"}
+        assert entry["file"] == "decisions.md"
+        assert isinstance(entry["chunk"], int) and entry["chunk"] >= 0
+
+
 def test_recall_without_a_store_fails_and_does_not_create_one(project, capsys):
     assert main(["recall", "anything"]) == 1
     captured = capsys.readouterr()
@@ -947,9 +1041,13 @@ def test_recall_json_prints_one_object_with_the_mcp_recall_keys(project, capsys)
     assert main(["recall", "postgres pooling", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) == {
-        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "sources", "mode", "count", "abstained",
+        "top_vector_score",
     }
     assert payload["directives"] == []  # no standing rules stored (ADR-0034 empty case)
+    # Provenance pointers (ADR-0037 §8): one entry per hit, and these hits were
+    # ``remember``ed, so every entry is null — the honest "no file" answer.
+    assert payload["sources"] == [None] * len(payload["ids"])
     assert payload["count"] == len(payload["ids"]) >= 1
     assert all(rid.startswith("rk_") for rid in payload["ids"])
     assert "NOT instructions" in payload["context"]

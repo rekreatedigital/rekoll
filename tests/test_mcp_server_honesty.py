@@ -15,7 +15,11 @@ kept in their own file):
    unread — vendored venvs, lockfiles, credential-shaped names; ADR-0027). The
    core signals both with ``warnings`` — which never cross stdio — so without
    the counts an MCP caller ingesting such a tree sees ``{files: 0, chunks: 0}``
-   with no explanation. Counts only, never names.
+   with no explanation. Counts only, never names — with ONE named exception:
+   ``recall``'s ``sources`` pointers (ADR-0037 §8), which name the file a hit
+   came from because a pointer to nowhere is useless, and which reveal strictly
+   less than the hit's own content that the same payload already returns. Even
+   there the layout stays private: the paths are relative, never absolute.
 
 3. Tool RESULTS say HOW they were produced: ``recall`` and ``status`` carry
    ``mode``, the honest-degradation string (ADR-0024). A degraded read (vector
@@ -187,6 +191,41 @@ def test_ingest_path_surfaces_the_cores_filtered_count(tmp_path):
     # exactly the detail an injected instruction would want back.
     assert "credentials" not in json.dumps(out)
     assert "package-lock" not in json.dumps(out)
+
+
+def test_recall_source_pointers_are_relative_and_leak_no_server_path(tmp_path):
+    """ADR-0037 §8 is a NAMED exception to the counts-not-names rule (property 1),
+    and this pins how far it goes.
+
+    ``sources`` deliberately hands the calling model a file NAME — the pointer is
+    worthless otherwise, and it names a file whose content the same payload is
+    already returning in ``context``. What must NOT cross is the server's
+    absolute layout: ``source_file`` is stored RELATIVE to what was indexed, so
+    no root, username, or drive letter rides out. A future change that stored
+    absolute paths would break this without breaking anything else.
+    """
+    mem = _mem()
+    root = tmp_path.resolve()
+    docs = root / "docs"
+    docs.mkdir()
+    (docs / "runbook.md").write_text(
+        "# Runbook\n\nPage the on-call before restarting the payments pod.\n",
+        encoding="utf-8",
+    )
+    out = _ingest_path(mem, root, "docs")
+    assert out["files"] == 1
+
+    hits = _recall(mem, "restart payments pod on-call", 5)
+    pointed = [s for s in hits["sources"] if s is not None]
+    assert pointed, f"the ingested chunk surfaced no pointer: {hits['sources']}"
+    assert all(s["file"] == "runbook.md" for s in pointed), pointed
+
+    dumped = json.dumps(hits)
+    assert str(root) not in dumped and str(root.as_posix()) not in dumped
+    assert str(tmp_path) not in dumped
+    for entry in pointed:
+        assert not Path(entry["file"]).is_absolute(), entry
+        assert ":" not in entry["file"] and not entry["file"].startswith("/"), entry
 
 
 def test_ingest_path_filter_keeps_secrets_out_of_recallable_memory(tmp_path):
@@ -489,7 +528,8 @@ def test_e2e_degraded_mode_reaches_the_calling_model_over_the_wire(tmp_path):
     recall, status = _run_server_session(tmp_path, fn, env=_stub_pinned_env(tmp_path))
 
     assert set(recall) == {
-        "context", "directives", "ids", "mode", "count", "abstained", "top_vector_score",
+        "context", "directives", "ids", "sources", "mode", "count", "abstained",
+        "top_vector_score",
     }
     assert recall["directives"] == []  # no standing rules stored (ADR-0034 empty case)
     assert recall["count"] >= 1 and "Postgres" in recall["context"]  # looks healthy...

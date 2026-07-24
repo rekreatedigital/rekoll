@@ -66,6 +66,54 @@ def test_recall_result_ids_and_records_helpers():
     mem.close()
 
 
+def test_recall_result_sources_point_at_the_file_a_hit_came_from():
+    """``RecallResult.sources()`` (ADR-0037 §8) — the ONE builder behind every
+    door's pointer: parallel to ``ids()``, ``{file, chunk}`` for an ingested hit,
+    ``None`` for a ``remember``ed one."""
+    mem = _mem()
+    mem.ingest_text(
+        "# Networking\n\nThe TCP handshake uses SYN then SYN-ACK then ACK.\n\n"
+        "# Storage\n\nWAL checkpoints are tuned to 4096 pages.\n",
+        name="notes.md",
+    )
+    remembered = mem.remember("the deploy runs on a Hostinger VPS")
+
+    res = mem.recall("syn ack handshake deploy hostinger", k=5)
+    assert len(res.sources()) == len(res.ids())  # positional, one entry per hit
+
+    by_id = dict(zip(res.ids(), res.sources()))
+    assert by_id[remembered.id] is None  # a remembered fact has no file — say so
+
+    pointed = [(rid, src) for rid, src in by_id.items() if src is not None]
+    assert pointed, f"the ingested chunks surfaced no pointer: {res.sources()}"
+    for rid, src in pointed:
+        assert set(src) == {"file", "chunk"}
+        assert src["file"] == "notes.md"
+        assert isinstance(src["chunk"], int) and src["chunk"] >= 0
+        # The pointer must match the record's OWN provenance, not a guess.
+        record = next(r for r in res.records() if r.id == rid)
+        assert src["file"] == record.provenance.source_file
+        assert src["chunk"] == record.provenance.chunk_index
+    mem.close()
+
+
+def test_recall_result_sources_report_a_null_chunk_rather_than_inventing_one():
+    """``Provenance`` allows a ``source_file`` with no ``chunk_index``. The
+    pointer reports ``chunk: None`` for that pair instead of defaulting to 0 —
+    an invented chunk index would send someone to the wrong part of the file."""
+    from rekoll import MemoryRecord, Provenance, Scope
+    from rekoll.adapters.base import QueryHit
+    from rekoll.memory import RecallResult
+
+    record = MemoryRecord.create(
+        scope=Scope(), kind=Kind.RAW_FACT, content="a whole-file fact",
+        provenance=Provenance(source_uri="file://NOTES.md", source_file="NOTES.md"),
+        trust_tier=TrustTier.OWNER,
+    )
+    res = RecallResult(hits=(QueryHit(record=record, score=1.0),))
+    assert res.sources() == [{"file": "NOTES.md", "chunk": None}]
+
+
 def test_embedder_swap_warns_with_full_identity(tmp_path):
     db = str(tmp_path / "m.db")
     Memory(path=db, embedder=StubEmbedder(dim=64), reranker=None).close()

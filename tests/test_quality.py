@@ -739,6 +739,44 @@ def test_envelope_render_ignores_scores_and_timestamps():
     assert a.encode() == b.encode()
 
 
+def test_envelope_render_ignores_provenance_pointers():
+    """ADR-0037 §8's hard boundary: recall grew file pointers, and the ENVELOPE
+    did not move a byte.
+
+    Two records with identical content — one ingested from a file (``source_file``
+    + ``chunk_index``), one with bare provenance — must render the SAME envelope.
+    The pointer is an errata workflow for the human or agent driving the read, not
+    evidence for the model, and every byte added to the envelope is a per-read
+    token cost on every future recall (ADR-0013 byte-identity, re-affirmed by
+    ADR-0034 §4 for prompt-cache stability). The pointer rides the CLI's human
+    line and the machine payloads' ``sources`` key only.
+    """
+    from datetime import datetime, timezone
+
+    from rekoll import MemoryRecord, Provenance, Scope, build_envelope
+    from rekoll.adapters.base import QueryHit
+
+    def _hit(prov):
+        return QueryHit(
+            record=MemoryRecord.create(
+                scope=Scope(), kind=Kind.RAW_FACT, content="identical content",
+                provenance=prov, trust_tier=TrustTier.OWNER,
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ),
+            score=0.5,
+        )
+
+    from_file = Provenance(source_uri="file://CLAUDE.md", source_file="CLAUDE.md",
+                           chunk_index=4)
+    remembered = Provenance(source_uri="test://x")
+
+    rendered = build_envelope([_hit(from_file)]).render()
+    assert rendered.encode() == build_envelope([_hit(remembered)]).render().encode()
+    # ...and the pointer's own spellings never appear in it.
+    assert "CLAUDE.md" not in rendered
+    assert "from:" not in rendered
+
+
 def test_mode_never_leaks_into_the_rendered_context(tmp_path):
     mem = _mismatched(tmp_path)  # the most "interesting" mode there is
     ctx = mem.recall("postgres pooling", k=2).context()
