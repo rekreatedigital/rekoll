@@ -8,11 +8,18 @@ locally; nothing needs an API key.
 ## 1. Install
 
 ```bash
-pip install "rekoll[mcp]"                 # once Rekoll is on PyPI
-pip install -e "/path/to/rekoll[mcp]"     # today, from a clone of this repo
+pipx install "rekoll[mcp]"                # recommended — its own isolated environment
+pip install "rekoll[mcp]"                 # or plain pip, into whichever env you choose
+pip install -e "/path/to/rekoll[mcp]"     # contributors, from a clone of this repo
 ```
 
-That gives you a `rekoll-mcp` command (a stdio MCP server).
+Either of the first two gives you a `rekoll-mcp` command (a stdio MCP server) on
+your PATH. [pipx](https://pipx.pypa.io) is the safer default here: it keeps
+Rekoll's dependencies out of the Python you use for everything else, so
+installing it can't upgrade a shared package underneath another project. Add
+`[embeddings]` too — `pipx install "rekoll[embeddings,mcp]"` — if you want real
+semantic recall rather than keyword matching.
+
 Add `.rekoll/` to your project's `.gitignore` — the memory store lives there.
 
 > A `npx rekoll-mcp` wrapper (no Python needed at all) is planned — see
@@ -20,11 +27,27 @@ Add `.rekoll/` to your project's `.gitignore` — the memory store lives there.
 
 ## 2. Connect your agent
 
-**Claude Code** — run this inside your project:
+**Claude Code — a file in your project** (works everywhere, nothing to install).
+Create `.mcp.json` in the project root:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+```
+
+Claude Code picks that up automatically the next time it opens the project.
+Because it's a file in the repo, it's config-as-code: everyone who clones the
+project gets the same memory server — approve it once when Claude Code asks
+(a security check on project-supplied servers), and it just works.
+
+**Claude Code — the `claude` CLI**, if you have it. Run this inside your project:
 
 ```bash
 claude mcp add rekoll -- rekoll-mcp
 ```
+
+Note that Claude Code running as the **VS Code extension** does not put `claude`
+on your PATH — if this fails with "command not found", use the `.mcp.json` file
+above rather than hunting for the CLI.
 
 **Cursor** — add to `.cursor/mcp.json` in your project (or the global one):
 
@@ -40,9 +63,13 @@ claude mcp add rekoll -- rekoll-mcp
 `rekoll-mcp` (no arguments needed). Launch it with your project directory as
 the working directory; that's how it knows which project's memory to open.
 
-> If the client can't find `rekoll-mcp`, use the full path to it (e.g.
-> `.venv/bin/rekoll-mcp` or `.venv\Scripts\rekoll-mcp.exe`), or
-> `python -m rekoll.mcp_server`.
+> **Whether a bare `rekoll-mcp` works depends on where you installed it.** Your
+> MCP client looks the command up on PATH, which is what `pipx install` and a
+> global `pip install` give you. A **project virtualenv** does not: unless that
+> venv happens to be active when the client launches, `rekoll-mcp` won't be
+> found. Then use the full path (e.g. `.venv/bin/rekoll-mcp` or
+> `.venv\Scripts\rekoll-mcp.exe`), or `python -m rekoll.mcp_server` with that
+> venv's Python. This applies to every setup above, `.mcp.json` included.
 
 ## 3. What the agent can do
 
@@ -214,6 +241,14 @@ Example — pin the project name and allow ingesting a sibling docs folder:
 claude mcp add rekoll -- rekoll-mcp --project myapp --root ..
 ```
 
+The examples here use the `claude` CLI for brevity. In `.mcp.json` (or any other
+client's config) the same flags go in `args`:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp",
+  "args": ["--project", "myapp", "--root", ".."] } } }
+```
+
 Example — redact PII from every write (a support-ticket or CRM corpus):
 
 ```bash
@@ -226,6 +261,11 @@ claude mcp add rekoll -- rekoll-mcp --redact-pii
   `pip install "rekoll[mcp]"`.
 - **`rekoll-mcp` not found** — it's installed into the Python environment you
   ran pip in; activate that environment, or point your client at the full path.
+  `pipx install "rekoll[mcp]"` avoids the problem by putting the command on your
+  PATH regardless of which environment is active.
+- **`claude: command not found`** when running `claude mcp add` — you're on
+  Claude Code's VS Code extension, which ships no CLI. Use the `.mcp.json` file
+  in §2 instead; it needs no `claude` command.
 - **Recall quality feels keyword-only** — install real local embeddings too:
   `pip install "rekoll[mcp,embeddings]"` (first run downloads a small model,
   then it's fully offline).
