@@ -59,7 +59,8 @@ package as a side effect. The catch: a pipx install is invisible to `import
 rekoll`, so if you want the **Python SDK** below, `pip install` into your
 project's virtualenv instead. `[embeddings]` is what makes search semantic.
 
-(Bleeding edge, straight from git:
+(Already installed? `pip install --upgrade rekoll` or `pipx upgrade rekoll` —
+your `.rekoll/` memories carry over untouched. Bleeding edge, straight from git:
 `pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"`.)
 
 **Vibe-coding? Don't install anything — paste this to your AI** (Claude Code,
