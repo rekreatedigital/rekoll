@@ -162,11 +162,33 @@ def _refuse_foreign_store(path: str) -> bool:
 
 
 def _require_store(args: argparse.Namespace) -> bool:
-    """For read-style commands: True if the store exists; else explain and hint."""
+    """For read-style commands: True if the store exists; else explain and hint.
+
+    The hint must never send you back to a command you already ran (issue #71).
+    ``init`` creates the store FILE now, so a missing file inside a store
+    directory that already exists means either that directory predates the fix
+    or the .db was deleted — in both cases the honest next step is a write, not
+    another ``init``. With no store directory at all, ``init`` is still exactly
+    right, so that branch keeps the original wording.
+
+    The cwd is excluded from the "directory exists" branch on purpose: for a
+    bare ``--path mem.db`` the parent IS the cwd, which always exists and says
+    nothing about whether setup ever ran.
+    """
     if _store_exists(args.path):
         return True
     _err(f"rekoll: error: no memory store at {args.path}")
-    _err("hint: run 'rekoll init', then 'rekoll remember \"something worth keeping\"'")
+    store_dir = Path(args.path).expanduser().parent
+    initialized = False
+    try:
+        initialized = store_dir.is_dir() and store_dir.resolve() != Path.cwd().resolve()
+    except OSError:  # an unresolvable cwd must not turn a hint into a crash
+        initialized = False
+    if initialized:
+        _err(f"hint: {store_dir} is here but holds no store yet - start one with "
+             "'rekoll remember \"something worth keeping\"' (or 'rekoll ingest .')")
+    else:
+        _err("hint: run 'rekoll init', then 'rekoll remember \"something worth keeping\"'")
     return False
 
 
@@ -198,6 +220,35 @@ def _ensure_gitignore(cwd: Path) -> str:
     return "no-repo"
 
 
+def _create_store(path: str) -> bool:
+    """Create (or adopt) the store FILE itself — ``init``'s write half.
+
+    Opening the sqlite adapter CREATEs the rekoll schema and closes again,
+    leaving a valid, empty store that every read command can open: without this
+    ``init`` made only the directory, so the very next ``rekoll status`` said
+    "no memory store ... run 'rekoll init'" (issue #71). It also makes init's
+    own "the local memory store lives here" copy true, and matches the other
+    two doors — the SDK's ``Memory()`` and the MCP server (which builds one at
+    startup) both create the file on first touch.
+
+    Deliberately NOT ``Memory()``: that resolves an embedder — a model download
+    on the ``embeddings`` extra — and stamps an embedder identity onto the
+    scope. ``init`` promises neither ("your first 'remember' fetches the small
+    search model once"), so it opens the adapter directly and touches no scope.
+
+    Idempotent: every statement the schema runs is ``CREATE ... IF NOT
+    EXISTS``, so re-running on a populated store changes nothing.
+    """
+    from .adapters.registry import get_adapter
+
+    try:
+        get_adapter("sqlite", path=path).close()
+    except (OSError, sqlite3.Error) as exc:
+        _fail(f"could not create the memory store at {path}: {exc}")
+        return False
+    return True
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     if args.path == ":memory:":
         _out("':memory:' is a temporary in-process store - nothing to set up.")
@@ -206,18 +257,31 @@ def cmd_init(args: argparse.Namespace) -> int:
             _err("rekoll: note: --wizard skipped - a ':memory:' store vanishes when this "
                  "command exits, so there is nowhere durable to save your answers")
         return 0
+    # init WRITES a file now, so it owes the same refusal every other command
+    # gives: a mistaken --path at someone else's application database must not
+    # get the rekoll schema stamped into it.
+    if _refuse_foreign_store(args.path):
+        return 1
     store_dir = Path(args.path).expanduser().parent
     already = store_dir.is_dir()
+    store_existed = _store_exists(args.path)
     try:
         store_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return _fail(f"could not create {store_dir}: {exc}")
+    if not _create_store(args.path):
+        return 1
 
     cwd = Path.cwd()
+    store_note = ("an existing store - nothing in it was changed" if store_existed
+                  else "the store itself - empty, and readable right away")
     if store_dir.resolve() == cwd.resolve():  # bare filename like --path mem.db
-        lines = [f"  store file: {Path(args.path).name}  (in this directory)"]
+        lines = [f"  store file: {Path(args.path).name}  (in this directory - {store_note})"]
     else:
-        lines = [f"  {'found' if already else 'created'} {store_dir}  (the local memory store lives here)"]
+        lines = [
+            f"  {'found' if already else 'created'} {store_dir}  (the local memory store lives here)",
+            f"  {'found' if store_existed else 'created'} {Path(args.path).name}  ({store_note})",
+        ]
 
     # Only manage .gitignore for the conventional ./.rekoll layout; a custom
     # --path is the user's own layout to ignore (or not) as they see fit.

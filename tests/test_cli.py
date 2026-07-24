@@ -220,6 +220,65 @@ def test_init_memory_path_explains_and_creates_nothing(project, capsys):
     assert not (project / ".rekoll").exists()
 
 
+def test_init_creates_the_store_file_so_status_works_immediately(project, capsys, monkeypatch):
+    """The cold-start contradiction (issue #71): `init` used to make only the
+    directory, so the very next `status` — which init's own "Try it now" block
+    suggests — failed with "no memory store ... run 'rekoll init'", i.e. it told
+    a brand-new user to run the command they had just run.
+
+    The extra is pinned off because init's search-mode copy differs by extra and
+    CI's core matrix installs `[dev]` only.
+    """
+    monkeypatch.setattr("rekoll.cli._semantic_extra_installed", lambda: False)
+    assert main(["init"]) == 0
+    assert (project / ".rekoll" / "memory.db").is_file()
+    assert main(["status"]) == 0          # RED on main: exit 1, "no memory store"
+    out = capsys.readouterr().out
+    assert "Memories: 0" in out
+    # init must not have resolved an embedder (that would download a model and
+    # stamp an identity onto the scope) — an untouched scope proves it did not.
+    assert "none recorded yet" in out
+
+
+def test_init_is_idempotent_on_a_populated_store(project, capsys):
+    """Re-running init must never clobber what is already stored."""
+    assert main(["init"]) == 0
+    _remember("we chose Postgres over BigQuery for cost")
+    capsys.readouterr()
+    assert main(["init"]) == 0
+    assert "found" in capsys.readouterr().out
+    assert main(["status"]) == 0
+    assert "Memories: 1" in capsys.readouterr().out
+    assert main(["recall", "postgres"]) == 0
+    assert "Postgres" in capsys.readouterr().out
+
+
+def test_init_refuses_a_foreign_sqlite_database(project, capsys):
+    """init writes a file now, so it owes the same refusal the read commands
+    give: a mistaken --path must not get the rekoll schema stamped into someone
+    else's application database."""
+    foreign = project / "someapp.db"
+    conn = sqlite3.connect(foreign)
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    before = foreign.read_bytes()
+    assert main(["init", "--path", str(foreign)]) == 1   # RED on main: exit 0
+    assert "not a rekoll memory store" in capsys.readouterr().err
+    assert foreign.read_bytes() == before
+
+
+def test_init_then_ingest_chaining_needs_no_second_command(project, capsys):
+    """`rekoll init && rekoll ingest .` — the README-shaped first session."""
+    (project / "notes.md").write_text("# Deploy\nThe deploy runs on a VPS.\n",
+                                      encoding="utf-8")
+    assert main(["init"]) == 0
+    capsys.readouterr()
+    assert main(["ingest", "."]) == 0
+    assert main(["status"]) == 0
+    assert "Memories: 0" not in capsys.readouterr().out
+
+
 def test_init_makes_the_full_privacy_promise(project, capsys):
     """The W5 discriminating test: the init success banner must state ALL the
     honest-privacy halves where a new user actually looks — local-only, zero
@@ -246,6 +305,39 @@ def _wizard_directive_rows():
         return mem.adapter.active_directives(scope=mem.scope, limit=5, min_trust=0).records
     finally:
         mem.close()
+
+
+def _store_is_empty() -> bool:
+    """True if the store holds no records at all.
+
+    The honest "the wizard minted nothing" check. It replaces the older `not
+    (project / ".rekoll" / "memory.db").exists()` proxy, which stopped meaning
+    anything once `init` began creating the store file itself (issue #71) - the
+    file's absence was never the contract, an empty store was. Read through the
+    adapter, not Memory(), so the check itself resolves no embedder.
+    """
+    from rekoll.adapters.registry import get_adapter
+    from rekoll.model import Scope
+
+    adapter = get_adapter("sqlite", path=DB)
+    try:
+        return adapter.count(scope=Scope()) == 0
+    finally:
+        adapter.close()
+
+
+def _forbid_opening_memory(monkeypatch) -> None:
+    """Make building a Memory an outright test failure.
+
+    The other half of what the old file-existence proxy stood for: on the
+    'embeddings' extra, opening a Memory resolves an embedder and may download a
+    model, so a wizard run that saves nothing must never reach one. Pinning the
+    seam is strictly stronger than watching for a file.
+    """
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("opened a Memory when nothing should have been stored")
+
+    monkeypatch.setattr("rekoll.cli._open_memory", _boom)
 
 
 def test_init_wizard_full_interview_mints_owner_directives(project, capsys, monkeypatch):
@@ -279,6 +371,7 @@ def test_init_wizard_without_terminal_degrades_to_plain_init(project, capsys, mo
     """--wizard from a script/pipe: plain init still runs, ONE plain stderr note
     explains the skip, exit 0 (init itself succeeded - a docs-copied flag must
     not break a pipeline). _PipeStdin.readline raises: asking at all fails."""
+    _forbid_opening_memory(monkeypatch)                       # no Memory, no embedder
     monkeypatch.setattr(sys, "stdin", _PipeStdin())
     assert main(["init", "--wizard"]) == 0
     captured = capsys.readouterr()
@@ -286,8 +379,8 @@ def test_init_wizard_without_terminal_degrades_to_plain_init(project, capsys, mo
     assert "setup interview" not in captured.out              # no questions rendered
     assert "--wizard skipped" in captured.err
     assert "interactive terminal" in captured.err
-    assert (project / ".rekoll").is_dir()                     # plain init did its job
-    assert not (project / ".rekoll" / "memory.db").exists()   # no store was opened
+    assert (project / ".rekoll" / "memory.db").is_file()      # plain init did its job
+    assert _store_is_empty()                                  # ...and minted nothing
 
 
 def test_init_wizard_windows_nul_stdin_is_not_a_terminal(project, capsys, monkeypatch):
@@ -307,28 +400,31 @@ def test_init_wizard_windows_nul_stdin_is_not_a_terminal(project, capsys, monkey
 
 
 def test_init_wizard_skip_every_question_mints_nothing(project, capsys, monkeypatch):
-    """Three bare Enters: no rules, say so plainly, exit 0 - and the store is
-    never even opened (no memory.db comes into being)."""
+    """Three bare Enters: no rules, say so plainly, exit 0 - and no Memory is
+    ever opened, so nothing lands in the store init just created."""
+    _forbid_opening_memory(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _TtyStdin("\n\n\n"))
     assert main(["init", "--wizard"]) == 0
     out = capsys.readouterr().out
     assert "Nothing to save" in out and "nothing was stored" in out
     assert "Save these?" not in out                           # nothing to confirm
-    assert not (project / ".rekoll" / "memory.db").exists()
+    assert _store_is_empty()
 
 
 @pytest.mark.parametrize("suffix", ["n\n", "\n", ""])  # explicit no, bare Enter, EOF
 def test_init_wizard_summary_decline_saves_nothing(project, capsys, monkeypatch, suffix):
     """Answers given but the single summary confirmation declined (N is the
-    default): NOTHING is minted - not even the store file - and the exit stays
-    0, because declining an optional interview is not a failure."""
+    default): NOTHING is minted - the store init created stays empty and no
+    Memory is opened - and the exit stays 0, because declining an optional
+    interview is not a failure."""
+    _forbid_opening_memory(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _TtyStdin(f"1\nmy name is Sam\nbrief\n{suffix}"))
     assert main(["init", "--wizard"]) == 0
     out = capsys.readouterr().out
     assert "Save these? [y/N]" in out
     assert "Nothing saved." in out
     assert "rk_" not in out
-    assert not (project / ".rekoll" / "memory.db").exists()
+    assert _store_is_empty()
 
 
 def test_init_default_has_no_wizard_and_never_reads_stdin(project, capsys, monkeypatch):
@@ -360,22 +456,24 @@ def test_init_wizard_overlong_answer_is_trimmed_not_crashed(project, capsys, mon
 def test_init_wizard_eof_mid_interview_cancels_and_saves_nothing(project, capsys, monkeypatch):
     """Ctrl+Z / input running dry mid-question cancels the whole wizard cleanly:
     a plain line, exit 0, no partial saves, no traceback."""
+    _forbid_opening_memory(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _TtyStdin("1\n"))  # EOF arrives at question 2
     assert main(["init", "--wizard"]) == 0
     out = capsys.readouterr().out
     assert "wizard cancelled" in out and "nothing was saved" in out
-    assert not (project / ".rekoll" / "memory.db").exists()
+    assert _store_is_empty()
 
 
 def test_init_wizard_normally_choice_saves_no_rule(project, capsys, monkeypatch):
     """'normally' IS the default behavior: minting a 'behave normally' rule
     would burn one of the five ADR-0034 directive slots (and its tokens, on
     every future recall) on a no-op. The choice therefore saves nothing."""
+    _forbid_opening_memory(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _TtyStdin("2\n\n\n"))
     assert main(["init", "--wizard"]) == 0
     out = capsys.readouterr().out
     assert "Nothing to save" in out
-    assert not (project / ".rekoll" / "memory.db").exists()
+    assert _store_is_empty()
 
 
 def test_init_wizard_unrecognized_choice_skips_that_question(project, capsys, monkeypatch):
@@ -517,12 +615,13 @@ def test_init_wizard_undecodable_stdin_cancels_cleanly(project, capsys, monkeypa
     of readline(). UnicodeDecodeError IS a ValueError, so uncaught it would hit
     main()'s net and blame 'the store or its data' for a terminal-encoding
     problem. The wizard treats it as cancel: plain line, exit 0, nothing saved."""
+    _forbid_opening_memory(monkeypatch)
     monkeypatch.setattr(sys, "stdin", _TtyUndecodable())
     assert main(["init", "--wizard"]) == 0
     captured = capsys.readouterr()
     assert "wizard cancelled" in captured.out and "nothing was saved" in captured.out
     assert "bad state" not in captured.err
-    assert not (project / ".rekoll" / "memory.db").exists()
+    assert _store_is_empty()
 
 
 def test_directive_vouch_undecodable_stdin_declines(project, capsys, monkeypatch):
@@ -1161,6 +1260,30 @@ def test_status_without_a_store_fails_with_hint(project, capsys):
     assert main(["status"]) == 1
     captured = capsys.readouterr()
     assert "no memory store" in captured.err and "rekoll init" in captured.err
+
+
+def test_status_without_a_store_creates_nothing(project, capsys):
+    """A read must never create the store (the pinned zero-side-effect rule for
+    CLI reads). recall and board already pin this; status did not, so an
+    implementation that answered the cold start by OPENING the store would have
+    stayed green while breaking the invariant."""
+    assert main(["status"]) == 1
+    assert capsys.readouterr().out == ""
+    assert not (project / ".rekoll").exists()
+
+
+def test_no_store_hint_never_suggests_init_when_the_store_dir_exists(project, capsys):
+    """Issue #71's second half: the hint must not send you back to a command you
+    already ran. A `.rekoll/` with no memory.db is what pre-fix `init` left
+    behind (and what deleting the .db leaves), so there the honest next step is
+    a write, not another init."""
+    (project / ".rekoll").mkdir()
+    for command in (["status"], ["board"], ["recall", "anything"]):
+        assert main(command) == 1
+        err = capsys.readouterr().err
+        assert "no memory store" in err
+        assert "rekoll init" not in err        # RED on main: it says exactly this
+        assert "rekoll remember" in err
 
 
 # -- scoping -----------------------------------------------------------------
