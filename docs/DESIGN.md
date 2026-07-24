@@ -52,6 +52,7 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - The SDK's planned `wrap(llm_client, scope=...)` two-line on-ramp (§8) —
   recall-before, remember-after around a caller's own LLM client. No `wrap`
   exists in the package today.
+- The **"memory + index" integration (ADR-0037) — planned, not yet implemented:** tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer, re-indexed only on explicit sync), write-through `remember --to`, and provenance pointers on recall are all planned. No adopt/`sources` verb, no `--to` flag, and no recall file-pointer rendering exist in the package today — the files-are-truth model is design only (issue #75).
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named
@@ -204,7 +205,7 @@ Eight cooperating layers:
 
 Progressive disclosure is the enforced law: zero-config local-private-LLM-free defaults; every powerful capability behind exactly **three uniform knobs** — `storage={provider, config}`, `model={base_url,...}` (only for optional learning), `learning={consolidate, reflect, freshness}` (off by default). A CI test asserts the zero-arg path needs no key and calls no LLM.
 
-- **Door 1 — MCP server** (vibe-coder default in Claude Code/Cursor/Windsurf): a deliberately **small** surface — **6 shipped tools** (`remember`, `recall`, `ingest_path`, `forget`, `status`, `board`; see [MCP.md](MCP.md)) — rejecting MemPalace's 33-tool ontology; `recall_schema` + `memory_review` are planned additions gated on the layers they expose (P5 schema ingestion, L4 review). Registration goes through the host's own CLI (`claude mcp add rekoll -- rekoll-mcp`, never hand-editing JSON; the CLI is `rekoll` — there is no `mem` command). Still planned around it: idempotent host-detecting auto-registration, repo mining, prompted read-only DB-schema introspection, and Stop + PreCompact auto-capture hooks through one cross-platform capture entrypoint (Windows-safe; auto-captures land at low trust so the firewall can quarantine).
+- **Door 1 — MCP server** (vibe-coder default in Claude Code/Cursor/Windsurf): a deliberately **small** surface — **6 shipped tools** (`remember`, `recall`, `ingest_path`, `forget`, `status`, `board`; see [MCP.md](MCP.md)) — rejecting MemPalace's 33-tool ontology; `recall_schema` + `memory_review` are planned additions gated on the layers they expose (P5 schema ingestion, L4 review). Registration is config-as-code: a one-line project `.mcp.json` (the portable path — Claude Code's VS Code extension ships no CLI) or the host's own CLI (`claude mcp add rekoll -- rekoll-mcp`); the CLI is `rekoll` — there is no `mem` command. Still planned around it: idempotent host-detecting auto-registration, repo mining, prompted read-only DB-schema introspection, and Stop + PreCompact auto-capture hooks through one cross-platform capture entrypoint (Windows-safe; auto-captures land at low trust so the firewall can quarantine).
 - **Door 2 — one-line Python SDK:** `pip install rekoll` → `from rekoll import Memory; mem = Memory()` — zero-config, local, private, no key, no LLM on reads. `remember/recall/forget` mirror the MCP verbs 1:1 (async twins available); `scope` is the one tenancy primitive; results are plain dataclasses (`.text/.score/.scope/.provenance/.trust`); a planned `wrap(llm_client, scope=...)` two-line on-ramp (recall-before, remember-after) is not yet shipped.
 - **Door 3 — self-host service:** one container, BYO key, point at your Supabase/Postgres, REST + MCP-over-HTTP, per-tenant, local/private still the in-container default, auth **deny-by-default**.
 
@@ -294,8 +295,9 @@ A single **tight monorepo** (not Hindsight's 16-separately-licensed sub-packages
 
 A pre-build review (migration, non-technical UX, BYO-AI reality, pre-mortem) added these. All three headline promises survived; each gained a precise rule.
 
-**Adopting Rekoll when you already have memory — three doors, never a forced delete:**
-- **Import once** via the pluggable `IngestionSource` readers (folder-of-markdown/CLAUDE.md, git-notes, a competitor export e.g. Mem0 JSON, a generic DB-table). Imports are **read-only on the originals**, **idempotent** (content-addressed, ADR-0006), keep the **original timestamps**, and carry a visible "imported from X" tag.
+**Adopting Rekoll when you already have memory — four doors, never a forced delete:**
+- **Integrate (planned, ADR-0037 — not yet implemented):** adopt the existing legible layer as tracked sources — the files stay the truth, Rekoll is the retrieval + safety index over them, re-ingested only on explicit commands. Docs present this integrated mode FIRST; today's `.rekoll`-only dual-store behavior is the fallback where no legible layer exists.
+- **Import once** via the pluggable `IngestionSource` readers (folder-of-markdown/CLAUDE.md, git-notes, a competitor export e.g. Mem0 JSON, a generic DB-table). Imports are **read-only on the originals**, **idempotent** (content-addressed, ADR-0006), keep the **original timestamps**, carry a visible "imported from X" tag, and stay strictly **opt-in** (never the default onboarding path — ADR-0037 §9).
 - **Coexist** by pointing Rekoll at the user's **existing** Postgres/Supabase (own namespaced schema beside their data).
 - **Wrap, don't replace** an existing agent during a trial, with a one-flag cutover to "Rekoll is the single source of truth."
 - Honest limit: content + dates + tags transfer faithfully; another tool's internal scores/links are **rebuilt** on import, not copied. Bulk imports run through the **same firewall** as live writes (a prime poisoning vector).
