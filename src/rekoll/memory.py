@@ -313,6 +313,44 @@ class RecallResult:
     def records(self) -> list[MemoryRecord]:
         return [h.record for h in self.hits]
 
+    def sources(self) -> list[Optional[dict]]:
+        """Where each hit CAME FROM, in rank order — parallel to :meth:`ids`
+        (ADR-0037 §8).
+
+        One entry per ranked hit, positionally aligned with ``ids()``: a
+        ``{"file": str, "chunk": int | None}`` dict for a hit that was ingested
+        from a file, or ``None`` for one that was not. ``remember``ed records
+        legitimately have no file, so ``None`` is an ordinary answer, not a
+        degradation — the entry is present either way so the list length always
+        equals ``len(ids())``.
+
+        The point of the pointer is CORRECTION AT THE SOURCE: when a recalled
+        memory is wrong and it came from a file, the fix belongs in that file —
+        edit the index instead and the file re-poisons it on the next ingest.
+
+        ``chunk`` is the chunk index within that file and is nullable in its own
+        right: :class:`~rekoll.model.Provenance` allows a ``source_file`` with no
+        ``chunk_index``, so the payload reports that honestly rather than
+        inventing a 0.
+
+        This method IS the SDK door, and it is also the ONE builder behind the
+        other two doors' ``sources`` key (CLI ``recall --json``, MCP ``recall``)
+        — the same discipline :meth:`ids` and :meth:`directives` follow, so the
+        three cannot drift.
+
+        Unrelated to ADR-0037's *tracked sources* registry (a planned
+        ``Memory``-level surface); this is per-hit provenance, read-side only.
+        """
+        out: list[Optional[dict]] = []
+        for hit in self.hits:
+            prov = hit.record.provenance
+            out.append(
+                None
+                if prov.source_file is None
+                else {"file": prov.source_file, "chunk": prov.chunk_index}
+            )
+        return out
+
     def envelope(self) -> ContextEnvelope:
         """The framed DATA envelope: standing directives (``pinned_directives``)
         plus ranked hits, split into the instruction and evidence channels
