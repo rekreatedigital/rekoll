@@ -84,7 +84,7 @@ scalars only (ADR-0001):
 | `path` | operator-resolved at adopt time: relative to the store's parent for in-project sources (survives a repo move), absolute for outside-project sources (e.g. the Claude auto-memory dir) |
 | `trust_tier` | the vouched tier (§3) |
 | `content_hash` | sha256 of the source content at last sync — the staleness oracle |
-| `last_run_id` | the `ingest_run_id` of the last sync, so stale records are findable (§5) |
+| `last_run_id` | the `ingest_run_id` of the last sync — audit bookkeeping only; staleness is diffed by content hash, never by run id (§5) |
 | `adopted_at` / `last_synced_at` | stored ISO-8601, verbatim (board discipline) |
 
 **The registry is operator-only data and must never live in the working
@@ -118,10 +118,22 @@ break.
 - ADR-0023 monotonicity is untouched: changed bytes are new records (new
   content hash → new id); identical bytes already stored at a HIGHER tier keep
   the incumbent (a re-ingest can never downgrade); identical bytes at a lower
-  tier are the dedup no-op they always were. A tracked source at
-  `TRUSTED_SOURCE` meets no floor that matters: it cannot mint directives or
-  board tags at any tier (§1), so the highest-blast-radius surfaces are
-  structurally out of reach of a file edit.
+  tier are the dedup no-op they always were. A tracked source cannot mint
+  directives or board tags at any tier (§1), so the highest-blast-radius
+  surfaces stay structurally out of reach of a file edit.
+- **Vouching above UNVERIFIED also turns OFF the injection screen for that
+  source — disclosed, never implied away.** The firewall's injection
+  quarantine runs only at trust ≤ UNVERIFIED (`memory.py` gates
+  `screen_pieces` on `trust <= TrustTier.UNVERIFIED`; ADR-0016 calls the
+  trust stamp the screen's load-bearing input and rules that no default may
+  silently exempt file ingestion from quarantine). So the
+  UNVERIFIED→TRUSTED_SOURCE boundary IS a floor that matters: adopting at the
+  default tier means every future edit to that file — by anyone — is ingested
+  unscreened into recall, on a standing grant. That is what a vouch MEANS,
+  but it must be said out loud: the §4 tier prompt carries it, every sync
+  prints the tier being stamped, and §10 D1's rationale weighs it. Operators
+  who want the screen keep it by adopting at `UNVERIFIED`
+  (quarantine-with-visibility — warn-don't-block, ADR-0033).
 
 ### 4. Consent-prompted detection — never silent, two distinct levels
 
@@ -141,8 +153,9 @@ adopted that the operator did not name or confirm.**
   and in the always-available explicit verb `rekoll sources add <path>`.
 - **In-project prompt** (per detected convention, Enter = no):
   > Found `CLAUDE.md` in this project. Index it so recall can search it?
-  > Rekoll will re-read it only when you run `rekoll sources sync` — never in
-  > the background. \[y/N]
+  > Rekoll re-reads it only when you run an explicit command (`sources sync`
+  > re-indexes it; `status`/`doctor` hash-check it for staleness;
+  > `remember --to` appends to it) — never in the background. \[y/N]
 - **Outside-project prompt** names the exact absolute path and the boundary
   being crossed:
   > Found a Claude Code auto-memory folder for this project at
@@ -150,7 +163,8 @@ adopted that the operator did not name or confirm.**
   > project folder, in your user profile. Index it too? \[y/N]
 - Tier prompt follows any "yes" (§3 wording: "Treat this file as a trusted
   source? Its content — including future edits by anyone — will be stored at
-  this trust."), with `OWNER` behind its own confirmation.
+  this trust, and anything above 'unverified' skips the injection screening
+  that unverified content gets."), with `OWNER` behind its own confirmation.
 - **"No" leaves zero bytes**: no registry entry, no recorded refusal, no
   store side effects. The wizard already guarantees declining saves nothing
   (ADR-0036); the adopt step inherits that. Re-offering happens only on the
@@ -165,16 +179,28 @@ adopted that the operator did not name or confirm.**
   inside a changed file are content-addressed no-ops); `rekoll status` /
   `doctor` report staleness (hash compare only — they never ingest);
   `recall` / `board` / MCP reads never sync anything. Zero background
-  processes, ever.
-- **Edited file:** after re-ingest, the records minted from the source's
-  PREVIOUS sync (found via `prov_source_file` + the registry's `last_run_id`)
-  whose content is absent from the new chunk set are marked
-  `ACTIVE → SUPERSEDED` via `set_status` — the marking-only verb ADR-0035 §5
-  built and ADR-0025 §7 classifies as the supersession path. Every byte stays
-  in the store, auditable and `get`-able. Content that RETURNS to the file
-  re-activates automatically: the content-addressed upsert rewrites status on
-  the same id — the exact reopen semantics ADR-0035 §9 pinned, doing the right
-  thing here for free.
+  processes, ever. Every tracked-source touch — the hash check, the
+  re-ingest, and §6's append — first re-verifies the adopted path with the
+  same realpath discipline `ingest_path` already pins (no symlinks/junctions,
+  containment intact) and refuses loudly if the path has become a redirect:
+  the §2 attack rejected at the registry layer must not survive at the
+  filesystem layer.
+- **Edited file:** staleness is computed by CONTENT-HASH SET DIFFERENCE, not
+  run ids: chunk the file's current content, then mark every ACTIVE record
+  whose `prov_source_file` names this source but whose `content_hash` is
+  absent from the current chunk set `ACTIVE → SUPERSEDED` via `set_status` —
+  the marking-only verb ADR-0035 §5 built and ADR-0035 §7 classifies as the
+  first implemented slice of ADR-0025's supersession path. Run ids are
+  deliberately NOT the staleness oracle: ADR-0023's no-op guard skips the row
+  rewrite entirely when a stored record outranks the sync's vouched tier
+  (e.g. the same file was previously `rekoll ingest`ed at a higher trust —
+  same `file://` source_uri means the SAME record ids), so a
+  run-id-freshness diff would strand deletions as ACTIVE forever or falsely
+  supersede live content; the hash-set diff is immune to that corner. Every
+  superseded byte stays in the store, auditable and `get`-able. Content that
+  RETURNS to the file re-activates automatically: the content-addressed
+  upsert rewrites status on the same id — the exact reopen semantics
+  ADR-0035 §9 pinned, doing the right thing here for free.
 - **Deleted (or unreadable) file:** sync supersedes all of that source's
   records, prints a loud warning, and KEEPS the registry entry flagged missing
   until the operator runs `sources rm` — a path that vanishes silently would
@@ -220,6 +246,12 @@ file's vouched tier.
   the same `_stdin_is_interactive` oracle as the vouch gate and wizard) or
   fails with the one-line fix (`rekoll sources add <file>`) when
   non-interactive. It never silently adopts (§4).
+- The append re-verifies the target before writing (§5's realpath
+  discipline): a naive `open(path, "a")` follows symlinks/junctions on every
+  OS, so an adopted file swapped for a link would redirect an operator WRITE
+  to an arbitrary out-of-project target — the §2 attack class at the
+  filesystem layer. A `--to` target that has become a redirect is refused
+  loudly, with the path named.
 - `--to` is `raw_fact`-only in v1. `--to` with `kind=directive` is refused
   with a pointer to the native flow (`remember --kind directive` +
   the vouch gate): a directive written to a file would be inert as a rule
@@ -291,7 +323,10 @@ likely to adopt (issue #75). Accepted as proposed — no overrule.
   searchable and useful immediately, but keeps the top "owner" badge as a
   separate deliberate step — because adopting a file means trusting whatever
   anyone writes into it later, the top tier should never be the silent
-  default.
+  default. The trade-off, stated plainly: any tier above `unverified` skips
+  the automatic injection screening that unverified content gets (§3), so the
+  default trades that screen for immediate usefulness — pick `unverified` at
+  the prompt to keep the screen on a file you don't fully control.
 - **D2 — where the adopt offer appears.** Options: only `init --wizard` + the
   explicit `rekoll sources add` command (recommended) / also during plain
   `rekoll init`. Why: plain init is promised to ask nothing and print the
@@ -354,10 +389,10 @@ Order: **(c) → (a) → (b)**. (c) is rendering over already-persisted fields;
   guarantee (no record with the remember-verb's provenance shape exists
   after a `--to` write); tier stamping (file's vouched tier, not OWNER);
   the directive refusal; untracked-target behavior both interactive and not.
-- **Tripwire (proposed here, WRITTEN by the implementation wave or conductor
-  — tests/ is out of this docs lane):** mirror the wrap() pin
-  (`test_design_marks_wrap_as_planned_until_it_ships`,
-  `tests/test_docs_consistency.py`): assert `rekoll.Memory` has no
+- **Tripwire (SHIPPED with this ADR, conductor gate commit — matching the
+  wrap() precedent of planned-wording + pin landing together):** mirrors the
+  wrap() pin (`test_design_marks_wrap_as_planned_until_it_ships`,
+  `tests/test_docs_consistency.py`): asserts `rekoll.Memory` has no
   `sources`/`adopt`/`sync` attribute and the CLI registers no `sources`
   subcommand and `remember` takes no `--to`; while true, every DESIGN.md line
   mentioning tracked sources or `remember --to` must contain "planned";

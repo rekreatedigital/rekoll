@@ -117,6 +117,47 @@ def test_design_marks_wrap_as_planned_until_it_ships():
     assert "is the two-line on-ramp" not in design  # the pre-W5 shipped claim
 
 
+# -- memory+index (ADR-0037): planned, not shipped — same discipline as wrap() ---
+
+def test_design_marks_memory_plus_index_as_planned_until_it_ships():
+    """ADR-0037 designs tracked sources / `remember --to` / provenance
+    pointers without building any of it (issue #75). Same honesty pin as the
+    wrap() one above: while none of the three obvious landing spots exist —
+    a Memory sources/adopt/sync surface, a `sources` CLI subcommand, a
+    `remember --to` flag — every DESIGN.md line naming the feature must say
+    "planned" on that same line. Whichever lane ships a piece retires or
+    reworks this pin in the same PR."""
+    import argparse
+
+    import rekoll
+    from rekoll import cli
+
+    for name in ("sources", "adopt", "sync"):
+        for spot in (rekoll, rekoll.Memory):
+            assert not hasattr(spot, name), (
+                f"{spot.__name__}.{name} has shipped — flip DESIGN.md's "
+                "memory+index wording to present tense and retire this pin "
+                "in the same PR"
+            )
+    sub = next(a for a in cli._build_parser()._actions
+               if isinstance(a, argparse._SubParsersAction))
+    assert "sources" not in sub.choices, "the sources verb has shipped — retire this pin"
+    remember_opts = {s for a in sub.choices["remember"]._actions
+                     for s in a.option_strings}
+    assert "--to" not in remember_opts, "remember --to has shipped — retire this pin"
+
+    design = _read("docs/DESIGN.md")
+    feature_lines = [line for line in design.splitlines()
+                     if "tracked source" in line.lower()
+                     or "tracked file source" in line.lower()
+                     or "remember --to" in line.lower()]
+    assert feature_lines, "DESIGN.md no longer mentions the memory+index feature at all"
+    for line in feature_lines:
+        assert "planned" in line.lower(), (
+            f"DESIGN.md names the memory+index feature without marking it planned: {line!r}"
+        )
+
+
 # -- MCP tool RESULTS: the keys an agent reads, and the docs that list them -------
 #
 # The tool NAMES were pinned above; their RESULT payloads were not, and they
