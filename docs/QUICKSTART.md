@@ -10,15 +10,25 @@ name a provider, ADR-0015), and an automated test (CI) enforces it (ADR-0007).
 Semantic mode downloads its small model once at first use, then saving and
 searching work fully offline.
 
-Install from PyPI:
+Install from PyPI. Which command you want depends on the door:
 
 ```bash
-pip install "rekoll[embeddings]"
+pipx install "rekoll[embeddings]"   # doors 1 & 3 (CLI, MCP) — recommended
+pip install "rekoll[embeddings]"    # door 2 (Python SDK) — into your project's venv
 ```
 
-That gives you real semantic search (a small local model, downloaded once).
-If you leave off `[embeddings]` you get a zero-dependency install with basic
-keyword search — fine for trying things out. Choose **before** you store
+[pipx](https://pipx.pypa.io) gives Rekoll its own private environment, so
+installing it can't upgrade a package the rest of your machine depends on —
+worth it for a tool you mostly call as a command. The trade-off is that a pipx
+install is **invisible to your own Python**: `from rekoll import Memory`
+(Door 2) will raise `ModuleNotFoundError`. So use `pip` inside your project's
+virtualenv if you want the SDK, and note that a plain `pip install` with no
+virtualenv active installs into your global Python and can upgrade shared
+packages as a side effect.
+
+Either way, `[embeddings]` gives you real semantic search (a small local model,
+downloaded once). If you leave it off you get a zero-dependency install with
+basic keyword search — fine for trying things out. Choose **before** you store
 memories; switching search modes later means re-ingesting.
 
 ---
@@ -162,6 +172,14 @@ rekoll board --path /team/mem.db --tenant default --project myapp --agent defaul
 claude mcp add rekoll -- rekoll-mcp --path /team/mem.db --tenant default --project myapp --agent default  # MCP door
 ```
 
+The same MCP scope in `.mcp.json` — the flags go in `args`:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp",
+  "args": ["--path", "/team/mem.db", "--tenant", "default",
+           "--project", "myapp", "--agent", "default"] } } }
+```
+
 One machine only: the shared medium is the SQLite file itself, and SQLite's
 locking is not reliable on network drives (NFS/SMB).
 
@@ -204,9 +222,29 @@ Rekoll ships an MCP server — any MCP-capable agent (Claude Code, Cursor,
 Windsurf, …) can use this project's memory, no Python code to write:
 
 ```bash
-pip install "rekoll[mcp]"                # or: pip install -e "/path/to/rekoll[mcp]"
-claude mcp add rekoll -- rekoll-mcp   # Claude Code; other clients: see MCP.md
+pipx install "rekoll[embeddings,mcp]"    # or: pip install "rekoll[embeddings,mcp]"
 ```
+
+Then tell your agent about it. The portable way is a `.mcp.json` file in your
+project root — Claude Code picks it up automatically, and because it's a file
+in the repo, everyone who clones the project inherits the setup:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+```
+
+If you have the `claude` CLI, this registers the same thing:
+
+```bash
+claude mcp add rekoll -- rekoll-mcp   # other clients: see MCP.md
+```
+
+Prefer the file if you're unsure: Claude Code running as the **VS Code
+extension** has no `claude` on your PATH, so the command above would fail with
+"command not found". One caveat for `"command": "rekoll-mcp"` — your MCP client
+looks it up on PATH, which works after `pipx install` or a global
+`pip install`, but *not* if you installed Rekoll into a project virtualenv.
+Then give the full path instead ([MCP.md](MCP.md#2-connect-your-agent)).
 
 The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
 `status`, `board`) over this project's store, with scope and trust pinned
