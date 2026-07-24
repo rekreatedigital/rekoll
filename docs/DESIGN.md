@@ -52,12 +52,7 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - The SDK's planned `wrap(llm_client, scope=...)` two-line on-ramp (§8) —
   recall-before, remember-after around a caller's own LLM client. No `wrap`
   exists in the package today.
-- The **"memory + index" integration (ADR-0037) — planned, not yet implemented.**
-  Tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer
-  and re-index it on explicit sync) are planned; write-through `remember --to`
-  is planned; provenance pointers on recall are planned. No `sources`/adopt
-  verb, no `--to` flag, and no recall file-pointer rendering exist in the
-  package today — the files-are-truth model is design only (issue #75).
+- The **"memory + index" integration (ADR-0037) — planned, not yet implemented:** tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer, re-indexed only on explicit sync), write-through `remember --to`, and provenance pointers on recall are all planned. No adopt/`sources` verb, no `--to` flag, and no recall file-pointer rendering exist in the package today — the files-are-truth model is design only (issue #75).
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named
