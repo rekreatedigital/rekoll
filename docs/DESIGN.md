@@ -52,7 +52,7 @@ present tense for capabilities that are planned, not yet shipped. Current realit
 - The SDK's planned `wrap(llm_client, scope=...)` two-line on-ramp (§8) —
   recall-before, remember-after around a caller's own LLM client. No `wrap`
   exists in the package today.
-- The **"memory + index" integration (ADR-0037) — planned, not yet implemented:** tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer, re-indexed only on explicit sync), write-through `remember --to`, and provenance pointers on recall are all planned. No adopt/`sources` verb, no `--to` flag, and no recall file-pointer rendering exist in the package today — the files-are-truth model is design only (issue #75).
+- The **"memory + index" integration (ADR-0037) — its WRITE half is still planned, not yet implemented:** tracked file sources (adopt an existing CLAUDE.md/AGENTS.md/auto-memory layer, re-indexed only on explicit sync) and write-through `remember --to` are both planned — no adopt/`sources` verb and no `--to` flag exist in the package today. Its READ half has shipped: **provenance pointers on recall** (ADR-0037 §8) — every hit that came from a file names it, on the CLI's human line (`… | from: CLAUDE.md#4`) and as the nullable `sources` key in all three machine payloads (SDK/CLI `--json`/MCP), with `ContextEnvelope.render()` byte-unchanged. So a recalled memory can be traced back to its file today; adopting and writing that file from Rekoll is still design only (issue #75).
 
 **Behavioral note:** on an embedder-identity mismatch the `Memory` facade
 **refuses the vector leg and degrades honestly** — reads go lexical-only (named

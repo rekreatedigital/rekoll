@@ -76,7 +76,7 @@ the working directory; that's how it knows which project's memory to open.
 | Tool | What it does |
 | --- | --- |
 | `remember` | Save one memory (a fact, decision, or event). Screened by the injection firewall first. |
-| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `directives` (the project's standing rules — see below), `ids` (record ids in rank order), `count`, `mode` (see below), plus the abstain envelope `abstained` and `top_vector_score` (see below). Takes an optional `min_score`. |
+| `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `directives` (the project's standing rules — see below), `ids` (record ids in rank order), `sources` (which file each hit came from — see below), `count`, `mode` (see below), plus the abstain envelope `abstained` and `top_vector_score` (see below). Takes an optional `min_score`. |
 | `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names), plus `secrets_skipped` (credential-shaped files the walk excluded) and `secrets_stored` (credential-shaped files ingested anyway — see below). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
 | `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
@@ -128,6 +128,24 @@ own trusted-tier directives — a model **cannot** write one over MCP (see the t
 model below), so returning them leaks nothing an injected instruction could
 exploit. A memory returned as `context` DATA is still never an instruction; only
 `directives` are rules, and only the operator can mint them.
+
+### `sources` — which file each hit came from
+
+`recall` returns `sources`: one entry per hit, in the **same order as `ids`**.
+Each entry is `{"file": "CLAUDE.md", "chunk": 4}` when that memory was indexed
+from a file, or `null` when it wasn't — a fact saved with `remember` has no file,
+and that is an ordinary answer, not a failure. The list is always the same length
+as `ids`, so you can zip the two.
+
+Use it when a recalled memory is **wrong or out of date**. If it came from a
+file, the file is the truth: tell the human to correct it *there*, then re-index
+that file — the stale chunk is superseded and the corrected one lands. Editing
+only the stored memory leaves the file to re-poison the index on the next ingest.
+
+`chunk` can be `null` on a record that carries a file with no chunk index; the
+payload reports that rather than inventing a `0`. Paths are **relative to what
+was indexed**, never absolute — the server's own layout is not exposed here
+(ADR-0037 §8).
 
 ### `board` — the shared live project board (zero arguments)
 
