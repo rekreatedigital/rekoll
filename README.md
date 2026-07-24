@@ -19,7 +19,7 @@ Give your agent durable memory of a whole codebase + database — that it can't 
 > reranking, the injection firewall, a bring-your-own-database adapter contract,
 > an MCP server, and a benchmark gate. Upcoming: the learning loop, more DB
 > backends, and the no-Python `npx` wrapper — see
-> [docs/DESIGN.md](docs/DESIGN.md). Not yet on PyPI.
+> [docs/DESIGN.md](docs/DESIGN.md). On PyPI since v0.1.0: `pip install rekoll`.
 
 ---
 
@@ -35,7 +35,7 @@ It aims to be the first agent-memory layer that is *all five at once*:
 
 ## How you'll use it (three doors, one engine)
 
-1. **MCP server** (the vibe-coder default) — one command in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(`pip install "rekoll[mcp]"` — see [docs/MCP.md](docs/MCP.md); the Node/`npx` wrapper that hides Python entirely is still coming.)*
+1. **MCP server** (the vibe-coder default) — one small config file in Claude Code / Cursor / Windsurf, **no Python code and no API key required**. *(`pipx install "rekoll[mcp]"` — see [docs/MCP.md](docs/MCP.md); the Node/`npx` wrapper that hides Python entirely is still coming.)*
 2. **CLI + Python SDK** *(shipped)* — `rekoll init` in any repo — website, mobile app, agent — or `from rekoll import Memory` in Python. `pip install rekoll` and go.
 3. **Self-host service** — one container pointed at your own database.
 
@@ -48,9 +48,16 @@ It aims to be the first agent-memory layer that is *all five at once*:
 **Install** (from [PyPI](https://pypi.org/project/rekoll/)):
 
 ```bash
-pip install "rekoll[embeddings]"   # + real semantic search (recommended)
-pip install rekoll                 # keyword search, zero dependencies
+pipx install "rekoll[embeddings,mcp]"  # CLI + MCP, in its own environment (recommended)
+pip install "rekoll[embeddings]"       # Python SDK — into your project's venv
+pip install rekoll                     # keyword search, zero dependencies
 ```
+
+`pipx` keeps Rekoll's dependencies out of the Python you use for everything
+else — a plain `pip install` with no virtualenv active can upgrade a shared
+package as a side effect. The catch: a pipx install is invisible to `import
+rekoll`, so if you want the **Python SDK** below, `pip install` into your
+project's virtualenv instead. `[embeddings]` is what makes search semantic.
 
 (Bleeding edge, straight from git:
 `pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"`.)
@@ -62,12 +69,16 @@ Cursor, Windsurf, …) and let it do the whole setup:
 Please set up Rekoll — a private, local memory layer for AI agents
 (https://rekoll.dev) — in this repository:
 
-1. Install it in this project's Python environment (Python 3.10+):
-   pip install "rekoll[embeddings,mcp]"
+1. Install it (Python 3.10+), without touching my global Python:
+   pipx install "rekoll[embeddings,mcp]"
+   (no pipx? create a virtualenv for this project first, then use pip)
 2. From the repo root, run:  rekoll init
    then index the project:   rekoll ingest .
-3. If you support MCP, connect yourself to it
-   (Claude Code: claude mcp add rekoll -- rekoll-mcp
+3. If you support MCP, connect yourself to it. The portable way is a
+   .mcp.json file in the repo root — create it if it isn't there:
+   { "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+   (If you have the claude CLI, this does the same:
+      claude mcp add rekoll -- rekoll-mcp
     other tools: https://github.com/rekreatedigital/rekoll/blob/main/docs/MCP.md)
 4. Run rekoll status and rekoll doctor, and show me both outputs.
 
@@ -81,7 +92,7 @@ an LLM.
 
 ```bash
 cd your-project
-rekoll init          # one-time setup: creates ./.rekoll/, git-ignores it, tells you your search mode
+rekoll init          # one-time setup: creates ./.rekoll/ and the (empty) store, git-ignores it, tells you your search mode
 rekoll remember "we chose Postgres over BigQuery for cost"
 rekoll recall "why postgres?"
 rekoll ingest .      # optional: index this whole repo (code + docs)
@@ -159,9 +170,20 @@ Any MCP-capable agent (Claude Code, Cursor, Windsurf, …) can use Rekoll as its
 memory — no Python code to write:
 
 ```bash
-pip install "rekoll[mcp]"                # or -e from a clone while developing
-claude mcp add rekoll -- rekoll-mcp      # Claude Code; other clients: docs/MCP.md
+pipx install "rekoll[mcp]"               # or pip; -e from a clone while developing
 ```
+
+Then create `.mcp.json` in your project root — Claude Code picks it up
+automatically (a one-time approval prompt, then it just works), and everyone
+who clones the repo inherits it:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+```
+
+With the `claude` CLI, `claude mcp add rekoll -- rekoll-mcp` registers the same
+thing. Prefer the file if you're unsure — Claude Code's VS Code extension puts
+no `claude` on your PATH. Other clients: docs/MCP.md.
 
 The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
 `status`, `board`) over this project's private store. Scope and trust are pinned
