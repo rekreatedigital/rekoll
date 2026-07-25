@@ -22,8 +22,11 @@ A dedicated **Security** heading is kept per the governance commitment in
   scopes (largest first) with the exact command that reads them, and `doctor`
   gains a `scopes` check that WARNs with the same command. Nothing moves,
   nothing auto-switches, machine payloads (`recall --json`, MCP) are
-  byte-unchanged, and the note counts only memories recall could actually
-  surface — a scope holding only quarantined rows is never advertised.
+  byte-unchanged, and the note counts rows the same way `status` does
+  (effective-active) — a scope holding only quarantined rows is never
+  advertised. Scope names come from the store, so they are printed
+  conservatively (restricted alphabet, length-capped) and a name that could
+  not be typeset safely is never turned into a copy-paste command.
   Backed by a new optional adapter census, `StorageAdapter.scope_counts()`
   (concrete, raising-by-default: out-of-tree adapters keep working and the
   note simply stays absent).

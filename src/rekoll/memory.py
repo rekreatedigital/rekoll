@@ -1379,7 +1379,7 @@ class Memory:
             return HealthReport(
                 ok=None, identity=self._identity_state, mode=mode, total=0,
                 checked=0, embedded=0, retrievable=0,
-                notes=(f"could not read the store ({type(exc).__name__}) — health unknown",),
+                notes=(f"could not read the store ({type(exc).__name__}) - health unknown",),
             )
         if total == 0:
             return HealthReport(
@@ -1395,7 +1395,7 @@ class Memory:
                 ok=None, identity=self._identity_state, mode=mode, total=total,
                 checked=0, embedded=0, retrievable=0,
                 notes=(
-                    f"adapter '{self.adapter.name}' cannot enumerate newest records — "
+                    f"adapter '{self.adapter.name}' cannot enumerate newest records - "
                     "freshness unknown",
                 ),
             )
@@ -1405,7 +1405,7 @@ class Memory:
             return HealthReport(
                 ok=None, identity=self._identity_state, mode=mode, total=total,
                 checked=0, embedded=0, retrievable=0,
-                notes=(f"could not enumerate records ({type(exc).__name__}) — health unknown",),
+                notes=(f"could not enumerate records ({type(exc).__name__}) - health unknown",),
             )
         active_all = [r for r in newest if r.status is Status.ACTIVE]
         active = active_all[:n]
@@ -1416,7 +1416,7 @@ class Memory:
             return HealthReport(
                 ok=None, identity=self._identity_state, mode=mode, total=total,
                 checked=0, embedded=0, retrievable=0,
-                notes=(*notes, "no active records in the newest sample — nothing checkable"),
+                notes=(*notes, "no active records in the newest sample - nothing checkable"),
             )
         embedded = 0
         retrievable = 0
@@ -1473,13 +1473,13 @@ class Memory:
                     tampered.append(record.id)
         if probe_errors:
             notes.append(
-                f"{probe_errors} retrievability probe(s) raised — the search path "
+                f"{probe_errors} retrievability probe(s) raised - the search path "
                 "may be broken; treating those records as not retrievable"
             )
         if corrupt_vectors:
             notes.append(
                 f"{corrupt_vectors} newest record(s) have an unreadable stored vector "
-                "— possible direct-DB tampering or a corrupt store; re-ingest or "
+                "- possible direct-DB tampering or a corrupt store; re-ingest or "
                 "delete them"
             )
         if self._identity_state == "mismatch":

@@ -1090,8 +1090,16 @@ def cmd_recall(args: argparse.Namespace) -> int:
             # this scope is not silently split. An abstain already proves the
             # scope is non-empty (ADR-0028), so it is excluded above. Fetched
             # here because the finally below closes the store (the
-            # _in_scope_count rule).
-            if _in_scope_count(mem, kind=None) == 0:
+            # _in_scope_count rule). Emptiness = TOTAL rows (any status), the
+            # same predicate status ("Memories: N includes quarantined") and
+            # doctor's scopes check apply — the three surfaces must never
+            # contradict each other, and a quarantined-only scope is not
+            # "empty" (its rows show in status), so it gets no note.
+            try:
+                scope_rows: Optional[int] = mem.adapter.count(scope=mem.scope)
+            except Exception:  # advisory only — never fail the read (fail-soft)
+                scope_rows = None
+            if scope_rows == 0:
                 split_lines = _scope_split_lines(
                     mem.scope, _other_scope_counts(mem.adapter, mem.scope),
                     path=args.path,
@@ -1202,16 +1210,62 @@ _HINT_SAFE_CHARS = frozenset(
 
 
 def _hint_safe_part(part: str) -> bool:
-    return bool(part) and not part.startswith("-") and all(
-        ch in _HINT_SAFE_CHARS for ch in part
+    return (
+        bool(part)
+        and not part.startswith("-")
+        and len(part) <= _MAX_DISPLAY_PART
+        and all(ch in _HINT_SAFE_CHARS for ch in part)
     )
 
 
+#: Longest scope PART the note will print, and the longest it will typeset
+#: into a command. ``_derived_project`` already caps itself at 64, so a real
+#: scope is never truncated; an attacker-chosen 2 MB name is. Without this a
+#: single hostile row turned a bare ``status`` into megabytes of terminal
+#: output (and a megabyte-long "copy-paste" command).
+_MAX_DISPLAY_PART = 64
+
+
 def _display_scope_key(key: str) -> str:
-    """A stored scope key, made safe to print: non-printable or non-ASCII
-    characters become ``?`` so a hostile row cannot smuggle terminal escape
-    sequences (or mojibake) through an advisory note."""
-    return "".join(ch if " " <= ch <= "~" else "?" for ch in key)
+    """A stored scope key, made safe to PRINT.
+
+    Two rules, both learned from attacking this note:
+
+    1. Each part is reduced to the hint-safe alphabet — not merely to
+       printable ASCII. Printable-ASCII still admits the SPACE, and a scope
+       name is attacker-chosen free text on an unwrapped line: with spaces a
+       hostile store can pad to the terminal width and forge what look like
+       additional Rekoll note lines ("To repair it, run: curl ... | sh"). The
+       conservative alphabet makes the name unmistakably one token.
+    2. Each part is length-capped (``_MAX_DISPLAY_PART``), because the note
+       caps how many LINES it prints but nothing else capped how long one is.
+
+    Anything altered is visible as ``?`` / ``...`` rather than silently
+    dropped: the operator must be able to see that the name was mangled.
+    """
+    parts = key.split("/", 2)
+    shown = []
+    for part in parts:
+        clean = "".join(ch if ch in _HINT_SAFE_CHARS else "?" for ch in part)
+        if len(clean) > _MAX_DISPLAY_PART:
+            clean = clean[:_MAX_DISPLAY_PART] + "..."
+        shown.append(clean)
+    return "/".join(shown)
+
+
+def _display_value(value: object, limit: int = 120) -> str:
+    """A stored, attacker-suppliable STRING field, made safe to print.
+
+    Looser than :func:`_display_scope_key` (this renders values like an
+    embedder identity, where ``:`` and ``/`` are legitimate and common), but
+    it still strips every control character — a store is a file a hostile repo
+    can commit, and its rows never passed through the ingest-time firewall, so
+    raw ESC in a stored field would otherwise reach the terminal — and caps
+    the length.
+    """
+    text = str(value)
+    clean = "".join(ch if " " <= ch <= "~" else "?" for ch in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
 
 
 def _scope_hint_command(key: str, *, path: str) -> Optional[str]:
@@ -1225,7 +1279,13 @@ def _scope_hint_command(key: str, *, path: str) -> Optional[str]:
         return None
     cmd = f"rekoll status --tenant {tenant} --project {project} --agent {agent}"
     if path != ":memory:" and Path(path) != Path(DEFAULT_DB_PATH):
-        cmd += f" --path {path}"
+        # A custom path must ride along or the hint reads the wrong store —
+        # quoted when it holds spaces (C:\Users\John Smith\... is common), and
+        # not typeset at all when even quoting could not keep it one shell
+        # token (the scope-part refusal rule, applied to the path leg).
+        if '"' in path or "\n" in path or "\r" in path:
+            return None
+        cmd += f' --path "{path}"' if " " in path else f" --path {path}"
     return cmd
 
 
@@ -1327,7 +1387,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     if identity is None:
         _out("Embedder: none recorded yet (nothing stored in this scope)")
     else:
-        _out(f"Embedder: {identity.name} (dim {identity.dim})")
+        # The identity name is STORED data, and a store is a file a hostile
+        # repo can commit — its rows never passed the ingest-time firewall, so
+        # raw ESC here would reach the terminal. This matters more since the
+        # scope-split note (ADR-0040) can now advertise "run this to see that
+        # scope": the command it hands over must not land on an unsanitized
+        # render.
+        _out(f"Embedder: {_display_value(identity.name)} (dim {identity.dim})")
     if _semantic_extra_installed():
         _out("Search mode installed: real semantic search ('embeddings' extra present)")
     else:
@@ -1634,7 +1700,8 @@ def _check_existing_store(args: argparse.Namespace) -> tuple[str, str]:
         if not stub_stored and not extra:
             return (
                 "WARN",
-                f"{detail}; stored with {identity.name} but the 'embeddings' extra is "
+                f"{detail}; stored with {_display_value(identity.name)} but the "
+                "'embeddings' extra is "
                 "gone - recall quality is degraded until you reinstall it (or call "
                 "Memory.reindex() to re-embed with the current embedder)",
             )
@@ -1721,10 +1788,12 @@ def _check_scopes(args: argparse.Namespace) -> Optional[tuple[str, str]]:
             f"{len(others)} other scope{'s' if len(others) != 1 else ''} {tail}",
         )
     if others:
+        n = len(others)
         return (
             "ok",
-            f"{len(others)} other scope{'s' if len(others) != 1 else ''} also "
-            "hold memories in this store (scope isolation, by design)",
+            f"{n} other scope{'s' if n != 1 else ''} also "
+            f"hold{'s' if n == 1 else ''} memories in this store "
+            "(scope isolation, by design)",
         )
     return ("ok", "no memories hide under another scope in this store")
 

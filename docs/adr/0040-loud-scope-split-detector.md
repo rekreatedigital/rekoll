@@ -54,8 +54,11 @@ shows them:
    - It is the ONE bounded exception to "every read carries a Scope": scope
      keys and **counts** cross the boundary, record content never does.
    - It counts **effective-active** rows only (the ADR-0023 gate): a scope
-     holding only quarantined or forged rows must not advertise phantom
-     memories recall could never surface.
+     holding only quarantined or forged-active-at-trust-0 rows is never
+     advertised. This is the same predicate `status` prints, so the two
+     numbers always agree; it is deliberately NOT a promise that every counted
+     row would rank into a given recall (an unembedded or unindexed row still
+     counts, exactly as it does in `status`).
    - It is concrete-with-raising-default, never abstract: out-of-tree
      adapters keep instantiating, and every caller fails soft — an adapter
      that cannot answer just means no note, never a failed read.
