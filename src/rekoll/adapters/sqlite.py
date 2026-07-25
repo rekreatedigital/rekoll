@@ -270,6 +270,18 @@ def _decode_embedding(raw: object) -> array:
     is funnelled to ONE clean ``ValueError`` — the CLI already turns that into a
     clean exit 1, and an SDK caller gets a documented, catchable error instead of
     a raw ``TypeError`` or a NaN that defeats the safety gate.
+
+    **Scope of "visibly", stated precisely since #43 made vectors lazy.** Any
+    read that USES the vector still raises here, and does so on the whole scope,
+    because ``_scan`` decodes every scored row. What changed is a read that uses
+    no vector at all — a scope degraded to lexical-only by an embedder-identity
+    mismatch (ADR-0024), or an explicitly vector-less fetch: those no longer
+    touch the cell, so they return their (content-hash-verified) hits instead of
+    raising on a vector they never consult. That is not a silent-WRONG result —
+    the answer is unaffected by a vector nobody read — but it IS a silent one,
+    so the corrupt cell is surfaced through the other honest channel instead:
+    ``Memory.health()`` counts such a record as not-embedded and names it in a
+    note, which is what ``rekoll doctor`` prints.
     """
     try:
         decoded = json.loads(raw)

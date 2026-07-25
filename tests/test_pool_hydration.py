@@ -28,6 +28,7 @@ import pytest
 
 import rekoll.adapters.sqlite as sqlite_mod
 from rekoll.memory import Memory
+from rekoll.embedding import StubEmbedder
 from rekoll.model import MemoryRecord, Provenance, Scope
 
 DIM = 96  # wide enough to be a real vector, small enough to keep the suite fast
@@ -210,6 +211,41 @@ def test_health_stays_fail_soft_when_a_stored_vector_is_corrupt(tmp_path):
         assert report.ok is False, "a record with an unreadable vector is not healthy"
         assert report.embedded == 0, "an undecodable vector does not count as embedded"
         assert rid in report.stale_ids
+        assert any("unreadable stored vector" in n for n in report.notes), report.notes
+    finally:
+        m2.close()
+
+
+def test_a_vectorless_read_tolerates_a_corrupt_cell_and_health_reports_it(tmp_path):
+    """The precise scope of "a corrupt store fails VISIBLY", pinned.
+
+    Any read that USES the vector still raises (the scan decodes every scored
+    row). A read that uses NO vector — a scope degraded to lexical-only by an
+    embedder-identity mismatch (ADR-0024) — no longer touches the cell, so it
+    returns its content-hash-verified hits instead of raising on a vector it
+    never consults. Not a silent-WRONG answer, but a silent one, so the signal
+    has to come from somewhere: health() counts the record as not-embedded and
+    names it. This test pins BOTH halves, so the trade-off stays deliberate.
+    """
+    dbp = str(tmp_path / "m.db")
+    m = Memory(path=dbp, embedder="stub")
+    m.remember("the capital of france is paris")
+    m.close()
+
+    con = sqlite3.connect(dbp)
+    rid = con.execute("SELECT id FROM verbatim_records LIMIT 1").fetchone()[0]
+    con.execute("UPDATE verbatim_records SET embedding=? WHERE id=?", ('"garbage"', rid))
+    con.commit()
+    con.close()
+
+    # A different DIM is a different embedder identity, so the scope degrades
+    # to lexical-only (ADR-0024) without needing the embeddings extra.
+    m2 = Memory(path=dbp, embedder=StubEmbedder(dim=32), reranker=None)
+    try:
+        result = m2.recall("france capital", k=3)  # must NOT raise
+        assert "lexical-only" in result.mode, result.mode
+        report = m2.health()  # the honest channel for the corrupt cell
+        assert report.ok is False
         assert any("unreadable stored vector" in n for n in report.notes), report.notes
     finally:
         m2.close()
