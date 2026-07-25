@@ -48,16 +48,19 @@ STUB_HYBRID = "vector+lexical (stub-embedder)"
 STUB_HYBRID_RERANK = "vector+lexical+rerank (stub-embedder)"
 MISMATCH_LEXICAL = "lexical-only: embedder mismatch"
 MISMATCH_LEXICAL_RERANK = "lexical-only+rerank: embedder mismatch"
-EMPTY_SCOPE_NOTE = "empty scope — nothing to check"
+# ASCII on purpose (issue #83 wave): these notes PRINT through `rekoll doctor`'s
+# freshness line, and cli.py's module rule says rekoll's own messages are
+# ASCII-only — an em dash here rendered as mojibake on Windows consoles.
+EMPTY_SCOPE_NOTE = "empty scope - nothing to check"
 DEAD_INGEST_NOTE = (
-    "newest record(s) not fully indexed — ingestion/embedding may be dead"
+    "newest record(s) not fully indexed - ingestion/embedding may be dead"
 )
 TAMPER_NOTE = (
-    "newest record(s) failed content-hash verification — possible "
+    "newest record(s) failed content-hash verification - possible "
     "direct-DB tampering (ADR-0019); re-ingest or delete them"
 )
 ADR_0024_NOTE = (
-    "embedder identity mismatch — vector leg refused (ADR-0024); "
+    "embedder identity mismatch - vector leg refused (ADR-0024); "
     "call Memory.reindex() to re-embed this scope with the current embedder"
 )
 

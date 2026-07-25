@@ -231,6 +231,13 @@ The same MCP scope in `.mcp.json` — the flags go in `args`:
            "--project", "myapp", "--agent", "default"] } } }
 ```
 
+Since v0.1.3 the trap is **loud** (ADR-0040): when the scope a command reads
+is empty but the same store holds memories under other scopes, `rekoll
+status`, bare `rekoll recall`, and `rekoll doctor` all say so — naming the
+other scopes and printing the exact command that reads the largest one.
+Nothing is moved, merged, or auto-switched; the note only informs (there is
+still no discovery, on purpose).
+
 One machine only: the shared medium is the SQLite file itself, and SQLite's
 locking is not reliable on network drives (NFS/SMB).
 

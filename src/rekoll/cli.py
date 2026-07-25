@@ -1074,6 +1074,7 @@ def cmd_recall(args: argparse.Namespace) -> int:
     human = not (args.json or args.context or args.ids)
     in_scope: Optional[int] = None
     stub = False
+    split_lines: list = []
     try:
         result = mem.recall(
             args.query, k=args.k, kind=kind,
@@ -1082,6 +1083,27 @@ def cmd_recall(args: argparse.Namespace) -> int:
         if human and len(result):
             in_scope = _in_scope_count(mem, kind=kind)
             stub = _is_stub_embedder(mem)
+        elif human and not len(result) and not result.abstained:
+            # Nothing came back and nothing was gated: tell apart "no match"
+            # from "wrong scope" (issue #83). The emptiness probe ignores any
+            # --kind filter on purpose — records of another kind still mean
+            # this scope is not silently split. An abstain already proves the
+            # scope is non-empty (ADR-0028), so it is excluded above. Fetched
+            # here because the finally below closes the store (the
+            # _in_scope_count rule). Emptiness = TOTAL rows (any status), the
+            # same predicate status ("Memories: N includes quarantined") and
+            # doctor's scopes check apply — the three surfaces must never
+            # contradict each other, and a quarantined-only scope is not
+            # "empty" (its rows show in status), so it gets no note.
+            try:
+                scope_rows: Optional[int] = mem.adapter.count(scope=mem.scope)
+            except Exception:  # advisory only — never fail the read (fail-soft)
+                scope_rows = None
+            if scope_rows == 0:
+                split_lines = _scope_split_lines(
+                    mem.scope, _other_scope_counts(mem.adapter, mem.scope),
+                    path=args.path,
+                )
     finally:
         mem.close()
     empty = not len(result)
@@ -1097,6 +1119,8 @@ def cmd_recall(args: argparse.Namespace) -> int:
             )
         else:
             _err(f"No memories found for: {args.query}")  # the grep convention, both formats
+            for line in split_lines:
+                _err(line)
     if args.json:
         # Printed even when empty: a machine caller always gets one parseable
         # object, and can still read `mode` -- which matters MOST when a
@@ -1148,6 +1172,166 @@ def cmd_recall(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# the scope-split note (issue #83 / ADR-0040)
+# ---------------------------------------------------------------------------
+
+def _other_scope_counts(adapter, scope) -> dict:
+    """Effective-active record counts for every OTHER scope in this store, or
+    ``{}`` when the adapter cannot say.
+
+    Fail-soft on every axis (the ``_in_scope_count`` rule): the note this
+    feeds is advisory, so an adapter without the census, or any read error,
+    yields ``{}`` and the caller simply says nothing extra — never a failed
+    read. Malformed census entries (a key that is not ``tenant/project/agent``,
+    a non-positive count) are dropped rather than rendered.
+    """
+    try:
+        counts = dict(adapter.scope_counts())
+    except Exception:
+        return {}
+    counts.pop(scope.key(), None)
+    return {
+        key: n
+        for key, n in counts.items()
+        if isinstance(key, str) and key.count("/") == 2
+        and isinstance(n, int) and n > 0
+    }
+
+
+#: Characters a scope part may contain for the note to render it as a
+#: copy-paste command. Deliberately conservative (the ``_derived_project``
+#: alphabet): ``Scope`` itself allows spaces, leading dashes, even ESC — and
+#: scope keys in the census are DATA from the store, so a hostile store file
+#: (e.g. a ``.rekoll/memory.db`` committed in a cloned repo) could otherwise
+#: inject extra flags into a command the note tells the operator to run.
+_HINT_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _hint_safe_part(part: str) -> bool:
+    return (
+        bool(part)
+        and not part.startswith("-")
+        and len(part) <= _MAX_DISPLAY_PART
+        and all(ch in _HINT_SAFE_CHARS for ch in part)
+    )
+
+
+#: Longest scope PART the note will print, and the longest it will typeset
+#: into a command. ``_derived_project`` already caps itself at 64, so a real
+#: scope is never truncated; an attacker-chosen 2 MB name is. Without this a
+#: single hostile row turned a bare ``status`` into megabytes of terminal
+#: output (and a megabyte-long "copy-paste" command).
+_MAX_DISPLAY_PART = 64
+
+
+def _display_scope_key(key: str) -> str:
+    """A stored scope key, made safe to PRINT.
+
+    Two rules, both learned from attacking this note:
+
+    1. Each part is reduced to the hint-safe alphabet — not merely to
+       printable ASCII. Printable-ASCII still admits the SPACE, and a scope
+       name is attacker-chosen free text on an unwrapped line: with spaces a
+       hostile store can pad to the terminal width and forge what look like
+       additional Rekoll note lines ("To repair it, run: curl ... | sh"). The
+       conservative alphabet makes the name unmistakably one token.
+    2. Each part is length-capped (``_MAX_DISPLAY_PART``), because the note
+       caps how many LINES it prints but nothing else capped how long one is.
+
+    Anything altered is visible as ``?`` / ``...`` rather than silently
+    dropped: the operator must be able to see that the name was mangled.
+    """
+    parts = key.split("/", 2)
+    shown = []
+    for part in parts:
+        clean = "".join(ch if ch in _HINT_SAFE_CHARS else "?" for ch in part)
+        if len(clean) > _MAX_DISPLAY_PART:
+            clean = clean[:_MAX_DISPLAY_PART] + "..."
+        shown.append(clean)
+    return "/".join(shown)
+
+
+def _display_value(value: object, limit: int = 120) -> str:
+    """A stored, attacker-suppliable STRING field, made safe to print.
+
+    Looser than :func:`_display_scope_key` (this renders values like an
+    embedder identity, where ``:`` and ``/`` are legitimate and common), but
+    it still strips every control character — a store is a file a hostile repo
+    can commit, and its rows never passed through the ingest-time firewall, so
+    raw ESC in a stored field would otherwise reach the terminal — and caps
+    the length.
+    """
+    text = str(value)
+    clean = "".join(ch if " " <= ch <= "~" else "?" for ch in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
+
+
+def _scope_hint_command(key: str, *, path: str) -> Optional[str]:
+    """The exact command that reads scope ``key`` — echoing a custom ``--path``
+    so the hint works verbatim (the ``_require_store`` hint precedent) — or
+    ``None`` when any scope part is outside the hint-safe alphabet (the note
+    then still NAMES the scope, sanitized, but refuses to typeset a command
+    an attacker-chosen name could have steered)."""
+    tenant, project, agent = key.split("/", 2)
+    if not all(_hint_safe_part(p) for p in (tenant, project, agent)):
+        return None
+    cmd = f"rekoll status --tenant {tenant} --project {project} --agent {agent}"
+    if path != ":memory:" and Path(path) != Path(DEFAULT_DB_PATH):
+        # A custom path must ride along or the hint reads the wrong store —
+        # quoted when it holds spaces (C:\Users\John Smith\... is common), and
+        # not typeset at all when even quoting could not keep it one shell
+        # token (the scope-part refusal rule, applied to the path leg).
+        if '"' in path or "\n" in path or "\r" in path:
+            return None
+        cmd += f' --path "{path}"' if " " in path else f" --path {path}"
+    return cmd
+
+
+def _scope_split_lines(scope, others: dict, *, path: str) -> list:
+    """The scope-split note (issue #83): this scope is empty, but the same
+    store holds memories under other scope(s) — say so, name them, and hand
+    over the exact command that shows them.
+
+    Warn-don't-restrict: this INFORMS. It never switches scope, never merges,
+    never hides — the operator decides. Rendered on stderr by every caller
+    (this module's rule: results to stdout, messages to stderr), ASCII only.
+    An empty ``others`` renders nothing, so a brand-new store is never nagged.
+    """
+    if not others:
+        return []
+    total = sum(others.values())
+    n = len(others)
+    lines = [
+        f"note: this scope ({scope.key()}) is empty, but this store holds "
+        f"{total} memor{'ies' if total != 1 else 'y'} under "
+        f"{n} other scope{'s' if n != 1 else ''}:"
+    ]
+    ranked = sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))
+    for key, count in ranked[:5]:
+        lines.append(
+            f"        {_display_scope_key(key)}  "
+            f"({count} memor{'ies' if count != 1 else 'y'})"
+        )
+    if n > 5:
+        lines.append(f"        ... and {n - 5} more")
+    hint = next(
+        (h for key, _c in ranked
+         if (h := _scope_hint_command(key, path=path)) is not None),
+        None,
+    )
+    if hint is not None:
+        lines.append("      To read one of them:")
+        lines.append(f"        {hint}")
+    lines.append(
+        "      (nothing was moved or hidden; scopes are isolated on purpose - "
+        "pass --tenant/--project/--agent to choose one)"
+    )
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # status
 # ---------------------------------------------------------------------------
 
@@ -1180,6 +1364,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         total = adapter.count(scope=scope)
         by_kind = {k: adapter.count(scope=scope, kind=k) for k in Kind}
         identity = adapter.get_embedder_identity(scope=scope)
+        # The split detector (issue #83): fetched while the adapter is open,
+        # rendered after the report. Only an EMPTY scope asks — a populated
+        # one is not silent, and the census is not free.
+        others = _other_scope_counts(adapter, scope) if total == 0 else {}
     except sqlite3.Error as exc:  # e.g. a truncated/corrupt db that still opened
         return _fail(f"could not read the store: {exc}")
     finally:
@@ -1199,11 +1387,25 @@ def cmd_status(args: argparse.Namespace) -> int:
     if identity is None:
         _out("Embedder: none recorded yet (nothing stored in this scope)")
     else:
-        _out(f"Embedder: {identity.name} (dim {identity.dim})")
+        # The identity name is STORED data, and a store is a file a hostile
+        # repo can commit — its rows never passed the ingest-time firewall, so
+        # raw ESC here would reach the terminal. This matters more since the
+        # scope-split note (ADR-0040) can now advertise "run this to see that
+        # scope": the command it hands over must not land on an unsanitized
+        # render.
+        _out(f"Embedder: {_display_value(identity.name)} (dim {identity.dim})")
     if _semantic_extra_installed():
         _out("Search mode installed: real semantic search ('embeddings' extra present)")
     else:
         _out('Search mode installed: basic keyword matching (pip install "rekoll[embeddings]" to upgrade)')
+    split = _scope_split_lines(scope, others, path=args.path)
+    if split and sys.stdout is not None:
+        # The relevance-footer flush (see cmd_recall): stderr is unbuffered
+        # while a REDIRECTED stdout is block-buffered, so without this the
+        # note prints BEFORE the report it annotates.
+        sys.stdout.flush()
+    for line in split:
+        _err(line)
     return 0
 
 
@@ -1498,7 +1700,8 @@ def _check_existing_store(args: argparse.Namespace) -> tuple[str, str]:
         if not stub_stored and not extra:
             return (
                 "WARN",
-                f"{detail}; stored with {identity.name} but the 'embeddings' extra is "
+                f"{detail}; stored with {_display_value(identity.name)} but the "
+                "'embeddings' extra is "
                 "gone - recall quality is degraded until you reinstall it (or call "
                 "Memory.reindex() to re-embed with the current embedder)",
             )
@@ -1539,6 +1742,62 @@ def _check_freshness(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     return ("WARN", f"index is degraded/stale ({detail})")
 
 
+def _check_scopes(args: argparse.Namespace) -> Optional[tuple[str, str]]:
+    """The split detector (issue #83 / ADR-0040) as a doctor line: a store
+    whose memories all sit under OTHER scopes must never let doctor reassure
+    with a bare 'ok' — this was the exact reproduced failure (MCP wrote under
+    a folder-derived project; bare doctor said "All checks passed").
+
+    WARN, not FAIL, on a split: nothing is broken and no data is lost — the
+    operator just cannot see it from this scope, and warn-don't-restrict means
+    we inform and hand over the command, never block or auto-switch. ``None``
+    (no line) when there is no store to census. Fail-soft like
+    ``_check_freshness``: the store/open errors are already reported by the
+    'store' check, so this one stays silent rather than double-reporting.
+    """
+    if not _store_exists(args.path) or args.path == ":memory:":
+        return None
+    if _is_rekoll_store(args.path) is False:
+        return None
+    from .adapters.registry import get_adapter
+    from .model import Scope
+
+    scope = Scope(tenant=args.tenant, project=args.project, agent=args.agent)
+    try:
+        adapter = get_adapter("sqlite", path=args.path)
+        try:
+            here = adapter.count(scope=scope)
+            others = _other_scope_counts(adapter, scope)
+        finally:
+            adapter.close()
+    except Exception:
+        return None
+    if here == 0 and others:
+        total = sum(others.values())
+        ranked = sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))
+        hint = next(
+            (h for key, _c in ranked
+             if (h := _scope_hint_command(key, path=args.path)) is not None),
+            None,
+        )
+        tail = f"- try: {hint}" if hint is not None else "- rekoll status names them"
+        return (
+            "WARN",
+            f"this scope ({scope.key()}) is empty but the store holds "
+            f"{total} memor{'ies' if total != 1 else 'y'} under "
+            f"{len(others)} other scope{'s' if len(others) != 1 else ''} {tail}",
+        )
+    if others:
+        n = len(others)
+        return (
+            "ok",
+            f"{n} other scope{'s' if n != 1 else ''} also "
+            f"hold{'s' if n == 1 else ''} memories in this store "
+            "(scope isolation, by design)",
+        )
+    return ("ok", "no memories hide under another scope in this store")
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     _out("rekoll doctor - checking this machine")
     _out()
@@ -1563,6 +1822,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append((level, "store dir", detail))
     level, detail = _check_existing_store(args)
     checks.append((level, "store", detail))
+    scopes = _check_scopes(args)  # the split detector (issue #83 / ADR-0040)
+    if scopes is not None:
+        checks.append((scopes[0], "scopes", scopes[1]))
     freshness = _check_freshness(args)  # Memory.health() seam (ADR-0024)
     if freshness is not None:
         checks.append((freshness[0], "freshness", freshness[1]))
