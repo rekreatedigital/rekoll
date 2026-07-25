@@ -904,17 +904,175 @@ def _source_pointer(record) -> str:
     return f" | from: {prov.source_file}#{prov.chunk_index}"
 
 
+# --- the relevance footer on the human recall list (issue #73) ---------------
+
+#: Advisory WORDING threshold for the human recall footer -- never a filter,
+#: never a default ``min_score``. Below this top-1 cosine the footer calls the
+#: match weak; at or above it the number is printed with no judgment attached.
+#:
+#: 0.55 is a STARTING POINT, not a calibrated constant. The issue #73
+#: investigation measured the bands on bge-small and found them OVERLAPPING --
+#: answerable near-topic 0.515 < nonsense max 0.519 < unanswerable-but-adjacent
+#: 0.565 -- which is exactly why no floor ships (ADR-0028: "0.70 is not a
+#: default -- the gate ships off"). It is safe as WORDING because being wrong
+#: costs one cautious sentence above data that is still fully shown; the same
+#: number used as a gate would return nothing for questions the store can
+#: answer. Anyone tempted to promote it into a filter has to redo the
+#: calibration work #73 states was not done (10 memories, 9 queries: enough to
+#: eliminate a floor, not enough to certify a threshold).
+_ADVISORY_WEAK_COSINE = 0.55
+
+#: How far below the advisory line the wording stays hedged instead of flatly
+#: calling a match weak. 0.50-0.55 is the measured overlap band, where the
+#: number genuinely decides nothing -- so the sentence says so.
+_ADVISORY_HEDGE = 0.05
+
+
+def _in_scope_count(mem, *, kind) -> Optional[int]:
+    """How many memories this recall COULD have returned from this scope, or
+    ``None`` when the store cannot say.
+
+    ``Memory.count()`` is the wrong number here: it counts every row, including
+    the quarantined-for-audit ones recall can never surface, so the footer would
+    claim a scope bigger than the search. The adapter's ``count`` takes a
+    ``status`` filter and gates on the EFFECTIVE status (a forged
+    ``status='active'`` row at trust 0 counts as quarantined), which is the same
+    predicate ``retrieval._surfacable`` applies to the hits -- so ``active``
+    here and "surfacable" there agree by construction.
+
+    MUST be called while the store is still open: ``cmd_recall`` closes its
+    ``Memory`` in a ``finally`` before anything is rendered, so the number is
+    fetched next to the recall and carried out to the footer.
+
+    Fail-soft on every axis: a third-party adapter that cannot serve the filter,
+    or any read error, yields ``None`` and the footer simply drops the "of M"
+    fragment. A cosmetic line must never break a recall that already succeeded.
+    """
+    try:
+        return mem.adapter.count(scope=mem.scope, kind=kind, status=Status.ACTIVE.value)
+    except Exception:  # advisory only: never fail a recall that already worked
+        return None
+
+
+def _is_stub_embedder(mem) -> bool:
+    """True when the vector leg is the zero-dependency :class:`StubEmbedder`.
+
+    Detected by TYPE, not by sniffing ``result.mode`` for ``(stub-embedder)``:
+    ``Memory._mode`` returns early on the embedder-mismatch branch
+    (``lexical-only: embedder mismatch``) and never appends the suffix there, so
+    the string is a description of the pipeline, not a predicate about the
+    embedder. The type is the fact that suffix is derived from.
+    """
+    try:
+        from .embedding import StubEmbedder
+
+        return isinstance(mem.embedder, StubEmbedder)
+    except Exception:  # advisory only: a footer must never break a recall
+        return False
+
+
+def _relevance_footer(
+    *,
+    shown: int,
+    in_scope: Optional[int],
+    top_score: Optional[float],
+    stub_embedder: bool,
+    gated: bool,
+) -> str:
+    """The one advisory line under the HUMAN recall list (issue #73).
+
+    Two facts, both already computed by the recall that just ran: how much of
+    the scope came back, and how close the closest memory actually was. On a
+    small store ``k`` is >= the number of memories, so recall returns
+    EVERYTHING -- that is arithmetic, not a scoring failure -- and the human
+    door was the only one of the three with no way to tell that apart from a
+    genuinely good match. ``--json`` and MCP have published
+    ``top_vector_score`` since ADR-0031 Section 2 precisely so a caller can
+    calibrate; this line completes that parity for the caller who is a person.
+
+    It INFORMS, it never filters. Every hit is still printed, the exit code is
+    unchanged, no ``min_score`` is applied, and the machine payloads are
+    untouched -- the measured band overlap behind ``_ADVISORY_WEAK_COSINE`` is
+    the reason a floor was rejected, so this line must not smuggle one in.
+
+    Three honesty rules the wording obeys:
+
+    * **No number, no claim.** ``top_score is None`` means no cosine leg
+      produced a surfacable candidate (embedder mismatch, a non-cosine adapter
+      metric, an empty vector leg -- ADR-0024/0028). The similarity fragment is
+      dropped entirely; printing ``0.00`` would be the exact bluff
+      ``RecallResult.mode`` exists to prevent.
+    * **On the stub embedder the cosine measures token overlap, and the signal
+      INVERTS** (#73: the stopword query "the" scores 0.632 while an on-topic
+      paraphrase scores 0.0). So it is never called weak or strong there -- it
+      is named for what it is, with the upgrade path.
+    * **Near the advisory line the wording hedges** rather than pretending the
+      threshold is calibrated (see ``_ADVISORY_HEDGE``).
+
+    ASCII only, per this module's rule -- the footer is Rekoll's own message.
+    """
+    if in_scope is None or in_scope < shown:
+        # ``None`` = the store could not say; ``<`` = it changed under us
+        # (a concurrent delete between the recall and the count). Either way,
+        # report only what is certainly true.
+        head = f"showing {shown} " + ("memory" if shown == 1 else "memories")
+    else:
+        noun = "memory" if in_scope == 1 else "memories"
+        head = (
+            f"showing all {in_scope} {noun} in scope"
+            if shown == in_scope
+            else f"showing {shown} of {in_scope} {noun} in scope"
+        )
+
+    if top_score is None:
+        return f"({head})"
+    if stub_embedder:
+        return (
+            f"({head} | top word overlap {top_score:.2f} - keyword-only mode, so "
+            'this counts shared words, not meaning; install "rekoll[embeddings]" '
+            "for real similarity.)"
+        )
+
+    line = f"{head} | top similarity {top_score:.2f}"
+    if top_score >= _ADVISORY_WEAK_COSINE:
+        return f"({line})"
+    judgment = (
+        "borderline; this may not be an answer"
+        if top_score >= _ADVISORY_WEAK_COSINE - _ADVISORY_HEDGE
+        else "weak match; nothing stored may answer this"
+    )
+    if gated:
+        # The caller set --min-score and cleared it. Pointing them at the flag
+        # they just used would be noise.
+        return f"({line} - {judgment}.)"
+    return (
+        f"({line} - {judgment}. Hits are never hidden; --min-score can return "
+        "none instead - see docs/QUICKSTART.md.)"
+    )
+
+
 def cmd_recall(args: argparse.Namespace) -> int:
     if not _require_store(args):
         return 1
     mem = _open_memory(args)
     if mem is None:
         return 1
+    kind = Kind(args.kind) if args.kind else None
+    # Only the human hit list gets the relevance footer, and it needs two facts
+    # the RecallResult does not carry: the in-scope total and which embedder
+    # ran. Both must be read BEFORE the finally closes the store, so they are
+    # fetched here and carried out as plain values (issue #73).
+    human = not (args.json or args.context or args.ids)
+    in_scope: Optional[int] = None
+    stub = False
     try:
         result = mem.recall(
-            args.query, k=args.k, kind=Kind(args.kind) if args.kind else None,
+            args.query, k=args.k, kind=kind,
             min_score=args.min_score,
         )
+        if human and len(result):
+            in_scope = _in_scope_count(mem, kind=kind)
+            stub = _is_stub_embedder(mem)
     finally:
         mem.close()
     empty = not len(result)
@@ -958,6 +1116,25 @@ def cmd_recall(args: argparse.Namespace) -> int:
             f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} "
             f"| id: {record.id}{_source_pointer(record)})"
         )
+    # On stderr, like every other thing this CLI says ABOUT a result (this
+    # module's rule: results to stdout, messages to stderr) -- the two other
+    # explanations of a recall's outcome, "Abstained: ..." and "No memories
+    # found", already go there. It also keeps the hit list byte-identical for
+    # anyone redirecting stdout, which is the whole point: inform, change
+    # nothing (issue #73).
+    if sys.stdout is not None:
+        # stderr is unbuffered while a REDIRECTED stdout is block-buffered, so
+        # without this flush `rekoll recall q 2>&1 | less` prints the footer
+        # BEFORE the hits it is a footer to. A terminal is line-buffered and
+        # never showed the problem -- which is exactly why it is worth pinning.
+        sys.stdout.flush()
+    _err(
+        _relevance_footer(
+            shown=len(result), in_scope=in_scope,
+            top_score=result.top_vector_score, stub_embedder=stub,
+            gated=args.min_score is not None,
+        )
+    )
     return 0
 
 
