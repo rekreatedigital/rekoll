@@ -107,7 +107,11 @@ scripts — the same keys the MCP `recall` tool returns. `mode` names the search
 pipeline that actually ran, so a degraded index can't hide; `directives` carries
 your standing rules; `sources` says which file each hit came from (`null` for a
 remembered fact), so a wrong memory gets fixed where the truth lives;
-`abstained`/`top_vector_score` expose the abstain gate. And
+`abstained`/`top_vector_score` expose the abstain gate. A plain `rekoll recall`
+ends with one advisory line — how much of your store came back and how close the
+closest memory was (`showing all 3 memories in scope | top similarity 0.46 -
+weak match…`) — a comment, never a filter: that line hides nothing and no
+threshold ships switched on. And
 `rekoll doctor` checks your setup if anything misbehaves.
 
 **Same store, from Python:**
