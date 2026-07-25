@@ -119,6 +119,22 @@ def test_a_recalled_record_writes_its_vector_verbatim(mem):
         other.close()
 
 
+def test_a_recalled_record_still_pickles_with_its_vector(mem):
+    """A deferred vector is a closure, and closures do not pickle. The wire
+    format must stay exactly what it was: the vector materializes on the way
+    out and travels under its public field name."""
+    import pickle
+
+    hit = mem.recall(QUERY, k=1).records()[0]  # never materialized
+    expected = mem.adapter.get(scope=mem.scope, ids=[hit.id]).records[0].embedding
+
+    blob = pickle.dumps(hit)
+    assert pickle.loads(blob).embedding == expected
+    # Pickled under the FIELD name, so pickles cross this change in both
+    # directions (a pre-change reader sees the key it expects).
+    assert b"embedding" in blob and b"_embedding" not in blob
+
+
 @pytest.mark.parametrize("value", ['"garbage"', "[[1,2],[3,4]]", "not json", "[NaN,NaN]"])
 def test_a_corrupt_cell_still_raises_the_same_valueerror_when_read(value):
     """Deferring the decode must not lose the error, only move where it lands.
