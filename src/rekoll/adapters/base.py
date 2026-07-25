@@ -220,6 +220,34 @@ class StorageAdapter(ABC):
             f"adapter '{self.name}' does not support newest-record enumeration"
         )
 
+    # --- optional: whole-store scope census (the split detector, ADR-0040) --
+    def scope_counts(self) -> Mapping[str, int]:
+        """Effective-ACTIVE record count per scope, for the WHOLE store, as
+        ``{"tenant/project/agent": n}`` — only scopes holding at least one
+        surfacable record appear.
+
+        This is the ONE deliberate, bounded exception to "every read carries a
+        ``Scope``" (module docstring). It exists so the CLI can detect a
+        silently SPLIT store: the same file holding memories under a scope the
+        current door will never read (issue #83 — the CLI defaults
+        ``project='default'`` while the MCP server derives the project from
+        its launch folder's name, so both doors report "empty" while the other
+        door's memories sit right there). The exception is a CENSUS only:
+        scope keys and counts cross the scope boundary, record content never
+        does. Counts apply the same effective-status gate as every surfaced
+        read (``_effective_status``): a quarantined or forged active-at-trust-0
+        row in another scope must not advertise a phantom memory.
+
+        Optional the same way :meth:`lexical_query` / :meth:`newest` are: a
+        backend that cannot enumerate scopes raises, and callers must degrade
+        to saying nothing extra — the note this feeds is advisory, so its
+        absence may never break the read that would have carried it.
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support the whole-store scope census "
+            "(scope_counts)"
+        )
+
     # --- optional: standing-directive channel (always-surface rules) -------
     def active_directives(
         self, *, scope: Scope, limit: int, min_trust: int

@@ -9,7 +9,30 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A silently split store is now loud (#83, ADR-0040).** The CLI's default
+  scope (`--project default`) and the MCP server's (project derived from the
+  launch folder's name) differ, so an AI writing through MCP and a human
+  typing bare CLI commands in the same repo read different scopes of the same
+  store — and every diagnostic used to reassure: `recall` said "No memories
+  found", `status` said "Memories: 0", `doctor` said "All checks passed".
+  Now, when the scope a command reads is empty but the store holds memories
+  under other scopes, `status` and bare `recall` print a note naming those
+  scopes (largest first) with the exact command that reads them, and `doctor`
+  gains a `scopes` check that WARNs with the same command. Nothing moves,
+  nothing auto-switches, machine payloads (`recall --json`, MCP) are
+  byte-unchanged, and the note counts only memories recall could actually
+  surface — a scope holding only quarantined rows is never advertised.
+  Backed by a new optional adapter census, `StorageAdapter.scope_counts()`
+  (concrete, raising-by-default: out-of-tree adapters keep working and the
+  note simply stays absent).
+
+### Fixed
+
+- `rekoll doctor` no longer prints mojibake on Windows consoles: the four
+  `Memory.health()` notes it can surface (empty scope, dead ingest, tamper,
+  embedder mismatch) used an em dash, violating the CLI's ASCII-messages rule.
 
 ## [0.1.2] - 2026-07-25
 

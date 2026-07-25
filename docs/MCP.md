@@ -289,3 +289,13 @@ claude mcp add rekoll -- rekoll-mcp --redact-pii
   then it's fully offline).
 - **Two agents, one repo** — they share memory by default (same store, same
   scope). Give each its own `--agent` name to separate them.
+- **The agent stored memories, but bare `rekoll recall` / `rekoll status` show
+  nothing** — the cross-door scope trap: this server derives `--project` from
+  its launch folder's NAME, while the CLI defaults to `--project default`, so
+  bare CLI commands read a DIFFERENT scope in the same store file. Neither
+  side errors; both look empty to each other (scope isolation working as
+  designed). Since v0.1.3 the CLI is loud about it: `status`, bare `recall`,
+  and `doctor` name the other scope and print the exact command that reads it
+  — nothing is moved or auto-switched (ADR-0040). To make both doors share one
+  scope, pin the same `--tenant` / `--project` / `--agent` on the server's
+  `args` (§2, §5) and pass the same triple to CLI calls.

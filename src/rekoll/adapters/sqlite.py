@@ -872,6 +872,27 @@ class SQLiteAdapter(StorageAdapter):
             total += row["c"]
         return total
 
+    def scope_counts(self) -> dict[str, int]:
+        """The whole-store scope census (base contract, ADR-0040): effective-
+        ACTIVE rows per ``scope_key`` across all four kind tables.
+
+        ``_EFFECTIVE_STATUS_SQL`` keeps a forged active-at-trust-0 row out of
+        the census exactly as ``count(status="active")`` keeps it out of the
+        footer's in-scope number — a scope holding only rows recall could never
+        surface must not appear here. ``idx_<table>_scope`` makes each GROUP BY
+        an index walk, so the census stays cheap even on a large store.
+        """
+        out: dict[str, int] = {}
+        for table in _KIND_TABLE.values():
+            rows = self._conn.execute(
+                f"SELECT scope_key, COUNT(*) AS c FROM {table} "
+                f"WHERE {_EFFECTIVE_STATUS_SQL} = ? GROUP BY scope_key",
+                (*_EFFECTIVE_STATUS_SQL_PARAMS, Status.ACTIVE.value),
+            ).fetchall()
+            for row in rows:
+                out[row["scope_key"]] = out.get(row["scope_key"], 0) + row["c"]
+        return out
+
     def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
         if n <= 0:
             return GetResult(records=())
