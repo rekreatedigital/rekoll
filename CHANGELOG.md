@@ -18,12 +18,29 @@ A dedicated **Security** heading is kept per the governance commitment in
   `{"file", "chunk"}` per hit, `null` for a `remember`ed fact with no file.
   Correct a wrong memory where the truth lives instead of patching the index.
   `ContextEnvelope.render()` is byte-for-byte unchanged (ADR-0013). (#75, read half)
+- **Honest relevance on `rekoll recall` (human door).** A recall now ends with one
+  advisory line — how much of the scope came back and how close the closest memory
+  was (`showing all 3 memories in scope | top similarity 0.46 - weak match; …`) —
+  so a small store returning everything can't read as a confident answer. It
+  informs, never filters: no hits are hidden, no default `--min-score` ships, and
+  exit codes and the `--json`/MCP payloads are unchanged. The Quickstart gains a
+  `--min-score` calibration recipe (ADR-0039, #73).
+
+### Performance
+
+- `recall()` no longer decodes the ~88 stored vectors per query that RRF fusion
+  ranks away and discards; embeddings now materialize on first read. Recall p50
+  is ~2x faster on a 1,000-record corpus (30.1 ms → 14.1 ms, bge-small) with
+  bit-identical ranking (ADR-0038, #43).
 
 ### Fixed
 
 - `ingest` no longer leaks compile-time warnings provoked by the *ingested*
   file's source (e.g. `SyntaxWarning: invalid escape sequence` on Python
   3.12+) into CLI/MCP output; rekoll's own warnings still surface (#89).
+- `Memory.health()` stays fail-soft when a stored vector cannot be decoded: the
+  record counts as not-embedded and earns a note naming possible tampering,
+  instead of propagating a `ValueError` (found gating #43; ADR-0038).
 
 ## [0.1.1] - 2026-07-24
 
