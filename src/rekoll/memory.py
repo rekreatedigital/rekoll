@@ -1385,7 +1385,7 @@ class Memory:
             return HealthReport(
                 ok=None, identity=self._identity_state, mode=mode, total=0,
                 checked=0, embedded=0, retrievable=0,
-                notes=("empty scope — nothing to check",),
+                notes=("empty scope - nothing to check",),
             )
         try:
             # Over-fetch so quarantined/superseded rows don't eat the sample.
@@ -1484,7 +1484,7 @@ class Memory:
             )
         if self._identity_state == "mismatch":
             notes.append(
-                "embedder identity mismatch — vector leg refused (ADR-0024); "
+                "embedder identity mismatch - vector leg refused (ADR-0024); "
                 "call Memory.reindex() to re-embed this scope with the current embedder"
             )
         ok = not stale and self._identity_state != "mismatch"
@@ -1494,13 +1494,13 @@ class Memory:
         # (more actionable): those ids need re-ingest/delete, not a reindex.
         if tampered:
             notes.append(
-                "newest record(s) failed content-hash verification — possible "
+                "newest record(s) failed content-hash verification - possible "
                 "direct-DB tampering (ADR-0019); re-ingest or delete them"
             )
         dead = [rid for rid in stale if rid not in set(tampered)]
         if dead:
             notes.append(
-                "newest record(s) not fully indexed — ingestion/embedding may be dead"
+                "newest record(s) not fully indexed - ingestion/embedding may be dead"
             )
         return HealthReport(
             ok=ok, identity=self._identity_state, mode=mode, total=total,
