@@ -100,6 +100,53 @@ Useful flags:
   rekoll recall "why postgres" --json | python -c "import json,sys; d=json.load(sys.stdin); print(d['mode'], d['ids'])"
   ```
 
+- **The line under your results.** A plain `rekoll recall` ends with one
+  advisory line that answers what the list itself can't:
+
+  ```text
+  (showing all 3 memories in scope | top similarity 0.46 - weak match; nothing stored may answer this. This line hides nothing; --min-score can return none instead - see docs/QUICKSTART.md.)
+  ```
+
+  Two facts, both free. **How much of your store came back:** while you have
+  fewer memories than results asked for (`-k`, default 5), you get *all* of
+  them, every time — that's arithmetic, not a bad search, and "showing all 3"
+  says so out loud. **How close the closest one actually was:** `1.0` is
+  identical text, and with the default semantic model even two unrelated
+  sentences score around `0.3–0.5` — so a low number means nothing you stored is
+  really about the question, and "weak match" says that in words. The
+  line is a *comment, never a filter* — every hit is still printed, the exit
+  code is unchanged, and nothing is hidden from you. In keyword mode the number
+  counts shared words rather than meaning, so it's labelled `top word overlap`
+  and passes no judgment. It goes to stderr with Rekoll's other messages, so
+  `rekoll recall … > notes.txt` still captures exactly the results.
+
+- `rekoll recall "query" --min-score 0.55` — the floor is **yours to set**, and
+  it ships off. With it, a query nothing is close enough to gets an honest "I
+  don't know" (zero hits, exit `1`, a message that says *abstained*, not
+  "empty") instead of confident-looking results. There is no safe universal
+  number — it depends on your embedder and your own memories — so measure two:
+
+  ```bash
+  # 1. a question you KNOW your memories answer:
+  rekoll recall "which database did we choose" --json | python -c "import json,sys; print(json.load(sys.stdin)['top_vector_score'])"
+  # 2. one you know they do NOT (nonsense is fine):
+  rekoll recall "what is the capital of France" --json | python -c "import json,sys; print(json.load(sys.stdin)['top_vector_score'])"
+  # 3. put --min-score between the two numbers, then check both behave:
+  rekoll recall "what is the capital of France" --min-score 0.55   # Abstained: ... (exit 1)
+  rekoll recall "which database did we choose" --min-score 0.55    # normal hits (exit 0)
+  ```
+
+  `top_vector_score` is the same number the footer prints, and it's on every
+  `--json` recall (and every MCP one) so a script can read it. Repeat the
+  measurement with a handful of real questions rather than one, re-check it
+  after you change embedder or your store grows a lot, and don't copy a
+  threshold out of someone else's docs. Two honest limits: the two groups of
+  numbers can *overlap*, so any floor you pick will sometimes refuse a question
+  your notes could have answered — the flag is off by default for exactly that
+  reason. And in keyword-only mode (no `[embeddings]` extra) the number measures
+  word overlap, where a stopword query can outscore a real paraphrase; don't put
+  a floor on it there.
+
 - `rekoll remember --kind directive "always use tabs"` — kinds are
   `raw_fact` (default), `observation`, `directive`, `episode`. A directive is a
   **standing rule**, not an ordinary memory: every AI session that uses this
