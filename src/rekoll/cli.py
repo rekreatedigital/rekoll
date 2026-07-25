@@ -1190,10 +1190,39 @@ def _other_scope_counts(adapter, scope) -> dict:
     }
 
 
-def _scope_hint_command(key: str, *, path: str) -> str:
+#: Characters a scope part may contain for the note to render it as a
+#: copy-paste command. Deliberately conservative (the ``_derived_project``
+#: alphabet): ``Scope`` itself allows spaces, leading dashes, even ESC — and
+#: scope keys in the census are DATA from the store, so a hostile store file
+#: (e.g. a ``.rekoll/memory.db`` committed in a cloned repo) could otherwise
+#: inject extra flags into a command the note tells the operator to run.
+_HINT_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+)
+
+
+def _hint_safe_part(part: str) -> bool:
+    return bool(part) and not part.startswith("-") and all(
+        ch in _HINT_SAFE_CHARS for ch in part
+    )
+
+
+def _display_scope_key(key: str) -> str:
+    """A stored scope key, made safe to print: non-printable or non-ASCII
+    characters become ``?`` so a hostile row cannot smuggle terminal escape
+    sequences (or mojibake) through an advisory note."""
+    return "".join(ch if " " <= ch <= "~" else "?" for ch in key)
+
+
+def _scope_hint_command(key: str, *, path: str) -> Optional[str]:
     """The exact command that reads scope ``key`` — echoing a custom ``--path``
-    so the hint works verbatim (the ``_require_store`` hint precedent)."""
+    so the hint works verbatim (the ``_require_store`` hint precedent) — or
+    ``None`` when any scope part is outside the hint-safe alphabet (the note
+    then still NAMES the scope, sanitized, but refuses to typeset a command
+    an attacker-chosen name could have steered)."""
     tenant, project, agent = key.split("/", 2)
+    if not all(_hint_safe_part(p) for p in (tenant, project, agent)):
+        return None
     cmd = f"rekoll status --tenant {tenant} --project {project} --agent {agent}"
     if path != ":memory:" and Path(path) != Path(DEFAULT_DB_PATH):
         cmd += f" --path {path}"
@@ -1221,11 +1250,20 @@ def _scope_split_lines(scope, others: dict, *, path: str) -> list:
     ]
     ranked = sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))
     for key, count in ranked[:5]:
-        lines.append(f"        {key}  ({count} memor{'ies' if count != 1 else 'y'})")
+        lines.append(
+            f"        {_display_scope_key(key)}  "
+            f"({count} memor{'ies' if count != 1 else 'y'})"
+        )
     if n > 5:
         lines.append(f"        ... and {n - 5} more")
-    lines.append("      To read the largest one:")
-    lines.append(f"        {_scope_hint_command(ranked[0][0], path=path)}")
+    hint = next(
+        (h for key, _c in ranked
+         if (h := _scope_hint_command(key, path=path)) is not None),
+        None,
+    )
+    if hint is not None:
+        lines.append("      To read one of them:")
+        lines.append(f"        {hint}")
     lines.append(
         "      (nothing was moved or hidden; scopes are isolated on purpose - "
         "pass --tenant/--project/--agent to choose one)"
@@ -1669,13 +1707,18 @@ def _check_scopes(args: argparse.Namespace) -> Optional[tuple[str, str]]:
         return None
     if here == 0 and others:
         total = sum(others.values())
-        top_key = sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        ranked = sorted(others.items(), key=lambda kv: (-kv[1], kv[0]))
+        hint = next(
+            (h for key, _c in ranked
+             if (h := _scope_hint_command(key, path=args.path)) is not None),
+            None,
+        )
+        tail = f"- try: {hint}" if hint is not None else "- rekoll status names them"
         return (
             "WARN",
             f"this scope ({scope.key()}) is empty but the store holds "
             f"{total} memor{'ies' if total != 1 else 'y'} under "
-            f"{len(others)} other scope{'s' if len(others) != 1 else ''} "
-            f"- try: {_scope_hint_command(top_key, path=args.path)}",
+            f"{len(others)} other scope{'s' if len(others) != 1 else ''} {tail}",
         )
     if others:
         return (

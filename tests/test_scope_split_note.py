@@ -199,6 +199,62 @@ def test_note_degrades_silently_when_the_adapter_cannot_answer(project, capsys, 
     assert "note:" not in err
 
 
+def test_hostile_scope_name_is_never_typeset_as_a_command(project, capsys):
+    """Scope keys are DATA from the store (a hostile repo can commit a whole
+    ``.rekoll/memory.db``): a name crafted to smuggle extra flags into the
+    copy-paste hint must never be typeset as a runnable command. ``Scope``
+    itself allows spaces and leading dashes, so the gate is the note's."""
+    assert main(["init"]) == 0
+    mem = Memory(path=DB, project="x --path evil.db")
+    try:
+        mem.remember("an innocent-looking fact")
+    finally:
+        mem.close()
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    _, err = capsys.readouterr()
+    assert "note:" in err  # the split is still reported (named as text) ...
+    # ... but the only "rekoll ..." line the note ever prints is the hint,
+    # and no scope here earned one.
+    assert "rekoll status --tenant" not in err
+    capsys.readouterr()
+    assert main(["doctor"]) == 0
+    out, _ = capsys.readouterr()
+    assert "WARN" in out and "scopes" in out
+    assert "rekoll status --tenant" not in out
+
+
+def test_hint_prefers_the_largest_safe_scope(project, capsys):
+    assert main(["init"]) == 0
+    mem = Memory(path=DB, project="x --path evil.db")
+    try:
+        mem.remember("fact one")
+        mem.remember("fact two")  # the hostile scope is the LARGEST
+    finally:
+        mem.close()
+    assert main(["remember", "safe fact", "--project", OTHER]) == 0
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    _, err = capsys.readouterr()
+    # The hint skips the larger-but-unsafe name and typesets the safe scope.
+    assert f"rekoll status --tenant default --project {OTHER} --agent default" in err
+    assert "evil.db --agent" not in err
+
+
+def test_control_characters_in_scope_names_are_not_echoed(project, capsys):
+    assert main(["init"]) == 0
+    mem = Memory(path=DB, project="evil\x1b[2Jscope")
+    try:
+        mem.remember("a fact")
+    finally:
+        mem.close()
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    _, err = capsys.readouterr()
+    assert "note:" in err
+    assert "\x1b" not in err  # terminal escapes never reach the console
+
+
 # -- doctor ------------------------------------------------------------------
 
 def test_doctor_warns_on_a_split_store(project, capsys):
