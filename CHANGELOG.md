@@ -9,6 +9,10 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.3] - 2026-07-25
+
 ### Added
 
 - **A silently split store is now loud (#83, ADR-0040).** The CLI's default
@@ -33,9 +37,17 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ### Fixed
 
-- `rekoll doctor` no longer prints mojibake on Windows consoles: the four
-  `Memory.health()` notes it can surface (empty scope, dead ingest, tamper,
-  embedder mismatch) used an em dash, violating the CLI's ASCII-messages rule.
+- `rekoll doctor` no longer prints mojibake on Windows consoles: every
+  `Memory.health()` note it can surface (empty scope, dead ingest, tamper,
+  embedder mismatch, and the store/enumeration failure notes) used an em dash,
+  violating the CLI's ASCII-messages rule. A tripwire test now pins the whole
+  set to ASCII.
+- `rekoll status` and `rekoll doctor` no longer echo a stored embedder identity
+  verbatim. A store is a file a repo can ship, and its rows never passed the
+  ingest-time firewall, so a crafted identity could fire raw terminal escape
+  sequences at the console — which matters more now that the new scope note can
+  point you at another scope. (Recall's rendering of stored *content* has the
+  same exposure and is tracked separately in #98.)
 
 ## [0.1.2] - 2026-07-25
 
@@ -224,7 +236,8 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/rekreatedigital/rekoll/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rekreatedigital/rekoll/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rekreatedigital/rekoll/releases/tag/v0.1.0
