@@ -1045,8 +1045,17 @@ def _relevance_footer(
         # The caller set --min-score and cleared it. Pointing them at the flag
         # they just used would be noise.
         return f"({line} - {judgment}.)"
+    # "This line hides nothing" and NOT "hits are never hidden": the footer
+    # promises only what the footer controls. Read-time content-hash
+    # verification (ADR-0019) genuinely does withhold a tampered hit, and it
+    # can do so on this very line — a weak-scoring recall over a tampered store
+    # renders "showing 2 of 3 ... " while one hit was withheld. An absolute
+    # claim would be flatly false exactly when a user most needs the truth,
+    # which is the overclaiming this repo keeps tripwires against. The narrow
+    # claim is the true one, and it is still the reassurance that matters: this
+    # advisory is not a filter.
     return (
-        f"({line} - {judgment}. Hits are never hidden; --min-score can return "
+        f"({line} - {judgment}. This line hides nothing; --min-score can return "
         "none instead - see docs/QUICKSTART.md.)"
     )
 

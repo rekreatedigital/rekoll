@@ -1033,6 +1033,23 @@ def test_relevance_footer_points_at_min_score_without_ever_applying_one():
     assert "--min-score" not in _render(top_score=0.90)
 
 
+def test_relevance_footer_claims_only_what_the_footer_controls():
+    """The reassurance must be scoped to THIS LINE, never to the system.
+
+    Read-time content-hash verification (ADR-0019) really does withhold a
+    tampered hit, and it can do so on this very line: a weak-scoring recall
+    over a tampered store renders `showing 2 of 3 ... ` while one hit was
+    withheld. An absolute "hits are never hidden" would therefore be flatly
+    false exactly when a user most needs the truth — the overclaiming this
+    repo keeps tripwires against. The narrow claim is the true one and still
+    says the thing that matters: this advisory is not a filter.
+    """
+    weak = _render(top_score=0.46)
+    assert "This line hides nothing" in weak
+    for absolute in ("Hits are never hidden", "nothing is hidden", "never hidden"):
+        assert absolute not in weak, f"absolute claim {absolute!r} is not true (ADR-0019)"
+
+
 def test_relevance_footer_makes_no_similarity_claim_without_a_cosine():
     """``top_vector_score is None`` (embedder mismatch, non-cosine metric, no
     surfacable vector candidate — ADR-0024/0028) means there is no number. The

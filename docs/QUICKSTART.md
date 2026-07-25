@@ -104,7 +104,7 @@ Useful flags:
   advisory line that answers what the list itself can't:
 
   ```text
-  (showing all 3 memories in scope | top similarity 0.46 - weak match; nothing stored may answer this. Hits are never hidden; --min-score can return none instead - see docs/QUICKSTART.md.)
+  (showing all 3 memories in scope | top similarity 0.46 - weak match; nothing stored may answer this. This line hides nothing; --min-score can return none instead - see docs/QUICKSTART.md.)
   ```
 
   Two facts, both free. **How much of your store came back:** while you have
