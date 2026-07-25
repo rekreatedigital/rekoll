@@ -112,7 +112,11 @@ ends with one advisory line — how much of your store came back and how close t
 closest memory was (`showing all 3 memories in scope | top similarity 0.46 -
 weak match…`) — a comment, never a filter: that line hides nothing and no
 threshold ships switched on. And
-`rekoll doctor` checks your setup if anything misbehaves.
+`rekoll doctor` checks your setup if anything misbehaves — including the
+cross-door scope trap: if an AI stored memories under a different scope name
+than the one your bare command reads (the MCP server and the CLI have
+different scope defaults), `status`, `recall` and `doctor` all say so and
+print the exact command that shows them, instead of a silent "0 memories".
 
 **Same store, from Python:**
 
