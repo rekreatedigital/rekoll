@@ -28,6 +28,7 @@ __all__ = [
     "Scope",
     "Provenance",
     "MemoryRecord",
+    "DeferredEmbedding",
     "Scalar",
 ]
 
@@ -174,8 +175,8 @@ class MemoryRecord:
             self.status = Status.QUARANTINED
         if not self.content:
             raise ValueError("content must be non-empty")
-        if self.embedding is not None:
-            self.embedding = tuple(float(x) for x in self.embedding)
+        # NB: `embedding` is coerced/validated by its property setter (below),
+        # which the generated __init__ has already run by the time we get here.
         _validate_metadata(self.metadata)
 
     @classmethod
@@ -215,11 +216,113 @@ class MemoryRecord:
         """True iff the stored content_hash matches the content (tamper check)."""
         return self.content_hash == _content_hash(self.content)
 
+    # -- pickling -----------------------------------------------------------
+    # A deferred vector (see DeferredEmbedding below) is a closure, and a closure
+    # cannot be pickled — so a record read from a store and never materialized
+    # would have become unpicklable, breaking multiprocessing/caching callers for
+    # a change that is supposed to be invisible. These two hooks keep the wire
+    # format EXACTLY what it was before deferral existed: the vector is decoded
+    # on the way out, and it travels under its public field name, so pickles
+    # round-trip in both directions across this change.
+    def __getstate__(self) -> dict:
+        materialized = self.embedding  # decode now; a thunk must not cross a process
+        state = dict(self.__dict__)
+        state.pop("_embedding", None)
+        state["embedding"] = materialized
+        return state
+
+    def __setstate__(self, state: Mapping) -> None:
+        state = dict(state)
+        # Accept either key, and always end up with exactly one: ``embedding``
+        # is what __getstate__ writes AND what a pre-deferral pickle carries;
+        # ``_embedding`` is what a raw __dict__ copy would carry. Setting the
+        # slot unconditionally means the property's getter can never meet a
+        # half-restored record.
+        state["_embedding"] = state.pop("embedding", state.pop("_embedding", None))
+        self.__dict__.update(state)
+
     def with_embedding(self, vector: Sequence[float], *, name: str, dim: int) -> "MemoryRecord":
-        self.embedding = tuple(float(x) for x in vector)
+        self.embedding = vector  # the property setter coerces to a float tuple
         self.embedder_name = name
         self.embedder_dim = dim
         return self
+
+
+# -- deferred embeddings (issue #43) ------------------------------------------
+# Storage adapters reconstruct a MemoryRecord for every candidate in the
+# retrieval fusion pool — ~96 records for a k=8 recall, because the pool is
+# fetched from BOTH the vector and lexical legs at `candidates` (6*k) deep. RRF
+# fusion ranks on `id` and `score` and never touches `.embedding`, so ~88 of
+# those stored vectors were json-decoded, validated and boxed only to be ranked
+# away and discarded — about half of what remained in read latency once the
+# ADR-0030 scan cache removed the scan itself.
+#
+# The fix is to defer, not to omit. `.embedding` MUST keep returning exactly the
+# same value (a `tuple[float, ...]`) and raising exactly the same errors for
+# every caller, because the pool records are also the records a caller receives
+# from `recall()`. Handing back `embedding=None` for the pool would have made
+# `recall(...).records()[0].embedding` a silent lie; deferring costs a caller
+# who reads it nothing but the decode they were already paying for.
+#
+# An adapter passes `DeferredEmbedding(thunk)` in place of a vector; the first
+# read of `.embedding` calls the thunk, caches the result and returns it. A
+# vector nobody reads is never decoded at all.
+
+
+class DeferredEmbedding:
+    """A stored vector that has not been decoded yet (adapter read path).
+
+    ``thunk`` must return the finished ``tuple[float, ...]`` — already decoded
+    AND already validated by whatever path the adapter guarantees. The setter
+    below deliberately does NOT re-coerce a deferred result: ``json.loads``
+    already yields Python floats, so the element-by-element re-coercion the
+    eager path performs is pure waste on the adapter path (the tail observation
+    in issue #43). Adapters own that guarantee; everyone else gets coerced.
+    """
+
+    __slots__ = ("thunk",)
+
+    def __init__(self, thunk) -> None:
+        self.thunk = thunk
+
+
+def _coerce_embedding(value):
+    """Today's eager coercion, unchanged: a float tuple, or a clean error."""
+    if value is None:
+        return None
+    return tuple(float(x) for x in value)
+
+
+def _embedding_get(self: MemoryRecord):
+    stored = self.__dict__["_embedding"]
+    if type(stored) is DeferredEmbedding:
+        stored = stored.thunk()
+        self.__dict__["_embedding"] = stored  # decode once per record, not per read
+    return stored
+
+
+def _embedding_set(self: MemoryRecord, value) -> None:
+    self.__dict__["_embedding"] = (
+        value if type(value) is DeferredEmbedding else _coerce_embedding(value)
+    )
+
+
+#: Installed AFTER @dataclass has run, on purpose. `embedding` must stay a real
+#: dataclass FIELD — it is a documented constructor keyword and it participates
+#: in the generated __repr__/__eq__ — but it also needs to be a data descriptor
+#: so that lookups reach the lazy getter instead of the instance __dict__.
+#: Declaring a property inside the class body would instead make it the field's
+#: *default* (dataclasses' descriptor-typed-field behaviour) and hand the
+#: property object itself to the setter. Assigning here keeps the field, the
+#: __init__ signature and its `None` default exactly as they were, and every
+#: generated method routes through the property because a data descriptor on the
+#: type takes precedence over the instance dict. Nothing else in the codebase
+#: reads `record.__dict__` directly.
+MemoryRecord.embedding = property(  # type: ignore[assignment]
+    _embedding_get,
+    _embedding_set,
+    doc="The record's vector, or None. Decoded on first read if an adapter deferred it.",
+)
 
 
 def _validate_metadata(metadata: Mapping[str, Scalar]) -> None:

@@ -1423,8 +1423,22 @@ class Memory:
         stale: list[str] = []
         tampered: list[str] = []  # stale AND content-hash fails: direct-DB tampering
         probe_errors = 0
+        corrupt_vectors = 0
         for record in active:
-            has_vector = record.embedding is not None
+            # Fail-soft on the vector read too. Since #43 the stored vector is
+            # materialized lazily, so a corrupt/non-finite cell now raises HERE
+            # (first read) instead of inside the `newest()` call above, whose
+            # except-clause used to absorb it. Unguarded, that would break this
+            # method's headline contract — "never a propagated exception" — and
+            # the comment in cli.py's `_check_freshness` that relies on it by
+            # name. A record whose vector cannot be decoded is exactly what
+            # health exists to REPORT: it counts as not-embedded (hence stale,
+            # hence not ok) and earns a note, rather than taking the host down.
+            try:
+                has_vector = record.embedding is not None
+            except Exception:
+                has_vector = False
+                corrupt_vectors += 1
             embedded += int(has_vector)
             # Retrievability probe: search the record's own content through the
             # real read path (no reranker — membership in the window is the
@@ -1461,6 +1475,12 @@ class Memory:
             notes.append(
                 f"{probe_errors} retrievability probe(s) raised — the search path "
                 "may be broken; treating those records as not retrievable"
+            )
+        if corrupt_vectors:
+            notes.append(
+                f"{corrupt_vectors} newest record(s) have an unreadable stored vector "
+                "— possible direct-DB tampering or a corrupt store; re-ingest or "
+                "delete them"
             )
         if self._identity_state == "mismatch":
             notes.append(

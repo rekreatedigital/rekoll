@@ -30,7 +30,15 @@ from operator import add, mul
 from typing import Mapping, Optional, Sequence
 
 from ..embedding import EmbedderIdentity
-from ..model import Kind, MemoryRecord, Provenance, Scope, Status, TrustTier
+from ..model import (
+    DeferredEmbedding,
+    Kind,
+    MemoryRecord,
+    Provenance,
+    Scope,
+    Status,
+    TrustTier,
+)
 from .base import (
     BOARD_LIMIT_CEILING,
     BOARD_METADATA_KEY,
@@ -262,6 +270,18 @@ def _decode_embedding(raw: object) -> array:
     is funnelled to ONE clean ``ValueError`` — the CLI already turns that into a
     clean exit 1, and an SDK caller gets a documented, catchable error instead of
     a raw ``TypeError`` or a NaN that defeats the safety gate.
+
+    **Scope of "visibly", stated precisely since #43 made vectors lazy.** Any
+    read that USES the vector still raises here, and does so on the whole scope,
+    because ``_scan`` decodes every scored row. What changed is a read that uses
+    no vector at all — a scope degraded to lexical-only by an embedder-identity
+    mismatch (ADR-0024), or an explicitly vector-less fetch: those no longer
+    touch the cell, so they return their (content-hash-verified) hits instead of
+    raising on a vector they never consult. That is not a silent-WRONG result —
+    the answer is unaffected by a vector nobody read — but it IS a silent one,
+    so the corrupt cell is surfaced through the other honest channel instead:
+    ``Memory.health()`` counts such a record as not-embedded and names it in a
+    note, which is what ``rekoll doctor`` prints.
     """
     try:
         decoded = json.loads(raw)
@@ -290,6 +310,28 @@ def _decode_embedding(raw: object) -> array:
     if not math.isfinite(math.fsum(x * x for x in vec)):
         raise ValueError("corrupt embedding cell: magnitude overflows the L2 norm")
     return vec
+
+
+def _deferred_embedding(raw: object) -> DeferredEmbedding:
+    """Wrap a stored embedding cell so it is decoded only if someone reads it.
+
+    See ``model.DeferredEmbedding`` and issue #43: the RRF fusion pool never
+    touches ``.embedding``, so eagerly decoding one per pooled record burned
+    ~half the remaining read latency on vectors that were immediately discarded.
+
+    Two details are load-bearing:
+
+    * ``_decode_embedding`` is looked up in module globals INSIDE the thunk, at
+      materialization time. Binding it early (``partial``, a default argument, a
+      captured local) would make the real decode invisible to a monkeypatched
+      spy — and the mechanism test for this change is exactly such a spy.
+    * ``tuple(...)`` is the ONLY coercion applied. ``_decode_embedding`` already
+      returns an ``array('d')`` of validated finite floats, so boxing it once
+      yields the required ``tuple[float, ...]``; ``MemoryRecord``'s eager
+      ``tuple(float(x) for x in ...)`` pass over the same values was redundant on
+      this path and is skipped for deferred vectors (issue #43's tail note).
+    """
+    return DeferredEmbedding(lambda: tuple(_decode_embedding(raw)))
 
 
 class _CachedVector:
@@ -1395,11 +1437,16 @@ class SQLiteAdapter(StorageAdapter):
             chunk_index=row["prov_chunk_index"],
             derived_from=derived_from,
         )
-        # Decode the returned record's embedding through the same validated path
-        # (raises a clean ValueError on a corrupt/non-finite cell instead of
-        # building a garbage tuple that MemoryRecord's validator would reject with
-        # a confusing error) — tamper stays visible and uniform across legs.
-        embedding = tuple(_decode_embedding(row["embedding"])) if row["embedding"] else None
+        # DEFERRED, not omitted (issue #43). The retrieval fusion pool
+        # reconstructs ~96 records to return 8 and never reads `.embedding`, so
+        # decoding here spent ~half the remaining read latency on vectors that
+        # were ranked away and discarded. `_deferred_embedding` hands
+        # MemoryRecord a thunk instead: the first read of `.embedding` decodes
+        # through the SAME validated path as before (clean ValueError on a
+        # corrupt/non-finite cell rather than a garbage tuple), and a vector
+        # nobody reads is never decoded at all. The value and the error a caller
+        # sees are unchanged; only the moment of the decode moves.
+        embedding = _deferred_embedding(row["embedding"]) if row["embedding"] else None
         dt_raw = row["declared_transformations"]
         declared = tuple(x for x in dt_raw.split(",") if x) if dt_raw else ()
         return MemoryRecord(
