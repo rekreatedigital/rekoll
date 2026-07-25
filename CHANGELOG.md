@@ -9,6 +9,10 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.2] - 2026-07-25
+
 ### Added
 
 - **Provenance pointers on recall** (ADR-0037 §8): every recalled hit that came
@@ -194,6 +198,7 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/rekreatedigital/rekoll/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rekreatedigital/rekoll/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rekreatedigital/rekoll/releases/tag/v0.1.0
