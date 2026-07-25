@@ -233,8 +233,12 @@ class MemoryRecord:
 
     def __setstate__(self, state: Mapping) -> None:
         state = dict(state)
-        if "embedding" in state:
-            state["_embedding"] = state.pop("embedding")
+        # Accept either key, and always end up with exactly one: ``embedding``
+        # is what __getstate__ writes AND what a pre-deferral pickle carries;
+        # ``_embedding`` is what a raw __dict__ copy would carry. Setting the
+        # slot unconditionally means the property's getter can never meet a
+        # half-restored record.
+        state["_embedding"] = state.pop("embedding", state.pop("_embedding", None))
         self.__dict__.update(state)
 
     def with_embedding(self, vector: Sequence[float], *, name: str, dim: int) -> "MemoryRecord":

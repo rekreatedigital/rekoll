@@ -91,14 +91,21 @@ class _DecodeSpy:
         sqlite_mod._decode_embedding = self._real
 
 
-def run(n: int, dim: int, k: int, nq: int, warmup: int) -> dict:
+def run(n: int, dim: int, k: int, nq: int, warmup: int, embedder: str = "stub") -> dict:
     rng = random.Random(20260725)
     docs = _corpus(n, rng)
     queries = _queries(docs, nq, rng)
 
     tmp = tempfile.mkdtemp(prefix="rekoll-pool-bench-")
     db = str(Path(tmp) / "bench.db")
-    mem = Memory(path=db, embedder=StubEmbedder(dim=dim), reranker=None)
+    if embedder == "fastembed":
+        from rekoll.embedding import FastEmbedEmbedder
+
+        emb = FastEmbedEmbedder()  # the issue's env: bge-small-en-v1.5, dim 384
+        dim = emb.dim
+    else:
+        emb = StubEmbedder(dim=dim)
+    mem = Memory(path=db, embedder=emb, reranker=None)
     for doc in docs:
         mem.remember(doc)
 
@@ -133,6 +140,7 @@ def run(n: int, dim: int, k: int, nq: int, warmup: int) -> dict:
     return {
         "n": n,
         "dim": dim,
+        "embedder": embedder,
         "k": k,
         "queries": nq,
         "decodes_per_warm_recall": per_recall,
@@ -177,6 +185,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--k", type=int, default=8, help="hits requested")
     ap.add_argument("--queries", type=int, default=20, help="timed recalls")
     ap.add_argument("--warmup", type=int, default=10)
+    ap.add_argument(
+        "--embedder",
+        choices=("stub", "fastembed"),
+        default="stub",
+        help="stub (default, deterministic, no download) or fastembed (the issue's env)",
+    )
     ap.add_argument("--json", type=Path, help="write the full result here")
     ap.add_argument("--compare", nargs=2, type=Path, metavar=("BEFORE", "AFTER"))
     args = ap.parse_args(argv)
@@ -184,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare:
         return _compare(*args.compare)
 
-    result = run(args.n, args.dim, args.k, args.queries, args.warmup)
+    result = run(args.n, args.dim, args.k, args.queries, args.warmup, args.embedder)
     printable = {kk: vv for kk, vv in result.items() if kk != "ranking"}
     print(json.dumps(printable, indent=2))
     if args.json:
