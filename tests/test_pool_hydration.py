@@ -179,3 +179,37 @@ def test_an_eagerly_constructed_record_still_validates_at_construction():
     assert all(type(x) is float for x in rec.embedding)
     with pytest.raises(ValueError):
         MemoryRecord.create(embedding=["not a number"], **kwargs)
+
+
+def test_health_stays_fail_soft_when_a_stored_vector_is_corrupt(tmp_path):
+    """`Memory.health()` promises "never a propagated exception" — and cli.py's
+    `_check_freshness` comment relies on that by name.
+
+    Deferral moved WHERE a corrupt cell raises: `newest()` no longer decodes, so
+    the ValueError now fires at the first `.embedding` read inside health's own
+    loop, outside the except-clause that used to absorb it. Unguarded, the
+    headline contract silently broke (RED before the guard: health() raised
+    ValueError instead of returning a report). A record whose vector cannot be
+    decoded is precisely what health exists to REPORT: not embedded, therefore
+    stale, therefore not ok, plus a note naming it.
+    """
+    dbp = str(tmp_path / "m.db")
+    m = Memory(path=dbp, embedder="stub")
+    m.remember("we chose Postgres over BigQuery for cost")
+    m.close()
+
+    con = sqlite3.connect(dbp)
+    rid = con.execute("SELECT id FROM verbatim_records LIMIT 1").fetchone()[0]
+    con.execute("UPDATE verbatim_records SET embedding=? WHERE id=?", ('"garbage"', rid))
+    con.commit()
+    con.close()
+
+    m2 = Memory(path=dbp, embedder="stub")
+    try:
+        report = m2.health()  # must NOT raise
+        assert report.ok is False, "a record with an unreadable vector is not healthy"
+        assert report.embedded == 0, "an undecodable vector does not count as embedded"
+        assert rid in report.stale_ids
+        assert any("unreadable stored vector" in n for n in report.notes), report.notes
+    finally:
+        m2.close()
