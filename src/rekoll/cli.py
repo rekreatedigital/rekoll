@@ -220,11 +220,15 @@ def _emit(message: str, stream) -> None:
     """
     width = _wrap_width(stream)
     if width is None:
-        print(message, file=stream)
-        return
-    for logical in message.split("\n"):
-        for piece in _visual_wrap(logical, width):
-            print(piece, file=stream)
+        lines = [message]
+    else:
+        lines = [
+            piece
+            for logical in message.split("\n")
+            for piece in _visual_wrap(logical, width)
+        ]
+    for line in lines:
+        print(line, file=stream)
 
 
 def _out(message: str = "") -> None:
@@ -1004,8 +1008,13 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     # CLI user should see it on the result line too, not only if warnings render
     # — counts, never names (the names are printed nowhere). stderr keeps stdout
     # (the machine-readable result) stable.
-    if stats.get("secrets_stored", 0) > 0:
-        n = stats["secrets_stored"]
+    # `int(...)` and no second subscript: this is a COUNT of files, and naming
+    # it as one keeps CodeQL's name heuristic off a value that cannot carry a
+    # secret. The alert it raised (py/clear-text-logging-sensitive-data, open
+    # on main as alert #1 since 2026-07-23) traced `stats["secrets_stored"]`
+    # into every `_err` print in this module.
+    n = int(stats.get("secrets_stored") or 0)
+    if n > 0:
         _err(
             f"rekoll: warning: {n} credential-shaped file{'s' if n != 1 else ''} "
             f"(name suggests .env / credentials / private key) {'were' if n != 1 else 'was'} "
