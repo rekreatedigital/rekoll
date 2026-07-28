@@ -69,7 +69,14 @@ def _fake_install(root: Path, version: str | None, *, editable: bool = False) ->
     scripts.mkdir(parents=True, exist_ok=True)
     (site / "rekoll").mkdir(parents=True, exist_ok=True)
     for filename in _SCRIPT_FILES:
-        (scripts / filename).write_text("stub", encoding="utf-8")
+        script = scripts / filename
+        script.write_text("stub", encoding="utf-8")
+        # POSIX decides what is an executable by the executable BIT, and the
+        # PATH scan now checks it (issue #112). Without this the fixture is
+        # invisible to the lookup on Linux and macOS -- the same vacuous-test
+        # failure the platform-correct filenames above already fixed once.
+        if os.name != "nt":
+            script.chmod(0o755)
     if editable:
         (site / "__editable__.rekoll-9.9.9.pth").write_text("/src", encoding="utf-8")
         (site / "rekoll-0.0.0.dist-info").mkdir(exist_ok=True)
@@ -702,3 +709,98 @@ def test_doctor_shows_the_mcp_line_end_to_end(project, capsys):
     out, _ = capsys.readouterr()
     assert "mcp" in out
     assert "WARN" in out
+
+
+# -- #112: a diagnostic must survive the machine it is diagnosing -------------
+
+def test_a_huge_version_py_does_not_take_doctor_down(tmp_path):
+    """`_version.py` belongs to ANOTHER install that merely sits on PATH, so it
+    is data. An unbounded read_text() let a huge one hang or exhaust the one
+    command someone runs when everything is already broken."""
+    from rekoll.cli import _VERSION_READ_LIMIT, _read_version_py
+
+    env = tmp_path / "big"
+    site = env / "Lib" / "site-packages" / "rekoll"
+    site.mkdir(parents=True)
+    version_py = site / "_version.py"
+    # The real line first, then far more than the cap of filler: a bounded read
+    # still finds the version, and never materializes the rest.
+    with version_py.open("w", encoding="utf-8") as handle:
+        handle.write('__version__ = "9.9.9"\n')
+        handle.write("# " + "x" * (_VERSION_READ_LIMIT * 3) + "\n")
+    assert _read_version_py(version_py) == "9.9.9"
+    assert version_py.stat().st_size > _VERSION_READ_LIMIT
+
+
+def test_an_unreadable_version_py_is_unknown_not_a_crash(tmp_path):
+    from rekoll.cli import _read_version_py
+
+    missing = tmp_path / "nope" / "_version.py"
+    assert _read_version_py(missing) is None
+
+
+def test_a_huge_mcp_config_is_reported_not_read(project):
+    """`.mcp.json` is a file a repo can COMMIT. Past the cap it is reported as
+    too large -- which is still a WARN the user can act on, not a hang."""
+    from rekoll.cli import _MCP_CONFIG_READ_LIMIT
+
+    (project / ".mcp.json").write_text(
+        "{" + " " * (_MCP_CONFIG_READ_LIMIT + 10), encoding="utf-8"
+    )
+    registrations, unreadable = _find_mcp_registrations()
+    assert registrations == []
+    assert unreadable and "too large" in unreadable[0]
+    level, detail = _check_mcp(_args())
+    assert level == "WARN"
+    assert "too large" in detail
+
+
+def test_a_config_at_the_cap_is_still_parsed(project):
+    """The boundary in the other direction: a config UNDER the cap is read
+    normally, so the bound never becomes a silent 'no MCP configured'."""
+    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    registrations, unreadable = _find_mcp_registrations()
+    assert unreadable == []
+    assert len(registrations) == 1
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX decides by the executable bit")
+def test_a_non_executable_file_named_rekoll_is_not_an_install(tmp_path, monkeypatch):
+    """The false-alarm guard, in exactly the check whose job is not crying
+    wolf: any writable PATH directory can hold a text file named `rekoll`, and
+    without the executable-bit test doctor reported it as a rekoll install that
+    disagrees with the running version."""
+    from rekoll.cli import _rekoll_executables_on_path
+
+    decoy = tmp_path / "decoy"
+    decoy.mkdir()
+    plain = decoy / "rekoll"
+    plain.write_text("not an executable", encoding="utf-8")
+    plain.chmod(0o644)
+    monkeypatch.setenv("PATH", str(decoy))
+    assert _rekoll_executables_on_path() == []
+    plain.chmod(0o755)  # ... and the same file IS found once it can run
+    assert _rekoll_executables_on_path() == [plain]
+
+
+def test_an_unbounded_path_is_not_walked_forever(tmp_path, monkeypatch):
+    """PATH is environment data, and the scan is bounded.
+
+    Proven by where the bound BITES rather than by a timing: a real install
+    parked past the cap is not found, and the identical install at the front of
+    the same PATH is -- so the test fails if the cap silently disappears AND if
+    it silently swallows an ordinary PATH.
+    """
+    from rekoll.cli import _MAX_PATH_ENTRIES, _rekoll_executables_on_path
+
+    scripts = _fake_install(tmp_path / "far", "0.1.3")
+    # Short, non-existent entries: Windows caps an environment variable at
+    # 32767 characters, so 512 absolute paths do not fit in a real PATH.
+    filler = [f"nope{i}" for i in range(_MAX_PATH_ENTRIES)]
+    monkeypatch.setenv("PATHEXT", ".EXE")
+
+    monkeypatch.setenv("PATH", os.pathsep.join([*filler, str(scripts)]))
+    assert _rekoll_executables_on_path() == [], "the PATH scan is not bounded"
+
+    monkeypatch.setenv("PATH", os.pathsep.join([str(scripts), *filler]))
+    assert _rekoll_executables_on_path(), "a normal long PATH must still work"

@@ -1922,6 +1922,11 @@ def _check_freshness(args: argparse.Namespace) -> Optional[tuple[str, str]]:
 #: that would win (or lose) a PATH lookup against the one now running.
 _CONSOLE_SCRIPTS = ("rekoll", "rekoll-mcp")
 
+#: Most PATH directories this walks. A long PATH is normal (200+ on a developer
+#: Windows box); an unbounded one is environment data, and a diagnostic should
+#: not stat its way through however much of it a caller supplies.
+_MAX_PATH_ENTRIES = 512
+
 
 def _install_root_of(exe: Path) -> Path:
     """The environment root that owns ``exe`` (``<env>/Scripts/rekoll.exe`` or
@@ -1999,9 +2004,26 @@ def _site_packages_for(exe: Path) -> list[Path]:
     return [p for p in out if p.is_dir()]
 
 
+#: Longest ``_version.py`` this reads. A real one is two lines; the file being
+#: read belongs to ANOTHER install that merely sits on PATH, so it is data.
+_VERSION_READ_LIMIT = 64 * 1024
+
+
 def _read_version_py(version_py: Path) -> Optional[str]:
-    """``__version__`` parsed out of a ``_version.py`` — text, never import."""
-    for line in version_py.read_text(encoding="utf-8", errors="replace").splitlines():
+    """``__version__`` parsed out of a ``_version.py`` — text, never import.
+
+    BOUNDED, like the shim read above it (``_SHIM_READ_LIMIT``): an unbounded
+    ``read_text()`` let a huge ``_version.py`` in any PATH directory take
+    ``doctor`` down — the one command someone runs when everything is already
+    broken. A diagnostic must survive the machine it is diagnosing (issue
+    #112).
+    """
+    try:
+        with version_py.open("r", encoding="utf-8", errors="replace") as handle:
+            body = handle.read(_VERSION_READ_LIMIT)
+    except OSError:
+        return None
+    for line in body.splitlines():
         stripped = line.strip()
         if stripped.startswith("__version__"):
             _, _, raw = stripped.partition("=")
@@ -2060,13 +2082,21 @@ def _rekoll_executables_on_path() -> list[Path]:
     Deliberately not ``shutil.which`` alone: which() answers "what would run",
     and the question here is "how many DIFFERENT answers exist", which is what
     made a stale copy shadow a fresh one silently.
+
+    Two bounds, both so this check does not cry wolf or hang (issue #112):
+    a POSIX candidate must actually be EXECUTABLE — a non-executable file named
+    ``rekoll`` is not a rekoll install, and reporting one is a false alarm in
+    exactly the check whose job is not crying wolf — and only the first
+    ``_MAX_PATH_ENTRIES`` PATH directories are scanned, because PATH is
+    environment data and a diagnostic must not walk an unbounded amount of it.
     """
     found: list[Path] = []
     seen: set[str] = set()
     exts = [""] if os.name != "nt" else os.environ.get(
         "PATHEXT", ".EXE"
     ).split(os.pathsep)
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
+    entries = os.environ.get("PATH", "").split(os.pathsep)[:_MAX_PATH_ENTRIES]
+    for entry in entries:
         if not entry.strip():
             continue
         try:
@@ -2076,6 +2106,12 @@ def _rekoll_executables_on_path() -> list[Path]:
                     candidate = directory / f"{stem}{ext.lower()}"
                     try:
                         if not candidate.is_file():
+                            continue
+                        # Windows decides by extension (PATHEXT, above); POSIX
+                        # decides by the executable bit, and without this a
+                        # plain text file named `rekoll` was reported as an
+                        # install that disagrees with the running version.
+                        if os.name != "nt" and not os.access(candidate, os.X_OK):
                             continue
                     except OSError:
                         continue
@@ -2305,6 +2341,10 @@ _MCP_ORIGIN_SAMPLE = 50
 #: arrived through the MCP door rather than the CLI or the SDK.
 _MCP_SOURCE_URI = "mcp"
 
+#: Largest MCP client config this will parse. A real one is a few hundred
+#: bytes; the file is repo-committed data, so the read is bounded.
+_MCP_CONFIG_READ_LIMIT = 1024 * 1024
+
 
 def _find_mcp_registrations() -> tuple[list[tuple[str, dict]], list[str]]:
     """``(registrations, unreadable)`` from project-local MCP client configs.
@@ -2328,7 +2368,18 @@ def _find_mcp_registrations() -> tuple[list[tuple[str, dict]], list[str]]:
         except OSError:
             continue
         try:
-            raw = path.read_bytes()
+            # BOUNDED (issue #112): this is a file a repo can COMMIT, so an
+            # enormous .mcp.json would otherwise take the diagnostic down
+            # instead of being reported. One byte over the cap is read so the
+            # difference between "at the cap" and "past it" is observable.
+            with path.open("rb") as handle:
+                raw = handle.read(_MCP_CONFIG_READ_LIMIT + 1)
+            if len(raw) > _MCP_CONFIG_READ_LIMIT:
+                unreadable.append(
+                    f"{name} is too large to check "
+                    f"(over {_MCP_CONFIG_READ_LIMIT // 1024} KB)"
+                )
+                continue
             # Windows PowerShell's `Out-File -Encoding utf8` and Notepad write a
             # UTF-8 BOM. The content is valid JSON and most clients strip it, so
             # reading it as utf-8 and declaring the file broken would be a false
