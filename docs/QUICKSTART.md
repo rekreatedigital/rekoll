@@ -323,6 +323,14 @@ looks it up on PATH, which works after `pipx install` or a global
 `pip install`, but *not* if you installed Rekoll into a project virtualenv.
 Then give the full path instead ([MCP.md](MCP.md#2-connect-your-agent)).
 
+**If `rekoll-mcp` exits immediately** — so your agent starts with no rekoll
+tools — run `rekoll doctor` and read the `mcp sdk` line. Rekoll needs
+`mcp>=1.3,<2`; the `mcp` SDK's 2.0 release moved the module the server is built
+on, and an install made before Rekoll declared that ceiling can be sitting on
+it. Fix it with `pip install "mcp>=1.3,<2"` (pipx users:
+`pipx inject rekoll "mcp>=1.3,<2"`). Fresh installs get a supported version
+automatically.
+
 The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
 `status`, `board`) over this project's store, with scope and trust pinned
 server-side.
