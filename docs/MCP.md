@@ -33,41 +33,77 @@ Add `.rekoll/` to your project's `.gitignore` — the memory store lives there.
 
 ## 2. Connect your agent
 
-**Claude Code — a file in your project** (works everywhere, nothing to install).
-Create `.mcp.json` in the project root:
+**The short version: run `rekoll init` and it writes the config for you.**
 
-```json
-{ "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+```bash
+rekoll init
 ```
 
-Claude Code picks that up automatically the next time it opens the project.
-Because it's a file in the repo, it's config-as-code: everyone who clones the
-project gets the same memory server — approve it once when Claude Code asks
-(a security check on project-supplied servers), and it just works.
+With the `mcp` extra installed, `init` creates `.mcp.json` in the project root
+with your project's scope **pinned** — the shape below, `command` picked to match
+how you installed Rekoll:
+
+```json
+{
+  "mcpServers": {
+    "rekoll": {
+      "command": "rekoll-mcp",
+      "args": ["--tenant", "default", "--project", "default", "--agent", "default"]
+    }
+  }
+}
+```
+
+Those three flags are the point, not decoration. Without them the server derives
+its project name from the launch **folder's name**, while the CLI and the SDK
+default to `project="default"` — so one repo quietly holds two memories that
+cannot see each other (ADR-0047). Pinning them makes all three doors read and
+write the same memory. They also make the scope **rename-proof**: a stored name
+survives a folder rename; a derived one does not.
+
+`init` never overwrites an existing `.mcp.json`, and it writes nothing when the
+store already holds memories under a different scope (pinning one there could
+hide them) — in both cases it prints the flags your config should pin and leaves
+the file to you. `rekoll init --no-mcp-config` skips it entirely. Re-running
+`init` is safe: it's idempotent.
+
+Claude Code picks `.mcp.json` up automatically the next time it opens the
+project. Because it's a file in the repo, it's config-as-code: everyone who
+clones the project gets the same memory server — approve it once when Claude
+Code asks (a security check on project-supplied servers), and it just works.
+
+**Writing it by hand** is fine too — copy the block above rather than an empty
+`"args": []`. If you installed Rekoll into a project virtualenv, see the box
+below for the `command` to use.
 
 **Claude Code — the `claude` CLI**, if you have it. Run this inside your project:
 
 ```bash
-claude mcp add rekoll -- rekoll-mcp
+claude mcp add rekoll -- rekoll-mcp --tenant default --project default --agent default
 ```
 
 Note that Claude Code running as the **VS Code extension** does not put `claude`
 on your PATH — if this fails with "command not found", use the `.mcp.json` file
 above rather than hunting for the CLI.
 
-**Cursor** — add to `.cursor/mcp.json` in your project (or the global one):
+**Cursor** — add to `.cursor/mcp.json` in your project (or the global one).
+`rekoll init` does not write this file (only its own editor knows its schema), so
+pin the same three flags by hand:
 
 ```json
 {
   "mcpServers": {
-    "rekoll": { "command": "rekoll-mcp" }
+    "rekoll": { "command": "rekoll-mcp",
+      "args": ["--tenant", "default", "--project", "default", "--agent", "default"] }
   }
 }
 ```
 
 **Any other MCP client** — configure a stdio server whose command is
-`rekoll-mcp` (no arguments needed). Launch it with your project directory as
-the working directory; that's how it knows which project's memory to open.
+`rekoll-mcp` with the three scope flags above. Launch it with your project
+directory as the working directory; that's how it finds `./.rekoll/memory.db`.
+(With no flags it still starts, but its project name comes from that directory's
+NAME — the split described above.)
 
 > **Whether a bare `rekoll-mcp` works depends on where you installed it.** Your
 > MCP client looks the command up on PATH, which is what `pipx install` and a
@@ -79,8 +115,12 @@ the working directory; that's how it knows which project's memory to open.
 >
 > ```json
 > { "mcpServers": { "rekoll": { "command": ".venv/Scripts/python.exe",
->   "args": ["-m", "rekoll.mcp_server"] } } }
+>   "args": ["-m", "rekoll.mcp_server",
+>            "--tenant", "default", "--project", "default", "--agent", "default"] } } }
 > ```
+>
+> This is the shape `rekoll init` writes when it finds a virtualenv inside the
+> project, so you rarely have to type it.
 >
 > (`.venv/bin/python` on macOS/Linux.) The console-script shim
 > — `.venv/Scripts/rekoll-mcp.exe` — **embeds the absolute path of the

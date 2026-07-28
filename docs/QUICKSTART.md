@@ -68,8 +68,10 @@ rekoll init
 ```
 
 `init` creates `./.rekoll/` (the memory store), adds it to your `.gitignore`,
-and tells you in plain language whether you're in semantic or keyword mode.
-It's safe to run twice.
+writes your AI agent's `.mcp.json` if you have the `mcp` extra (Door 3 below —
+with this project's scope pinned, so all three doors share one memory), and tells
+you in plain language whether you're in semantic or keyword mode. It's safe to
+run twice: it never overwrites a file you already have.
 
 Prefer a guided start? `rekoll init --wizard` adds a short optional interview
 (three questions, Enter skips any): how AI tools should explain things to you,
@@ -255,12 +257,16 @@ memory):
 1. the same `--path` to the same store file, and
 2. the same scope triple `--tenant` / `--project` / `--agent`.
 
-Watch the cross-door scope trap: the MCP server derives its project name from
-the launch folder's NAME, while the CLI and SDK default to
-`project="default"`. So a CLI session and an MCP session **in the same
-folder do NOT share a board by default** — same file, different scopes, no
-error (scope isolation working as designed). Pass the triple explicitly at
-every door:
+Watch the cross-door scope trap: with **no scope flags**, the MCP server derives
+its project name from the launch folder's NAME, while the CLI and SDK default to
+`project="default"`. So an MCP session and a CLI session **in the same folder do
+not share a board** — same file, different scopes, no error (scope isolation
+working as designed, on a scope nobody chose).
+
+Since v0.1.6 you mostly don't meet this: `rekoll init` writes `.mcp.json` with
+the triple **pinned**, so all three doors agree (ADR-0047). Pinned names are also
+rename-proof — a stored project name survives a folder rename, a derived one
+doesn't. Pass the triple explicitly at every door:
 
 ```bash
 rekoll board --path /team/mem.db --tenant default --project myapp --agent default   # CLI door
@@ -275,12 +281,16 @@ The same MCP scope in `.mcp.json` — the flags go in `args`:
            "--project", "myapp", "--agent", "default"] } } }
 ```
 
-Since v0.1.3 the trap is **loud** (ADR-0040): when the scope a command reads
-is empty but the same store holds memories under other scopes, `rekoll
-status`, bare `rekoll recall`, and `rekoll doctor` all say so — naming the
-other scopes and printing the exact command that reads the largest one.
-Nothing is moved, merged, or auto-switched; the note only informs (there is
-still no discovery, on purpose).
+And since v0.1.3 the trap is **loud** where it does still bite (ADR-0040): when
+the scope a command reads is empty but the same store holds memories under other
+scopes, `rekoll status`, bare `rekoll recall`, and `rekoll doctor` all say so —
+naming the other scopes and printing the exact command that reads the largest
+one. Nothing is moved, merged, or auto-switched; the note only informs.
+
+There is still **no discovery** — Rekoll reads no config file of its own, walks
+no directory tree, and auto-detects nothing. `.mcp.json` is your MCP *client's*
+config, which it already reads; `init` just fills it in correctly, and it carries
+scope **names** only, never a `--path` (ADR-0047 §3).
 
 One machine only: the shared medium is the SQLite file itself, and SQLite's
 locking is not reliable on network drives (NFS/SMB).
@@ -307,7 +317,10 @@ mem.forget(*best.ids())                         # delete by id
 ```
 
 Everything the CLI does goes through this same `Memory` class, and the defaults
-match — so `Memory()` sees exactly what `rekoll remember` stored. Constructor
+match — so `Memory()` sees exactly what `rekoll remember` stored. One thing the
+SDK door has no config file for: if you pinned a **non-default** project (e.g.
+`rekoll init --project myapp`), `Memory()` still opens `project="default"` and you
+must pass `project="myapp"` yourself. Nothing generates that for you. Constructor
 knobs you'll actually use: `path=` (where the SQLite file lives),
 `project=`/`tenant=`/`agent=` (separate memory spaces; pair with the CLI's
 `--project` etc. if you use both), `trust=`/`kind=` per call on `remember`, and
@@ -327,18 +340,32 @@ Windsurf, …) can use this project's memory, no Python code to write:
 pipx install "rekoll[embeddings,mcp]"    # or: pip install "rekoll[embeddings,mcp]"
 ```
 
-Then tell your agent about it. The portable way is a `.mcp.json` file in your
-project root — Claude Code picks it up automatically, and because it's a file
-in the repo, everyone who clones the project inherits the setup:
+Then tell your agent about it — and the easiest way is to let `rekoll init` do
+it. With the `mcp` extra installed it writes `.mcp.json` in your project root,
+with this project's scope pinned:
+
+```bash
+rekoll init          # writes .mcp.json (never over an existing one)
+```
 
 ```json
-{ "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
+{ "mcpServers": { "rekoll": { "command": "rekoll-mcp",
+  "args": ["--tenant", "default", "--project", "default", "--agent", "default"] } } }
 ```
+
+Claude Code picks that file up automatically, and because it's a file in the
+repo, everyone who clones the project inherits the setup. **Don't hand-write it
+with an empty `"args": []`** — those three flags are what stop the server from
+deriving a *different* project name from your folder's name and quietly keeping a
+second memory the CLI can't see (the scope trap above; ADR-0047). `init` picks
+`command` to match how you installed Rekoll, and `rekoll doctor` tells you if it
+can't start.
 
 If you have the `claude` CLI, this registers the same thing:
 
 ```bash
-claude mcp add rekoll -- rekoll-mcp   # other clients: see MCP.md
+claude mcp add rekoll -- rekoll-mcp --tenant default --project default --agent default
+# other clients: see MCP.md
 ```
 
 Prefer the file if you're unsure: Claude Code running as the **VS Code

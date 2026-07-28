@@ -346,8 +346,24 @@ def _args(**over):
 
 
 def test_no_registration_means_no_line(project):
-    """CLI-only users must never be nagged about a door they never opened."""
+    """CLI-only users must never be nagged about a door they never opened.
+
+    `--no-mcp-config` makes the premise explicit: since ADR-0047, plain `init`
+    on a machine that HAS the mcp extra installed writes a registration, so
+    "no registration" has to be arranged rather than assumed. What this test
+    asserts is unchanged - no registration, no line.
+    """
+    assert main(["init", "--no-mcp-config"]) == 0
+    assert _check_mcp(_args()) is None
+
+
+def test_init_without_the_mcp_extra_still_means_no_line(project, monkeypatch):
+    """The same promise on the machine that actually motivates it: ADR-0041 §2
+    says a CLI-only user is not nagged about MCP, so `init` must not hand one a
+    registration it will then report on. Plain init, no flags, no line."""
+    monkeypatch.setattr("rekoll.cli._mcp_sdk_state", lambda: (False, None))
     assert main(["init"]) == 0
+    assert not (project / ".mcp.json").exists()
     assert _check_mcp(_args()) is None
 
 
