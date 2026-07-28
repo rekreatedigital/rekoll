@@ -119,7 +119,7 @@ def test_a_stale_shadowing_install_is_a_WARN(tmp_path, monkeypatch):
     level, detail = _check_install()
     assert level == "WARN"
     assert "0.1.1" in detail and "0.1.3" in detail
-    assert str(stale / "rekoll.exe") in detail
+    assert str(stale / _SCRIPT_FILES[0]) in detail  # platform-correct filename
     assert "uninstall" in detail.lower()  # tells you how to fix it
 
 
