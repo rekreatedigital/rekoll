@@ -12,8 +12,12 @@ Design rules for this module:
  - Results go to stdout; errors, warnings, and hints go to stderr.
  - Exit codes: 0 success, 1 operational failure (including "no results", like
    grep), 2 usage error (argparse). Suitable for scripting.
- - Rekoll's own messages are ASCII-only; stored content is echoed as-is, with
-   ``errors="replace"`` guarding consoles that can't render it (cp1252 etc.).
+ - Rekoll's own messages are ASCII-only. Stored content is echoed as-is EXCEPT
+   for characters that would drive the terminal rather than appear in it —
+   control codes and bidi overrides are dropped on the human render path
+   (``_display_content``, ADR-0044). Every printable character survives,
+   non-ASCII included, with ``errors="replace"`` guarding consoles that can't
+   render it (cp1252 etc.).
  - Read-style commands (recall/forget/status) never create a store as a side
    effect; only ``init``, ``remember`` and ``ingest`` do.
 """
@@ -900,9 +904,12 @@ def _source_pointer(record) -> str:
     prov = record.provenance
     if prov.source_file is None:
         return ""
+    # STORED data on a human line (ADR-0044): a forged store can put escapes or
+    # a newline in a source path just as easily as in content.
+    where = _display_value(prov.source_file, limit=200)
     if prov.chunk_index is None:
-        return f" | from: {prov.source_file}"
-    return f" | from: {prov.source_file}#{prov.chunk_index}"
+        return f" | from: {where}"
+    return f" | from: {where}#{prov.chunk_index}"
 
 
 # --- the relevance footer on the human recall list (issue #73) ---------------
@@ -1137,18 +1144,39 @@ def cmd_recall(args: argparse.Namespace) -> int:
         _out(result.context())
         return 0
     if args.ids:
+        # ONE id per line is this mode's whole contract — `recall --ids | xargs
+        # rekoll forget` is the documented pipeline. A stored id is
+        # attacker-controlled, and an id carrying a newline split into two
+        # tokens, the second of which could be ANOTHER record's real id: the
+        # pipeline then deleted a memory the query never matched. Verified data
+        # loss. `_display_value` collapses the newline, so a forged id renders
+        # as one visibly-malformed token that matches nothing (ADR-0044).
+        malformed = 0
         for rid in result.ids():
-            _out(rid)
+            safe = _display_value(rid, limit=200)
+            malformed += safe != rid
+            _out(safe)
+        if malformed:
+            _err(
+                f"warning: {malformed} id(s) here are malformed and were made "
+                "printable - a well-formed id never contains a newline or a "
+                "control character, so this store may have been edited outside "
+                "rekoll (ADR-0019). They will not match 'rekoll forget'."
+            )
         return 0
     for rank, hit in enumerate(result, 1):
         record = hit.record
-        first, *rest = record.content.splitlines() or [""]
+        first, *rest = _display_content(record.content).splitlines() or [""]
         _out(f"[{rank}] {first}")
         for line in rest:
             _out(f"    {line}")
+        # The id and the source pointer are STORED strings too. Sanitizing only
+        # `content` left the very same attack alive one line below the line it
+        # fixed — and a newline in an id forged a byte-perfect extra "[3] ..."
+        # hit, which no character filter can catch: it needs the newline gone.
         _out(
             f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} "
-            f"| id: {record.id}{_source_pointer(record)})"
+            f"| id: {_display_value(record.id, limit=200)}{_source_pointer(record)})"
         )
     # On stderr, like every other thing this CLI says ABOUT a result (this
     # module's rule: results to stdout, messages to stderr) -- the two other
@@ -1225,6 +1253,61 @@ def _hint_safe_part(part: str) -> bool:
 #: single hostile row turned a bare ``status`` into megabytes of terminal
 #: output (and a megabyte-long "copy-paste" command).
 _MAX_DISPLAY_PART = 64
+
+
+#: Bidirectional-override characters. They are not control codes and survive a
+#: Cc filter, but they reorder how a line RENDERS — the "Trojan Source" class —
+#: so a stored memory could display words in an order its bytes do not have.
+#: ZWJ/ZWNJ are deliberately NOT here: they are load-bearing in legitimate text
+#: (emoji sequences, Indic and Arabic shaping), and stripping them would
+#: corrupt real content to defend against nothing.
+#: Spelled as escapes on purpose: these are invisible, so a literal here would
+#: be unreviewable and unmaintainable.
+_BIDI_CONTROLS = frozenset(
+    "‪‫‬‭‮"  # LRE RLE PDF LRO RLO
+    "⁦⁧⁨⁩"        # LRI RLI FSI PDI
+    "‎‏"                    # LRM RLM
+    "؜"                            # ALM - the fourth implicit mark, easily missed
+)
+
+
+def _display_content(text: str) -> str:
+    """STORED content, made safe to print on a terminal (issue #98, ADR-0044).
+
+    A store is a file a repo can commit, and a store forged directly never
+    passed the ingest-time firewall — content-hash verification (ADR-0019) does
+    not help either, because whoever forges the row computes the hash. Rendered
+    verbatim, such a row could emit ESC sequences that clear the screen and
+    paint text that looks like Rekoll's own output.
+
+    Deliberately the SMALLEST edit that closes that:
+
+    * C0/C1 control characters go, except ``\\t`` and ``\\n`` (the renderer
+      splits on newlines, and tabs are ordinary content);
+    * bidi overrides go (:data:`_BIDI_CONTROLS`);
+    * **everything else is untouched** — every printable non-ASCII character,
+      emoji and their ZWJ joiners, accents, CJK, RTL script itself. This is not
+      ``sanitize_unicode``: that NFKC-normalizes, which would silently rewrite
+      legitimate stored text (``ﬁ`` → ``fi``) on its way to the screen, and a
+      viewer must show what is stored.
+
+    Applies to the HUMAN hit list only. ``--json`` already escapes control
+    characters via ``json.dumps``, ``--context`` renders through the envelope
+    (byte-identical by ADR-0013, and already neutralized), the board renders
+    through ``_neutralize_delimiters``, and ``--ids`` prints no content — all
+    verified, none changed.
+    """
+    out = []
+    for ch in text:
+        if ch in "\t\n":
+            out.append(ch)
+        elif ch in _BIDI_CONTROLS:
+            continue
+        elif ch < " " or "\x7f" <= ch <= "":
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _display_scope_key(key: str) -> str:
@@ -1427,9 +1510,13 @@ def _board_entry_lines(entry: dict) -> None:
     if text is None:
         text = "(text withheld below the trust floor)"
     _out(f"  {prefix}{text}")
+    # `text` is neutralized by the payload builder; the id and timestamp are
+    # NOT — they are stored strings, and a forged one carried escapes (and,
+    # with a newline, a whole fabricated board entry) straight to the terminal.
     _out(
         f"      ({entry.get('kind')} | trust: {entry.get('trust')} | "
-        f"id: {entry.get('id')} | {entry.get('created_at') or 'no timestamp'})"
+        f"id: {_display_value(entry.get('id'), limit=200)} | "
+        f"{_display_value(entry.get('created_at') or 'no timestamp', limit=64)})"
     )
 
 
