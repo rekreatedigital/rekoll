@@ -17,6 +17,22 @@ pipx install "rekoll[embeddings,mcp]"   # doors 1 & 3 (CLI, MCP) — recommended
 pip install "rekoll[embeddings]"        # door 2 (Python SDK) — into your project's venv
 ```
 
+**Don't have `pipx`?** It needs nothing but Python:
+
+```bash
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+On macOS, `brew install pipx` does the same job. The `python -m` spelling is
+deliberate: `ensurepath` is the step that puts pipx on your PATH, so `pipx`
+isn't a command you can type yet when you run it.
+
+**Then open a new terminal.** A shell reads PATH once, when it starts — so
+right after an install, the new command isn't on the PATH of the shell you
+installed from. `rekoll` comes back *"not recognized"* even though the install
+worked perfectly. It's not a failure; open a new terminal and it's there.
+
 [pipx](https://pipx.pypa.io) gives Rekoll its own private environment, so
 installing it can't upgrade a package the rest of your machine depends on —
 worth it for a tool you mostly call as a command. The trade-off is that a pipx
@@ -302,7 +318,18 @@ extension** has no `claude` on your PATH, so the command above would fail with
 "command not found". One caveat for `"command": "rekoll-mcp"` — your MCP client
 looks it up on PATH, which works after `pipx install` or a global
 `pip install`, but *not* if you installed Rekoll into a project virtualenv.
-Then give the full path instead ([MCP.md](MCP.md#2-connect-your-agent)).
+Then point the config at that virtualenv's own Python and let it run the server
+as a module:
+
+```json
+{ "mcpServers": { "rekoll": { "command": "C:\\path\\to\\project\\.venv\\Scripts\\python.exe",
+  "args": ["-m", "rekoll.mcp_server"] } } }
+```
+
+Use the full path (`/path/to/project/.venv/bin/python` on macOS and Linux).
+Prefer this to the venv's `rekoll-mcp` shim, which bakes an absolute path
+*inside the executable* and breaks for good if you ever rename the project
+folder — details in [MCP.md](MCP.md#2-connect-your-agent).
 
 The agent gets six tools (`remember`, `recall`, `ingest_path`, `forget`,
 `status`, `board`) over this project's store, with scope and trust pinned

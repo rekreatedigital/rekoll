@@ -20,6 +20,12 @@ installing it can't upgrade a shared package underneath another project. Add
 `[embeddings]` too — `pipx install "rekoll[embeddings,mcp]"` — if you want real
 semantic recall rather than keyword matching.
 
+**Don't have `pipx`?** `python -m pip install --user pipx`, then `python -m pipx
+ensurepath` (on macOS, `brew install pipx` does the same job). **Then open a new
+terminal** — a shell reads PATH when it starts, so a command installed a moment
+ago isn't found in the shell you installed it from, however well the install
+went. See [QUICKSTART.md](QUICKSTART.md) for the longer version.
+
 Add `.rekoll/` to your project's `.gitignore` — the memory store lives there.
 
 > A `npx rekoll-mcp` wrapper (no Python needed at all) is planned — see
@@ -67,9 +73,32 @@ the working directory; that's how it knows which project's memory to open.
 > MCP client looks the command up on PATH, which is what `pipx install` and a
 > global `pip install` give you. A **project virtualenv** does not: unless that
 > venv happens to be active when the client launches, `rekoll-mcp` won't be
-> found. Then use the full path (e.g. `.venv/bin/rekoll-mcp` or
-> `.venv\Scripts\rekoll-mcp.exe`), or `python -m rekoll.mcp_server` with that
-> venv's Python. This applies to every setup above, `.mcp.json` included.
+> found. This applies to every setup above, `.mcp.json` included.
+>
+> **For a project virtualenv, point the config at that venv's own Python and
+> run the server as a module** — this is the setup to reach for, not a fallback:
+>
+> ```json
+> { "mcpServers": { "rekoll": { "command": "/path/to/project/.venv/bin/python",
+>   "args": ["-m", "rekoll.mcp_server"] } } }
+> ```
+>
+> On Windows the command is `C:\\path\\to\\project\\.venv\\Scripts\\python.exe`
+> — doubled backslashes, because JSON reads a single `\` as an escape.
+>
+> The venv's `rekoll-mcp` shim (`.venv/bin/rekoll-mcp`,
+> `.venv\Scripts\rekoll-mcp.exe`) works too, until it doesn't: that shim has the
+> **absolute path of its venv's Python baked inside the executable itself**.
+> Rename or move the project folder and it dies — silently, exiting non-zero
+> with no message — and fixing the path in `.mcp.json` does *not* repair it,
+> because the stale path is in the binary; you have to reinstall. Running the
+> module has nothing baked in: the same rename costs you one edited path in the
+> config. (This took out every session in a real project for a day — issue #82.)
+>
+> Give the **full** path rather than a relative one. Your client launches the
+> server *with* the project directory as its working directory, but that governs
+> where the server looks for `./.rekoll/memory.db` — it does not reliably decide
+> where the operating system looks up the command itself.
 
 ## 3. What the agent can do
 
