@@ -1,6 +1,6 @@
 # ADR-0042 — The team consistency model: you don't sync the memory, you sync the source
 
-**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0006 (content-addressed ids, amended by ADR-0026), ADR-0037 (memory + index: files are truth), ADR-0035 (board — §6's no-discovery posture and one-file sharing), ADR-0003 (scope granularity) · **Interacts with:** ADR-0005 (storage adapter contract), ADR-0023 (trust-aware upsert), ADR-0024 (embedder-identity mismatch), ADR-0017/0034 (directive vouch + standing channel), ADR-0033 (warn-don't-restrict), ADR-0043 (the writer) · **Blocked-on for full effect:** issue #83 (doors default to different scopes; ADR-0041 reserved) · **Evidence:** issues #75, #82, #87, #101
+**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0006 (content-addressed ids, amended by ADR-0026), ADR-0037 (memory + index: files are truth), ADR-0035 (board — §6's no-discovery posture and one-file sharing), ADR-0003 (scope granularity) · **Interacts with:** ADR-0005 (storage adapter contract), ADR-0023 (trust-aware upsert), ADR-0024 (embedder-identity mismatch), ADR-0017/0034 (directive vouch + standing channel), ADR-0033 (warn-don't-restrict), ADR-0041 (`doctor` reports only what it verified — governs the three `doctor` checks proposed in §4.3/D1/D3), ADR-0043 (the writer) · **Blocked-on for full effect:** issue #83 (doors default to different scopes — its own lane, ADR number not yet assigned; ADR-0041 went to the `doctor` lane) · **Evidence:** issues #75, #82, #87, #101
 
 ## Context
 
@@ -329,7 +329,7 @@ because git is the transport.
   teammate named their clone folder differently. §1's convergence held only
   because the CLI's `project` default is the path-independent `"default"`.
 
-  **This ADR does not solve #83** (ADR-0041 is reserved for it) but it sharpens
+  **This ADR does not solve #83** (it has its own lane) but it sharpens
   the requirement handed to that lane: a folder-derived scope default makes record
   ids *machine-dependent*, which defeats the derived-index model outright. Whatever
   #83 picks must give teammates a scope triple that is a function of the
@@ -401,7 +401,7 @@ so this is a handoff, not an edit:
   cost of an explicit per-operator adopt step — a cost this ADR pays visibly, with
   a warning, rather than hiding.
 - Issue #83 is re-scoped from "annoying default" to "precondition for cross-machine
-  correctness", with a concrete requirement for ADR-0041's lane.
+  correctness", with a concrete requirement for whichever lane takes it.
 - ADR-0043's writer stops being a documentation nicety and becomes the transport
   for the decisions tier. Neither ADR stands alone.
 
