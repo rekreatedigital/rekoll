@@ -1949,12 +1949,22 @@ def _check_install() -> tuple[str, str]:
     # "all versions agree" would be a claim this check has not earned when the
     # only other copies were unreadable.
     readable = sum(1 for _exe, ver, editable in probed if ver and not editable)
-    unverified = len(probed) - readable
-    if unverified:
+    editables = sum(1 for _exe, _ver, editable in probed if editable)
+    unknown = len(probed) - readable - editables
+    if editables or unknown:
+        # Editable and unknown are DIFFERENT facts: one was identified and is
+        # legitimately version-less, the other could not be determined at all.
+        # Collapsing them would understate what was verified and overstate what
+        # was not.
+        parts = [f"{readable} match this version"] if readable else []
+        if editables:
+            parts.append(f"{editables} editable checkout(s)")
+        if unknown:
+            parts.append(f"{unknown} could not be read")
         return (
             "ok",
             f"{identity} (PATH has {len(probed)} rekoll command(s); "
-            f"{readable} match this version, {unverified} could not be read)",
+            f"{', '.join(parts)})",
         )
     return (
         "ok",
