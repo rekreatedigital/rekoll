@@ -96,6 +96,34 @@ window survives only as a **degraded fallback** for adapters that cannot serve
 it, and in that case the sentence weakens itself to "none of the 50 most
 recent" instead of "ever". Both wordings are pinned by tests.
 
+### 4. What the check asks about must be what the user actually runs
+
+Two blockers found by adversarially reviewing this ADR's own branch, both of
+which made doctor cry wolf on a correct setup — the mirror image of the
+disease, and just as corrosive, because a warning users learn to ignore is
+worse than no warning:
+
+- **The running environment was derived by guessing directory layouts** and
+  landed one level short on both Windows and POSIX, so *every* ordinary
+  `pip`/`pipx` install compared an environment against itself and warned that
+  "a different install answers". It now asks the interpreter (`sys.prefix`)
+  instead of pattern-matching paths.
+- **The MCP check queried the CLI's scope**, not the server's. Those defaults
+  differ — that is issue #83's entire subject — so with the *documented*
+  `.mcp.json` (which pins no `--project`), doctor announced that nothing had
+  ever come through the MCP door seconds after a successful MCP write, and
+  sent the user off to restart a working client. It now derives the store path
+  and scope the registered server would actually use, reusing
+  `mcp_server._derived_project` so there is one definition of that rule, and
+  it names the scope in the message.
+
+Two more false alarms went with them: a pinned `--path` that does not exist
+yet is **not** a failure (the server creates its store on first write, like
+`rekoll init`, so every fresh clone would have been told its server "cannot
+start"), and client-side variable syntax such as VS Code's
+`${workspaceFolder}` cannot be resolved by us, so it is reported as
+unverified rather than broken.
+
 ## Alternatives rejected
 
 - **Executing other `rekoll` binaries to read their version.** Precise, and an

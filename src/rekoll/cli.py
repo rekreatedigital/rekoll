@@ -1759,10 +1759,26 @@ def _check_freshness(args: argparse.Namespace) -> Optional[tuple[str, str]]:
 _CONSOLE_SCRIPTS = ("rekoll", "rekoll-mcp")
 
 
+def _install_root_of(exe: Path) -> Path:
+    """The environment root that owns ``exe`` (``<env>/Scripts/rekoll.exe`` or
+    ``<env>/bin/rekoll``), following symlinks first.
+
+    Resolving matters for pipx on POSIX, where ``~/.local/bin/rekoll`` is a
+    symlink into the pipx venv. Without it, the shim gets attributed to
+    ``~/.local/lib/pythonX/site-packages`` — a completely different
+    installation — and doctor would report a version that executable does not
+    run, then prescribe a fix that touches the wrong files.
+    """
+    try:
+        resolved = exe.resolve()
+    except OSError:
+        resolved = exe
+    return resolved.parent.parent
+
+
 def _site_packages_for(exe: Path) -> list[Path]:
-    """Candidate ``site-packages`` directories for the environment that owns
-    ``exe`` (``<env>/Scripts/rekoll.exe`` or ``<env>/bin/rekoll``)."""
-    env_root = exe.parent.parent
+    """Candidate ``site-packages`` directories for the environment owning ``exe``."""
+    env_root = _install_root_of(exe)
     out = [env_root / "Lib" / "site-packages"]
     out.extend(sorted(env_root.glob("lib/python3*/site-packages")))
     return [p for p in out if p.is_dir()]
@@ -1805,10 +1821,12 @@ def _version_of_install(exe: Path) -> tuple[Optional[str], bool]:
             version_py = site_packages / "rekoll" / "_version.py"
             if version_py.is_file():
                 return (_read_version_py(version_py), False)
-            editable = bool(
-                list(site_packages.glob("__editable__*rekoll*"))
-                or list(site_packages.glob("*rekoll*.pth"))
-            )
+            # ``__editable__*`` is the marker pip/setuptools actually writes.
+            # A looser ``*rekoll*.pth`` glob would let an unrelated file (say
+            # ``django-rekollector.pth``) mark a genuinely stale install as
+            # editable and thereby EXCLUDE it from the mismatch check — a false
+            # all-clear, which is the failure this ADR exists to prevent.
+            editable = bool(list(site_packages.glob("__editable__*rekoll*")))
             dist_infos = sorted(site_packages.glob("rekoll-*.dist-info"))
             if editable:
                 return (None, True)
@@ -1856,18 +1874,21 @@ def _rekoll_executables_on_path() -> list[Path]:
 
 
 def _running_install_root() -> Optional[Path]:
-    """The environment root of the rekoll that is executing RIGHT NOW, or
-    ``None`` when it cannot be determined (e.g. a source checkout on
-    PYTHONPATH, where there is no ``<env>/Scripts`` to compare against)."""
+    """The environment root of the rekoll that is executing RIGHT NOW.
+
+    ``sys.prefix`` is the interpreter's own answer to this question, and it is
+    correct for venvs, pipx venvs, conda and system installs alike. An earlier
+    version derived it by walking up from ``__file__`` and guessing at
+    ``Lib``/``lib/python3.X`` layouts — it landed one directory short on BOTH
+    layouts, which made the "a different install answers" branch fire for
+    *every* ordinary installation, comparing an environment against itself.
+    Path-shape guessing had no business here when the interpreter can simply
+    be asked.
+    """
     try:
-        pkg = Path(__file__).resolve().parent          # .../site-packages/rekoll
-        if pkg.parent.name == "site-packages":
-            # <env>/Lib/site-packages/rekoll  or  <env>/lib/python3.X/site-packages/rekoll
-            root = pkg.parent.parent
-            return root.parent if root.name.startswith("python3") else root
+        return Path(sys.prefix).resolve()
     except Exception:
         return None
-    return None
 
 
 def _check_install() -> tuple[str, str]:
@@ -1894,7 +1915,18 @@ def _check_install() -> tuple[str, str]:
         return ("ok", f"{identity} (running as a module; no 'rekoll' command on PATH)")
 
     running_root = _running_install_root()
-    probed = [(exe, *_version_of_install(exe)) for exe in others]
+    # One INSTALL, not one executable per install: every environment ships both
+    # `rekoll` and `rekoll-mcp`, so counting executables reported a single
+    # checkout as two rekolls and let the bounded offender list truncate two
+    # environments into "3 named and 1 more".
+    probed: list[tuple[Path, Optional[str], bool]] = []
+    seen_roots: set[str] = set()
+    for exe in others:
+        root_key = str(_install_root_of(exe)).lower()
+        if root_key in seen_roots:
+            continue
+        seen_roots.add(root_key)
+        probed.append((exe, *_version_of_install(exe)))
 
     # Only copies whose version we actually READ can disagree. Unknown and
     # editable are never counted as agreement OR disagreement — the whole point
@@ -1928,11 +1960,16 @@ def _check_install() -> tuple[str, str]:
         listed = ", ".join(_describe(*row) for row in offenders[:3])
         if len(offenders) > 3:
             listed += f", and {len(offenders) - 3} more"
+        # Name the command that is actually shadowed. Saying "typing 'rekoll'"
+        # when only `rekoll-mcp` is stale points at the wrong command and stays
+        # silent about the one an MCP client will actually launch.
+        shadowed = sorted({exe.stem.lower() for exe, _v, _e in offenders})
+        which = " or ".join(f"'{name}'" for name in shadowed) or "'rekoll'"
         return (
             "WARN",
             f"this is rekoll {identity}, but PATH also has {listed} - versions "
-            f"disagree ({', '.join(mismatched)} vs {running_version}). Typing "
-            "'rekoll' may run the OTHER one, so a fix you installed may not be "
+            f"disagree ({', '.join(mismatched)} vs {running_version}). Running "
+            f"{which} may use the OTHER one, so a fix you installed may not be "
             "the code you are testing; uninstall the stale copy "
             "(pip uninstall rekoll) or fix PATH order, then re-run doctor",
         )
@@ -1940,10 +1977,9 @@ def _check_install() -> tuple[str, str]:
         ver, editable = _version_of_install(first_rekoll)
         return (
             "WARN",
-            f"this is rekoll {identity}, but the 'rekoll' command on PATH is "
+            f"this is rekoll {identity}, but 'rekoll' on PATH is "
             f"{_describe(first_rekoll, ver, editable)} - a different install "
-            "answers when you type 'rekoll'; make sure you are testing the copy "
-            "you think you are",
+            "answers; check you are testing the copy you think you are",
         )
     # Nothing contradicts the running copy. Say exactly how much was verified —
     # "all versions agree" would be a claim this check has not earned when the
@@ -2070,7 +2106,14 @@ def _find_mcp_registrations() -> tuple[list[tuple[str, dict]], list[str]]:
         except OSError:
             continue
         try:
-            data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+            raw = path.read_bytes()
+            # Windows PowerShell's `Out-File -Encoding utf8` and Notepad write a
+            # UTF-8 BOM. The content is valid JSON and most clients strip it, so
+            # reading it as utf-8 and declaring the file broken would be a false
+            # alarm on this project's primary platform. Same decode rule the
+            # .gitignore reader already uses in this module.
+            encoding = "utf-8-sig" if raw.startswith(codecs.BOM_UTF8) else "utf-8"
+            data = json.loads(raw.decode(encoding, errors="replace"))
         except json.JSONDecodeError as exc:
             unreadable.append(f"{name} is not valid JSON ({exc.msg} at line {exc.lineno})")
             continue
@@ -2104,6 +2147,12 @@ def _mcp_entry_command_resolves(entry: dict) -> tuple[bool, str]:
     command = str(entry.get("command", "")).strip()
     if not command:
         return (False, "no command")
+    if "${" in command or "%" in command:
+        # Client-side variable syntax (VS Code documents ${workspaceFolder};
+        # shells use ${VAR}, Windows %VAR%). Only the CLIENT can expand it, so
+        # a literal filesystem check would assert a failure doctor cannot
+        # actually observe. Unverifiable is reported as unverified.
+        return (True, f"{command} (expanded by your client; not checked here)")
     candidate = Path(command).expanduser()
     try:
         if candidate.is_file():
@@ -2119,47 +2168,99 @@ def _mcp_entry_command_resolves(entry: dict) -> tuple[bool, str]:
         return (False, f"could not check {command}: {exc}")
 
 
-def _mcp_entry_store_path(entry: dict) -> Optional[str]:
-    """The ``--path`` this registration pins, if it pins one."""
+def _mcp_entry_flag(entry: dict, flag: str) -> Optional[str]:
+    """The value a registration pins for ``flag``, in either argparse spelling
+    (``--path x`` and ``--path=x`` are both valid and both appear in the wild)."""
     args_list = entry.get("args")
     if not isinstance(args_list, list):
         return None
     for i, value in enumerate(args_list):
-        if str(value) == "--path" and i + 1 < len(args_list):
+        text = str(value)
+        if text == flag and i + 1 < len(args_list):
             return str(args_list[i + 1])
+        if text.startswith(f"{flag}="):
+            return text[len(flag) + 1:]
     return None
 
 
-def _mcp_origin_seen(args: argparse.Namespace) -> tuple[Optional[bool], bool]:
-    """``(seen, exact)`` — has anything in this scope arrived through the MCP
-    door? ``seen`` is ``None`` when the question cannot be answered at all.
+def _mcp_entry_store_path(entry: dict) -> Optional[str]:
+    """The ``--path`` this registration pins, if it pins one."""
+    return _mcp_entry_flag(entry, "--path")
+
+
+def _mcp_server_target(entry: dict) -> tuple[str, "object"]:
+    """``(path, scope)`` the registered server would ACTUALLY use.
+
+    Mirrors ``mcp_server.load_config`` rather than reusing the CLI's own
+    ``--path``/scope: the two doors have different defaults, and asking the
+    wrong one is how doctor came to announce "nothing has EVER been written
+    through the MCP door" seconds after a successful MCP write. The project
+    default in particular is the LAUNCH FOLDER'S NAME, not ``"default"`` —
+    which is issue #83's whole subject, so the check that reports on the MCP
+    door must not fall into the very trap the tool warns about.
+
+    ``_derived_project`` is imported from ``mcp_server`` on purpose: one
+    definition of that rule, not a copy that can drift. That module is safe to
+    import without the ``mcp`` extra (it defers the ``mcp`` import so
+    ``rekoll-mcp --help`` works), which a test pins.
+    """
+    from .mcp_server import _derived_project
+    from .model import Scope
+
+    path = _mcp_entry_store_path(entry) or "./.rekoll/memory.db"
+    project = _mcp_entry_flag(entry, "--project") or _derived_project(Path.cwd())
+    tenant = _mcp_entry_flag(entry, "--tenant") or "default"
+    agent = _mcp_entry_flag(entry, "--agent") or "default"
+    try:
+        scope = Scope(tenant=tenant, project=project, agent=agent)
+    except ValueError:
+        scope = Scope()
+    return (path, scope)
+
+
+def _mcp_origin_seen(entry: dict) -> tuple[Optional[bool], bool]:
+    """``(seen, exact)`` — has anything ever arrived through the door THIS
+    registration describes? ``seen`` is ``None`` when the question cannot be
+    answered, and ``None`` is never rendered as "no".
 
     This is the ONLY signal that separates "MCP is configured and working" from
     "MCP is configured and has never once loaded" — the 12-hour silent failure
     in field report #82. Config checks cannot see it: that reporter's config
     was correct; the client had simply never started the server.
 
-    Answered EXACTLY where possible (``adapter.count_by_source``, ADR-0041).
-    An earlier draft inferred it from a recency window, which was measurably
-    wrong: a scope whose MCP writes were followed by 60 CLI writes reported
-    "may never have loaded" about a door that demonstrably had. A check built
-    to stop a diagnostic from claiming what it had not verified must not do
-    exactly that itself. The window survives only as a DEGRADED fallback for
-    adapters that cannot serve the targeted count, and ``exact=False`` then
-    tells the caller to weaken its wording to "not recently".
+    Two lessons are baked in, both learned by attacking this check:
+
+    * It asks about the store and scope the REGISTERED SERVER would use
+      (:func:`_mcp_server_target`), not the CLI's own ``--path``/scope. Those
+      defaults differ (issue #83), so querying the CLI's scope made doctor
+      announce "nothing has EVER been written through the MCP door" seconds
+      after a successful MCP write — the tool falling into the exact trap it
+      exists to warn about.
+    * A scope with NO records at all proves nothing, so a brand-new project is
+      answered ``None`` rather than accused. Only a store that holds records
+      somewhere while the MCP door has none is evidence of anything.
+
+    Answered EXACTLY via ``adapter.count_by_source`` (ADR-0041); the recency
+    window survives only as a degraded fallback, and ``exact=False`` tells the
+    caller to weaken its wording from "ever" to "not recently".
     """
-    if not _store_exists(args.path) or args.path == ":memory:":
+    path, scope = _mcp_server_target(entry)
+    if not _store_exists(path) or path == ":memory:":
         return (None, False)
-    if _is_rekoll_store(args.path) is False:
+    if _is_rekoll_store(path) is False:
         return (None, False)
     from .adapters.base import UnsupportedCapabilityError
     from .adapters.registry import get_adapter
-    from .model import Scope
 
-    scope = Scope(tenant=args.tenant, project=args.project, agent=args.agent)
     try:
-        adapter = get_adapter("sqlite", path=args.path)
+        adapter = get_adapter("sqlite", path=path)
         try:
+            # "Nothing anywhere" is a new store, not a broken door.
+            try:
+                if not any(adapter.scope_counts().values()):
+                    return (None, False)
+            except Exception:
+                pass
             try:
                 return (
                     adapter.count_by_source(
@@ -2221,12 +2322,12 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
         ok, detail = _mcp_entry_command_resolves(entry)
         if not ok:
             problems.append(f"{name}: command {detail}")
-            continue
-        pinned = _mcp_entry_store_path(entry)
-        if pinned:
-            pinned_path = Path(pinned).expanduser()
-            if not pinned_path.exists():
-                problems.append(f"{name}: --path {pinned} does not exist")
+        # A pinned --path that does not exist yet is NOT a failure: the server
+        # creates its store on first write, exactly as `rekoll init` does, so
+        # every fresh clone and CI checkout would otherwise be told its server
+        # "cannot start" — while doctor's own 'store' line two rows above says
+        # the store is created on first write. Only the COMMAND decides whether
+        # a server can start.
     if problems:
         return (
             "WARN",
@@ -2236,15 +2337,20 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
             "'python -m rekoll.mcp_server' command)",
         )
 
-    seen, exact = _mcp_origin_seen(args)
+    # Ask about the FIRST registration's own target (path + derived scope).
+    seen, exact = _mcp_origin_seen(registrations[0][1])
     if seen is False:
-        # Two different facts, two different sentences. Claiming "never" from a
-        # recency window is the exact over-claim this check exists to prevent.
+        # Name the scope the claim is ABOUT. "Nothing has ever been written"
+        # is only true of a specific store and scope, and the MCP door's scope
+        # is usually not the CLI's (issue #83) — an unqualified sentence here
+        # reads as a verdict on the whole store.
+        _target_path, target_scope = _mcp_server_target(registrations[0][1])
+        where = f"the scope it writes to ({target_scope.key()})"
         evidence = (
-            "nothing in this scope has EVER been written through the MCP door"
+            f"nothing has EVER been written through the MCP door in {where}"
             if exact
             else f"none of the {_MCP_ORIGIN_SAMPLE} most recent memories in "
-                 "this scope came through the MCP door"
+                 f"{where} came through the MCP door"
         )
         return (
             "WARN",

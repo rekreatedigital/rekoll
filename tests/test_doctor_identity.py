@@ -97,13 +97,55 @@ def test_a_stale_shadowing_install_is_a_WARN(tmp_path, monkeypatch):
     assert "uninstall" in detail.lower()  # tells you how to fix it
 
 
+def _running_from(monkeypatch, env_root: Path) -> None:
+    """Pretend the rekoll now executing lives in ``env_root``.
+
+    Without this, a synthetic install on PATH is genuinely foreign to the
+    interpreter running the tests, and doctor is RIGHT to say so — the tests
+    below are about the other branches.
+    """
+    monkeypatch.setattr("rekoll.cli._running_install_root", lambda: env_root.resolve())
+
+
 def test_matching_versions_do_not_warn(tmp_path, monkeypatch):
-    same = _fake_install(tmp_path / "same", "0.1.3")
+    env = tmp_path / "same"
+    same = _fake_install(env, "0.1.3")
     monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
     _only_on_path(monkeypatch, same)
+    _running_from(monkeypatch, env)
     level, detail = _check_install()
     assert level == "ok"
     assert "0.1.3" in detail
+
+
+def test_an_ordinary_single_install_never_warns_about_itself(tmp_path, monkeypatch):
+    """REGRESSION (BLOCKER, found in review): the running-environment root was
+    derived by guessing at directory layouts and landed one level short, so
+    EVERY ordinary pip/pipx install compared an environment against itself and
+    warned that "a different install answers". That fires on the install path
+    the README recommends first — a permanent, unclearable false alarm, which
+    is the same disease as a false all-clear."""
+    env = tmp_path / "envA"
+    scripts = _fake_install(env, "0.1.3")
+    monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
+    _only_on_path(monkeypatch, scripts)
+    _running_from(monkeypatch, env)
+    level, detail = _check_install()
+    assert level == "ok", f"false alarm on a plain single install: {detail}"
+
+
+def test_a_genuinely_foreign_command_on_path_still_warns(tmp_path, monkeypatch):
+    """The true positive the branch above must not smother: same version, but
+    the `rekoll` PATH resolves to a DIFFERENT environment than the running one."""
+    mine = tmp_path / "mine"
+    _fake_install(mine, "0.1.3")
+    theirs = _fake_install(tmp_path / "theirs", "0.1.3")
+    monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
+    _only_on_path(monkeypatch, theirs)
+    _running_from(monkeypatch, mine)
+    level, detail = _check_install()
+    assert level == "WARN"
+    assert "different install" in detail
 
 
 def test_an_editable_checkout_is_never_a_false_alarm(tmp_path, monkeypatch):
@@ -111,9 +153,11 @@ def test_an_editable_checkout_is_never_a_false_alarm(tmp_path, monkeypatch):
     goes stale the moment the source is bumped (a real checkout reads 0.0.0
     against a 0.1.3 source). Alarming on that would cry wolf at every
     developer, every run."""
-    editable = _fake_install(tmp_path / "dev", None, editable=True)
+    env = tmp_path / "dev"
+    editable = _fake_install(env, None, editable=True)
     monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
     _only_on_path(monkeypatch, editable)
+    _running_from(monkeypatch, env)
     level, detail = _check_install()
     assert level == "ok"
     assert "0.0.0" not in detail  # the stale metadata is never quoted as truth
@@ -122,13 +166,29 @@ def test_an_editable_checkout_is_never_a_false_alarm(tmp_path, monkeypatch):
 def test_unreadable_copies_are_not_claimed_to_agree(tmp_path, monkeypatch):
     """The honesty rule this whole ADR exists for: when doctor could not read
     another copy's version, it must not imply it verified one."""
-    unknown = _fake_install(tmp_path / "mystery", None)
+    env = tmp_path / "mystery"
+    unknown = _fake_install(env, None)
     monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
     _only_on_path(monkeypatch, unknown)
+    _running_from(monkeypatch, env)
     level, detail = _check_install()
     assert level == "ok"
     assert "could not be read" in detail
     assert "all 0.1.3" not in detail
+
+
+def test_one_install_is_not_counted_as_two(tmp_path, monkeypatch):
+    """Every environment ships both `rekoll` and `rekoll-mcp`, so counting
+    executables reported a single install as two rekolls — and let the bounded
+    offender list truncate two environments into "3 named and 1 more"."""
+    env = tmp_path / "solo"
+    scripts = _fake_install(env, "0.1.3")
+    assert len(list(scripts.glob("*.exe"))) == 2  # the premise
+    monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
+    _only_on_path(monkeypatch, scripts)
+    _running_from(monkeypatch, env)
+    _level, detail = _check_install()
+    assert "1 rekoll command(s)" in detail
 
 
 def test_no_rekoll_on_path_says_so(tmp_path, monkeypatch):
@@ -235,7 +295,12 @@ def test_dead_command_is_a_WARN(project):
     assert "python -m rekoll.mcp_server" in detail  # the rename-proof fix
 
 
-def test_dead_store_path_is_a_WARN(project):
+def test_a_not_yet_created_store_path_is_not_called_broken(project):
+    """A pinned --path that doesn't exist yet is NOT a failure: the server
+    creates its store on first write, exactly as `rekoll init` does. Calling it
+    fatal would tell every fresh clone and CI checkout that its server "cannot
+    start" — while doctor's own 'store' line says the store is created on
+    first write."""
     _write_mcp(
         project,
         {
@@ -248,9 +313,42 @@ def test_dead_store_path_is_a_WARN(project):
         },
     )
     result = _check_mcp(_args())
-    assert result is not None
-    assert result[0] == "WARN"
-    assert "--path" in result[1]
+    assert result is None or result[0] == "ok", f"false alarm: {result}"
+
+
+def test_client_variable_syntax_is_not_called_broken(project):
+    """``${workspaceFolder}`` is documented VS Code MCP config syntax. Only the
+    client can expand it, so a literal filesystem check would assert a failure
+    doctor cannot observe."""
+    _write_mcp(
+        project,
+        {"servers": {"rekoll": {"command": "${workspaceFolder}/.venv/bin/python",
+                                "args": ["-m", "rekoll.mcp_server"]}}},
+        name=".vscode/mcp.json",
+    )
+    result = _check_mcp(_args())
+    assert result is None or result[0] == "ok", f"false alarm: {result}"
+
+
+def test_a_utf8_bom_config_is_not_called_invalid(project):
+    """PowerShell's `Out-File -Encoding utf8` and Notepad write a BOM on this
+    project's primary platform; the JSON is valid and clients strip it."""
+    body = json.dumps({"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    (project / ".mcp.json").write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+    registrations, unreadable = _find_mcp_registrations()
+    assert unreadable == []
+    assert len(registrations) == 1
+
+
+def test_both_flag_spellings_are_understood(project):
+    """``--path x`` and ``--path=x`` are both valid argparse and both appear in
+    real configs; only reading one silently skipped the other's checks."""
+    from rekoll.cli import _mcp_entry_flag
+
+    assert _mcp_entry_flag({"args": ["--path", "a.db"]}, "--path") == "a.db"
+    assert _mcp_entry_flag({"args": ["--path=b.db"]}, "--path") == "b.db"
+    assert _mcp_entry_flag({"args": ["--project=myapp"]}, "--project") == "myapp"
+    assert _mcp_entry_flag({"args": []}, "--path") is None
 
 
 def test_malformed_config_is_a_WARN(project):
@@ -279,16 +377,21 @@ def test_registered_but_nothing_ever_arrived_is_a_WARN(project):
 
 def test_an_mcp_origin_write_clears_the_warning(project):
     """Proof the signal tracks reality: one write through the MCP door and the
-    warning must go away."""
+    warning must go away. The write lands in the scope the SERVER uses, which
+    is what doctor must ask about."""
     from rekoll import Memory
 
     assert main(["init"]) == 0
-    mem = Memory(path=DB)
+    mem = Memory(path=DB, project="pinned")
     try:
         mem.remember("written through the MCP door", source="mcp")
     finally:
         mem.close()
-    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    _write_mcp(
+        project,
+        {"mcpServers": {"rekoll": {"command": "python",
+                                   "args": ["--project", "pinned"]}}},
+    )
     result = _check_mcp(_args())
     assert result is not None
     level, detail = result
@@ -296,43 +399,62 @@ def test_an_mcp_origin_write_clears_the_warning(project):
     assert "via MCP" in detail
 
 
-def test_an_old_mcp_write_is_not_reported_as_never_loaded(project):
-    """REGRESSION (found by attacking this PR's own first draft): inferring
-    "never loaded" from a recency window is a lie when the MCP door wrote
-    earlier and CLI writes pushed it out of the sample. A check built to stop
-    doctor claiming what it has not verified must not do exactly that."""
+def test_the_derived_project_scope_is_the_one_asked_about(project):
+    """REGRESSION (BLOCKER, found in review): with the *documented* config —
+    which pins no --project — the server writes to a project derived from the
+    launch FOLDER's name, while the CLI defaults to 'default'. Asking the
+    CLI's scope made doctor announce that nothing had EVER come through the
+    MCP door seconds after a successful MCP write, and told the user to go
+    restart a client that was working. Unclearable by correct usage, and the
+    tool falling into the very scope trap it warns about (#83)."""
     from rekoll import Memory
+    from rekoll.mcp_server import _derived_project
 
     assert main(["init"]) == 0
-    mem = Memory(path=DB)
+    assert main(["remember", "a CLI memory in the default scope"]) == 0
+    derived = _derived_project(project)
+    mem = Memory(path=DB, project=derived)  # what the real server would use
     try:
-        mem.remember("the MCP server DID write here, on day one", source="mcp")
-        for i in range(60):  # more than the recency window
-            mem.remember(f"later CLI memory {i}")
+        mem.remember("a memory written by the agent through the MCP door", source="mcp")
     finally:
         mem.close()
     _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
     result = _check_mcp(_args())
     assert result is not None
-    assert result[0] == "ok", f"false alarm: {result[1]}"
+    assert result[0] == "ok", f"false alarm about a working door: {result[1]}"
 
 
-def test_a_truly_unused_mcp_door_says_EVER_not_recently(project):
+def test_a_brand_new_store_is_not_accused(project):
+    """REGRESSION (found in review): a correct setup with nothing stored yet
+    got 'nothing has EVER been written through the MCP door' on its very first
+    doctor run. An empty store is a new project, not a broken door."""
+    assert main(["init"]) == 0
+    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    result = _check_mcp(_args())
+    assert result is None or result[0] == "ok", f"accused a brand-new store: {result}"
+
+
+def test_a_truly_unused_mcp_door_says_EVER_and_names_the_scope(project):
     from rekoll import Memory
 
     assert main(["init"]) == 0
-    mem = Memory(path=DB)
+    mem = Memory(path=DB, project="pinned")
     try:
         for i in range(3):
-            mem.remember(f"cli memory {i}")
+            mem.remember(f"cli memory {i}")  # source defaults to "user"
     finally:
         mem.close()
-    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    _write_mcp(
+        project,
+        {"mcpServers": {"rekoll": {"command": "python",
+                                   "args": ["--project", "pinned"]}}},
+    )
     result = _check_mcp(_args())
     assert result is not None
     level, detail = result
     assert level == "WARN"
-    assert "EVER" in detail  # the exact claim, earned by an exact count
+    assert "EVER" in detail            # the exact claim, earned by an exact count
+    assert "default/pinned/default" in detail  # and scoped to what was checked
 
 
 def test_an_adapter_without_the_targeted_count_weakens_its_wording(project, monkeypatch):
@@ -343,12 +465,16 @@ def test_an_adapter_without_the_targeted_count_weakens_its_wording(project, monk
     from rekoll import Memory
 
     assert main(["init"]) == 0
-    mem = Memory(path=DB)
+    mem = Memory(path=DB, project="pinned")  # the scope the config below pins
     try:
         mem.remember("a cli memory")
     finally:
         mem.close()
-    _write_mcp(project, {"mcpServers": {"rekoll": {"command": "python", "args": []}}})
+    _write_mcp(
+        project,
+        {"mcpServers": {"rekoll": {"command": "python",
+                                   "args": ["--project", "pinned"]}}},
+    )
 
     def _unsupported(self, *, scope, source_uri):
         raise UnsupportedCapabilityError("this backend cannot target provenance")
