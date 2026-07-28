@@ -58,16 +58,29 @@ def project(tmp_path, monkeypatch):
 
 # -- #104: install identity ---------------------------------------------------
 
+#: What a console script is CALLED on the platform running these tests. PATH
+#: lookup differs: Windows resolves `rekoll` through PATHEXT to `rekoll.exe`,
+#: POSIX wants an extensionless file with the executable bit set. A fixture
+#: that plants only one of them tests nothing on the other OS.
+_EXE = ".exe" if os.name == "nt" else ""
+
+
 def _fake_install(root: Path, version, *, editable: bool = False) -> Path:
     """A directory laid out like a real environment holding rekoll, returning
-    its scripts dir. Windows layout, because that is what the incident ran on;
-    ``test_a_posix_layout_is_understood`` covers the other one."""
+    its scripts dir.
+
+    The Windows ``Scripts`` + ``Lib/site-packages`` layout is used everywhere
+    (it is what the #104 incident ran on, and it is just directories, so the
+    probe finds it on any OS); only the console-script NAMES follow the host.
+    ``test_a_posix_layout_is_understood`` covers the ``bin`` + ``lib/python3.X``
+    layout separately.
+    """
     scripts = root / "Scripts"
     site = root / "Lib" / "site-packages"
     scripts.mkdir(parents=True, exist_ok=True)
     site.mkdir(parents=True, exist_ok=True)
     for stem in ("rekoll", "rekoll-mcp"):
-        exe = scripts / f"{stem}.exe"
+        exe = scripts / f"{stem}{_EXE}"
         exe.write_bytes(b"not a real launcher")
         exe.chmod(0o755)
     if editable:
@@ -101,7 +114,7 @@ def test_a_stale_shadowing_install_is_a_WARN(tmp_path, monkeypatch):
     level, detail = _check_install()
     assert level == "WARN"
     assert "0.1.1" in detail and "0.1.3" in detail   # BOTH versions named
-    assert str(stale / "rekoll.exe") in detail       # and the offending path
+    assert str(stale / f"rekoll{_EXE}") in detail    # and the offending path
     assert "uninstall" in detail.lower()             # and how to fix it
 
 
