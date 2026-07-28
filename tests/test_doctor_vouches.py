@@ -206,6 +206,34 @@ def test_a_pipx_style_shim_is_read_through_its_shebang(tmp_path):
     assert _version_of_install(shim) == ("0.1.1", False)
 
 
+def test_a_posix_script_shim_is_read_through_its_shebang(tmp_path):
+    """The POSIX half of the pipx case: a text console script whose '#!' names
+    an interpreter in a venv somewhere else entirely."""
+    venv = tmp_path / "venvs" / "rekoll"
+    (venv / "bin").mkdir(parents=True)
+    site = venv / "lib" / "python3.11" / "site-packages" / "rekoll"
+    site.mkdir(parents=True)
+    (site / "_version.py").write_text('__version__ = "0.1.1"\n', encoding="utf-8")
+    interpreter = venv / "bin" / "python"
+    interpreter.write_bytes(b"pretend interpreter")
+
+    shim = tmp_path / "bin" / "rekoll"
+    shim.parent.mkdir(parents=True)
+    shim.write_text(f"#!{interpreter}\nimport rekoll.cli\n", encoding="utf-8")
+    shim.chmod(0o755)
+    assert _version_of_install(shim) == ("0.1.1", False)
+
+
+def test_one_stale_environment_is_named_once_not_per_console_script(tmp_path, monkeypatch):
+    """A stale install ships BOTH `rekoll` and `rekoll-mcp`; listing the same
+    directory twice buries the finding in its own output."""
+    stale = _fake_install(tmp_path / "stale", "0.1.1")
+    monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
+    _only_on_path(monkeypatch, stale)
+    _level, detail = _check_install()
+    assert detail.count(str(stale)) == 1
+
+
 def test_the_install_check_never_executes_another_binary(tmp_path, monkeypatch):
     """Asking a stranger's binary for its version by RUNNING it is the obvious
     implementation and a remote-code-execution footgun: anything named 'rekoll'

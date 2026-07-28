@@ -2038,7 +2038,7 @@ def _check_install() -> tuple[str, str]:
     axis - any inspection error degrades to the plain identity line.
     """
     running = _display_value(__version__, limit=_MAX_DISPLAY_VERSION)
-    identity = f"{running} at {_display_value(Path(__file__).resolve().parent, limit=_MAX_DISPLAY_PATH)}"
+    identity = f"{running} at {_display_one_line(Path(__file__).resolve().parent)}"
     try:
         others = _rekoll_commands_on_path()
     except Exception:
@@ -2053,9 +2053,18 @@ def _check_install() -> tuple[str, str]:
     offenders = [row for row in probed if row[1] is not None and row[1] != __version__]
 
     if offenders:
-        listed = ", ".join(_describe_copy(*row) for row in offenders[:3])
-        if len(offenders) > 3:
-            listed += f", and {len(offenders) - 3} more"
+        # One line per ENVIRONMENT, not per console script: `rekoll.exe` and
+        # `rekoll-mcp.exe` in the same Scripts dir are one stale install, and
+        # naming it twice buries the finding in its own output.
+        shown_copies, seen_dirs = [], set()
+        for row in offenders:
+            key = (str(row[0].parent).lower(), row[1])
+            if key not in seen_dirs:
+                seen_dirs.add(key)
+                shown_copies.append(row)
+        listed = ", ".join(_describe_copy(*row) for row in shown_copies[:3])
+        if len(shown_copies) > 3:
+            listed += f", and {len(shown_copies) - 3} more"
         return (
             "WARN",
             f"this is rekoll {identity}, but PATH also has {listed} - typing "

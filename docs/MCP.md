@@ -275,12 +275,35 @@ claude mcp add rekoll -- rekoll-mcp --redact-pii
 
 ## 6. Troubleshooting
 
+**Start with `rekoll doctor`.** Run it in the project folder that holds your
+`.mcp.json`. It reads your client config (it never launches what the config
+points at) and prints an `mcp` line saying which config registers Rekoll and
+whether the command and pinned `--path` actually exist. No config, no line.
+
 - **"The Rekoll MCP server needs the optional 'mcp' extra"** — install it:
   `pip install "rekoll[mcp]"`.
+- **Your agent has no Rekoll tools, and nothing said why** — the commonest
+  cause is that the client never loaded the server: most need a restart or an
+  approval prompt after `.mcp.json` is added or changed. `doctor` cannot see
+  inside your client, so it says so rather than pretending — ask the agent to
+  list its tools. If instead `doctor` prints a `WARN mcp` line, the config
+  itself is broken: a command that does not exist, a `--path` whose folder is
+  gone, or a `.mcp.json` that is not valid JSON (a stray comma means the client
+  starts *no* server at all, silently).
+- **It worked until you renamed or moved the folder** — a console-script shim
+  such as `.venv/Scripts/rekoll-mcp.exe` embeds absolute paths, so renaming the
+  repo kills it with no error anywhere. `doctor`'s `mcp` line now catches this.
+  A `python -m rekoll.mcp_server` command survives a rename; prefer it.
 - **`rekoll-mcp` not found** — it's installed into the Python environment you
   ran pip in; activate that environment, or point your client at the full path.
   `pipx install "rekoll[mcp]"` avoids the problem by putting the command on your
   PATH regardless of which environment is active.
+- **You fixed a bug but the old behaviour is still there** — you may be running
+  a different copy of Rekoll than the one you installed. An older `rekoll` /
+  `rekoll-mcp` earlier on PATH shadows a newer one silently, and it has already
+  cost one tester two bug reports against fixes that had shipped. `doctor`'s
+  `rekoll` line now names the copy it is speaking for and warns when another
+  copy on PATH reports a different version, with both paths and both versions.
 - **`claude: command not found`** when running `claude mcp add` — you're on
   Claude Code's VS Code extension, which ships no CLI. Use the `.mcp.json` file
   in §2 instead; it needs no `claude` command.
