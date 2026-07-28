@@ -1,7 +1,10 @@
 # Rekoll
 
-**Injection-hardened, storage-agnostic, private memory for AI agents.**
-Give your agent durable memory of a whole codebase + database — that it can't be tricked into trusting, and that never leaves your infrastructure.
+**Your project's decisions, remembered — so you stop re-explaining them.**
+Rekoll keeps the *why* behind your code — the choices, the rules, the traps you
+already hit once — and makes it searchable by any AI tool, on your machine.
+Injection-hardened, storage-agnostic, private: it can't be tricked into trusting
+a poisoned file, and nothing leaves your infrastructure.
 
 [![CI](https://github.com/rekreatedigital/rekoll/actions/workflows/ci.yml/badge.svg)](https://github.com/rekreatedigital/rekoll/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -22,6 +25,33 @@ Give your agent durable memory of a whole codebase + database — that it can't 
 > [docs/DESIGN.md](docs/DESIGN.md). On PyPI since v0.1.0: `pip install rekoll`.
 
 ---
+
+## What to put in it
+
+The thing worth storing is the **why**:
+
+```text
+"we chose Postgres over BigQuery for cost"
+"the uninstaller must never wildcard-delete the app folder"
+"the model host moved — old URLs redirect, don't trust a cached link"
+```
+
+None of that is in your code. It lives in one person's head and in a chat window
+that closed — so every new session re-asks it, re-derives it, or quietly gets it
+wrong. That is the gap Rekoll is for, and it's why `rekoll remember` is the
+command that earns its keep.
+
+Code is the opposite: your AI already reads files and greps them, and grep is
+faster and exact. Rekoll *can* index your source as well — `rekoll ingest .` —
+and that is genuinely useful, because it gives a recalled memory a **file
+pointer**: the answer says *where to look*, not just what someone once said.
+Treat it as the extra, not the point. A code index competes with tools that are
+already excellent; a decision index competes with nothing.
+
+The evidence, from a real 12-hour multi-agent session: a store that ended the day
+at 2,734 memories held 2,727 code chunks and 7 hand-written decisions — and the 7
+were where all the recalled value was
+([#82](https://github.com/rekreatedigital/rekoll/issues/82)).
 
 ## What makes Rekoll different
 
@@ -81,19 +111,29 @@ Please set up Rekoll — a private, local memory layer for AI agents
    pipx install "rekoll[embeddings,mcp]"
    (no pipx? create a virtualenv for this project first, then use pip)
 2. From the repo root, run:  rekoll init
-   then index the project:   rekoll ingest .
-3. If you support MCP, connect yourself to it. The portable way is a
+3. Seed it with what this project has already decided. Skim any ADRs, design
+   notes or READMEs for statements that explain a CHOICE or a RULE rather than
+   describing the code, and save each one:
+      rekoll remember "<the decision, and why>"
+   A handful of the ones that still matter is plenty — don't try to be complete.
+4. Optional, and only ever from the repo root:  rekoll ingest .
+   That indexes the repo's files so a recalled memory can point back at the file
+   it came from. (Run it from the root, not a subfolder — the path a memory is
+   stored under is relative to wherever you ingested from.)
+5. If you support MCP, connect yourself to it. The portable way is a
    .mcp.json file in the repo root — create it if it isn't there:
    { "mcpServers": { "rekoll": { "command": "rekoll-mcp", "args": [] } } }
    (If you have the claude CLI, this does the same:
       claude mcp add rekoll -- rekoll-mcp
     other tools: https://github.com/rekreatedigital/rekoll/blob/main/docs/MCP.md)
-4. Run rekoll status and rekoll doctor, and show me both outputs.
+6. Run rekoll status and rekoll doctor, and show me both outputs.
 
 From now on in this repo: check memory before starting work (recall, and the
-board tool to see what other sessions did), and save important decisions with
-remember. Everything stays on this machine; searches are free and never call
-an LLM.
+board tool to see what other sessions did). And whenever we DECIDE something —
+why we picked this over that, a rule we must not break, a trap we just hit —
+save it with remember, in your own words, right then. That is the part nothing
+else can recover later; for the code itself, you can grep faster than you can
+recall. Everything stays on this machine; searches are free and never call an LLM.
 ```
 
 **60 seconds, any project** — website, mobile app, agent repo; no Python code needed:
@@ -101,9 +141,9 @@ an LLM.
 ```bash
 cd your-project
 rekoll init          # one-time setup: creates ./.rekoll/ and the (empty) store, git-ignores it, tells you your search mode
-rekoll remember "we chose Postgres over BigQuery for cost"
+rekoll remember "we chose Postgres over BigQuery for cost"   # the part that pays
 rekoll recall "why postgres?"
-rekoll ingest .      # optional: index this whole repo (code + docs)
+rekoll ingest .      # optional extra: index this repo's files, so hits can point at one
 rekoll status        # what's stored here
 ```
 

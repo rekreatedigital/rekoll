@@ -5,6 +5,12 @@ Windsurf, OpenClaw, your own — can use it as project memory in **any repo**,
 with no Python code to write. The agent gets six plain tools; everything runs
 locally; nothing needs an API key.
 
+What the agent should put in there is the **why** — decisions, standing rules,
+the traps a session just discovered. An agent can already open and grep the
+files; what it cannot recover on its own is the reasoning that never got written
+down. §3's `ingest_path` covers the other half: giving those answers a file to
+point at.
+
 ## 1. Install
 
 ```bash
@@ -90,9 +96,9 @@ the working directory; that's how it knows which project's memory to open.
 
 | Tool | What it does |
 | --- | --- |
-| `remember` | Save one memory (a fact, decision, or event). Screened by the injection firewall first. |
+| `remember` | Save one memory — above all a **decision or rule** (why this was chosen, what must not happen), which is what a later session cannot get any other way. Screened by the injection firewall first. |
 | `recall` | Search memory (semantic + keyword, local, no LLM). Returns `context` (a safe block to read as data), `directives` (the project's standing rules — see below), `ids` (record ids in rank order), `sources` (which file each hit came from — see below), `count`, `mode` (see below), plus the abstain envelope `abstained` and `top_vector_score` (see below). Takes an optional `min_score`. |
-| `ingest_path` | Index a file or folder (code + docs) — only inside the project root. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names), plus `secrets_skipped` (credential-shaped files the walk excluded) and `secrets_stored` (credential-shaped files ingested anyway — see below). Counts only, never names. |
+| `ingest_path` | Bulk-index a file or folder so recalled memories can point back at a source — only inside the project root. Best aimed at prose that explains decisions (ADRs, design docs, runbooks); a whole source tree works but mostly duplicates what reading and grepping files already does. Returns `files`, `chunks`, `total`, plus `skipped` (tried and passed over) and `filtered` (names excluded unread: vendored venvs, lockfiles, credential-shaped names), plus `secrets_skipped` (credential-shaped files the walk excluded) and `secrets_stored` (credential-shaped files ingested anyway — see below). Counts only, never names. |
 | `forget` | Delete memories by id (up to 256 per call). |
 | `status` | Show the store location, scope, recallable memory count, write-trust policy, embedder, and `mode`. (Quarantined-for-audit rows are never counted or otherwise surfaced here.) |
 | `board` | Read the shared live project board — what concurrent sessions did, decided, and left open. Takes **zero arguments** (see below). Returns `rules`, `majors`, `recent`, `pending_open`, `latest`. |
