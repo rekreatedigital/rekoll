@@ -11,6 +11,71 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 Nothing yet.
 
+## [0.1.6] - 2026-07-29
+
+### Changed
+
+- **Rekoll now says what it is for: your project's decisions (#87).** A real
+  12-hour, ~20-PR agent session stored 2,734 memories — 2,727 were code chunks
+  and 7 were hand-written decisions, and the 7 carried all the recalled value.
+  Agents already grep code faster than they can semantically recall it; what has
+  no competitor is the *why* that never reaches source. So the README, Quickstart
+  and MCP docs now lead with capturing decisions, and whole-repo `ingest` is
+  presented as the opt-in extra it always was — **nothing is deprecated and no
+  default changed.** `ingest`'s real job is named instead: it bulk-indexes the
+  prose that explains decisions, and it is what lets a recalled memory point back
+  at the file it came from. The paste-to-your-AI block in the README changed the
+  most: saving a decision is now its own step, `ingest .` is explicitly optional
+  with the ingest-from-the-repo-root rule attached (ADR-0042 §2 — a record's id
+  derives from its path relative to the ingest root, so the root is normative for
+  teams), and the standing instruction asks an agent to save a decision at the
+  moment it is made.
+
+### Security
+
+- **Rekoll now owns its own wrap point on a terminal (#115, ADR-0046).** ADR-0044
+  closed the *escape* half of the output-forgery class and v0.1.5 closed the
+  *padding* half for single-line fields, but a soft-wrapped line always begins at
+  column 0 — so until Rekoll put something of its own there, attacker-suppliable
+  text could. Human output is now split to the terminal's width and every visual
+  line after the first begins with a `|` marker at column 0. An attacker who
+  types the marker into their own content gains nothing: theirs lands after the
+  one Rekoll already emitted.
+  **The width is measured in display columns, not characters** — the distinction
+  is the fix, not a detail. `_display_content` deliberately preserves tabs and
+  every printable non-ASCII character, so a character-counting wrap (including
+  `textwrap`) is defeated by 38 CJK characters or 10 tabs, both of which produce
+  a "short" line that the terminal renders as two; `textwrap` additionally
+  rewrites stored content through its `expand_tabs`/`replace_whitespace`
+  defaults. Both payloads are pinned by test, and the wrap is lossless — it
+  reflows, it never truncates.
+  This covers **both streams and every human surface**: recall hits and their
+  detail line, `status`, `doctor`, the board, the scope-split note, the relevance
+  footer, `remember`'s id line, and `init --wizard`'s echo of a stored rule —
+  which was the one stored-content render ADR-0044 never reached, and now goes
+  through the same filters as everything else.
+  A stored newline is treated as the continuation it is, which closes two further
+  ADR-0044 residuals: a line-leading `[2]` inside content, and U+2028/U+2029.
+  **Scoped honestly: a redirected or piped stream is not wrapped**, by decision.
+  Wrapping it would corrupt `recall --context` and break every script that
+  consumes Rekoll's output, so `rekoll recall > out.txt; cat out.txt` still
+  soft-wraps at display time and the original reproduction still succeeds there.
+  ADR-0046 records that and the other residuals rather than claiming the class is
+  shut. `--json`, `--context`, `--ids` and every MCP payload are byte-unchanged
+  and never wrap, verified byte-for-byte against the published 0.1.5 wheel.
+- ADR-0044 has been amended where it had become an **under**-claim, and the
+  `cli.py` module rule and the `_display_content` / `_display_one_line`
+  docstrings now describe what the code actually does. ADR-0044's recorded
+  process failure was shipping a claim wider than its fix; leaving stale
+  narrower ones behind would be the same failure with the sign flipped.
+
+### Fixed
+
+- `rekoll doctor` no longer trips CodeQL's clear-text-logging heuristic on a
+  count of files containing secrets — it is a count, and it is now named and
+  typed as one, so a value that cannot carry a secret stops being traced as if
+  it could.
+
 ## [0.1.5] - 2026-07-29
 
 ### Fixed
@@ -387,7 +452,8 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/rekreatedigital/rekoll/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/rekreatedigital/rekoll/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...v0.1.3
