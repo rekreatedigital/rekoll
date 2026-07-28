@@ -12,8 +12,12 @@ Design rules for this module:
  - Results go to stdout; errors, warnings, and hints go to stderr.
  - Exit codes: 0 success, 1 operational failure (including "no results", like
    grep), 2 usage error (argparse). Suitable for scripting.
- - Rekoll's own messages are ASCII-only; stored content is echoed as-is, with
-   ``errors="replace"`` guarding consoles that can't render it (cp1252 etc.).
+ - Rekoll's own messages are ASCII-only. Stored content is echoed as-is EXCEPT
+   for characters that would drive the terminal rather than appear in it —
+   control codes and bidi overrides are dropped on the human render path
+   (``_display_content``, ADR-0044). Every printable character survives,
+   non-ASCII included, with ``errors="replace"`` guarding consoles that can't
+   render it (cp1252 etc.).
  - Read-style commands (recall/forget/status) never create a store as a side
    effect; only ``init``, ``remember`` and ``ingest`` do.
 """
@@ -1142,7 +1146,7 @@ def cmd_recall(args: argparse.Namespace) -> int:
         return 0
     for rank, hit in enumerate(result, 1):
         record = hit.record
-        first, *rest = record.content.splitlines() or [""]
+        first, *rest = _display_content(record.content).splitlines() or [""]
         _out(f"[{rank}] {first}")
         for line in rest:
             _out(f"    {line}")
@@ -1225,6 +1229,60 @@ def _hint_safe_part(part: str) -> bool:
 #: single hostile row turned a bare ``status`` into megabytes of terminal
 #: output (and a megabyte-long "copy-paste" command).
 _MAX_DISPLAY_PART = 64
+
+
+#: Bidirectional-override characters. They are not control codes and survive a
+#: Cc filter, but they reorder how a line RENDERS — the "Trojan Source" class —
+#: so a stored memory could display words in an order its bytes do not have.
+#: ZWJ/ZWNJ are deliberately NOT here: they are load-bearing in legitimate text
+#: (emoji sequences, Indic and Arabic shaping), and stripping them would
+#: corrupt real content to defend against nothing.
+#: Spelled as escapes on purpose: these are invisible, so a literal here would
+#: be unreviewable and unmaintainable.
+_BIDI_CONTROLS = frozenset(
+    "‪‫‬‭‮"  # LRE RLE PDF LRO RLO
+    "⁦⁧⁨⁩"        # LRI RLI FSI PDI
+    "‎‏"                    # LRM RLM
+)
+
+
+def _display_content(text: str) -> str:
+    """STORED content, made safe to print on a terminal (issue #98, ADR-0044).
+
+    A store is a file a repo can commit, and a store forged directly never
+    passed the ingest-time firewall — content-hash verification (ADR-0019) does
+    not help either, because whoever forges the row computes the hash. Rendered
+    verbatim, such a row could emit ESC sequences that clear the screen and
+    paint text that looks like Rekoll's own output.
+
+    Deliberately the SMALLEST edit that closes that:
+
+    * C0/C1 control characters go, except ``\\t`` and ``\\n`` (the renderer
+      splits on newlines, and tabs are ordinary content);
+    * bidi overrides go (:data:`_BIDI_CONTROLS`);
+    * **everything else is untouched** — every printable non-ASCII character,
+      emoji and their ZWJ joiners, accents, CJK, RTL script itself. This is not
+      ``sanitize_unicode``: that NFKC-normalizes, which would silently rewrite
+      legitimate stored text (``ﬁ`` → ``fi``) on its way to the screen, and a
+      viewer must show what is stored.
+
+    Applies to the HUMAN hit list only. ``--json`` already escapes control
+    characters via ``json.dumps``, ``--context`` renders through the envelope
+    (byte-identical by ADR-0013, and already neutralized), the board renders
+    through ``_neutralize_delimiters``, and ``--ids`` prints no content — all
+    verified, none changed.
+    """
+    out = []
+    for ch in text:
+        if ch in "\t\n":
+            out.append(ch)
+        elif ch in _BIDI_CONTROLS:
+            continue
+        elif ch < " " or "\x7f" <= ch <= "":
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _display_scope_key(key: str) -> str:
