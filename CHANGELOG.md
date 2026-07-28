@@ -11,6 +11,84 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 Nothing yet.
 
+## [0.1.5] - 2026-07-29
+
+### Fixed
+
+- **The MCP server no longer breaks on a fresh install (#114, ADR-0045).** The
+  `mcp` SDK's 2.0.0 release removed `mcp.server.fastmcp`, the module the server
+  is built on, and Rekoll's `[mcp]` extra had no upper bound — so
+  `pip install "rekoll[mcp]"` resolved straight to it and produced a server
+  that exited at startup, telling you to install the extra you had just
+  installed. Rekoll's flagship door was broken for every new install within
+  hours of an upstream release nobody here triggered. The extra is now
+  `mcp>=1.3,<2`, chosen at the actual break boundary rather than at a tested
+  maximum, so 1.x point releases (including security fixes) still flow. The
+  `mcp==1.3.0` floor is untouched and still CI-pinned.
+- **An incompatible `mcp` now says so instead of blaming a missing extra.** The
+  guard treated any `ImportError` out of `mcp.server.fastmcp` as "the extra
+  isn't installed". It now names the installed version and the constraint, and
+  gives both the pip and the pipx recovery. The probe reads packaging metadata
+  and never imports `mcp`, so no third-party module-level code runs and the
+  zero-dependency `import rekoll` path is unchanged. Its version check returns
+  three answers, not two — supported, unsupported, and *could not tell* — so an
+  unparseable version is never guessed at in either direction.
+- **`rekoll doctor` grows an `mcp sdk` line.** Doctor reported MCP
+  *registration* while staying silent about whether the server could *start*,
+  so it printed a clean bill of health for exactly the machine state that broke
+  every new install. The line WARNs when the installed SDK is outside the
+  supported range and stays absent entirely when no `mcp` is installed — a
+  CLI-only user never opened that door and is not nagged about it. It claims
+  only what a metadata read establishes (the release is in range), never that
+  the server will start, and a test pins the wording against that overclaim.
+- **CI now watches the version ceiling, not just the floor.** The matrix pinned
+  the minimum `mcp` and nothing at the other end, so the declared range drifted
+  upward silently until it broke. A `test-mcp-latest` job now deliberately
+  installs the newest `mcp` past the declared ceiling — non-blocking, because a
+  new upstream major is news rather than a broken pull request — and a weekly
+  run covers the case that actually happened: a major published *between* pull
+  requests, with no CI run to notice.
+
+### Security
+
+- **Padded plain text can no longer forge a Rekoll output line (#112, ADR-0044
+  amended).** v0.1.4 closed the *escape* half of this class and left the
+  *padding* half open. Rekoll's human output is column-formatted, and the
+  terminal — not Rekoll — decides where a visual line begins, so stored text
+  padded with ordinary spaces started a **visual** line that read as Rekoll's
+  own, using no control character at all. Reproduced on the shipped 0.1.4 wheel
+  on both `rekoll doctor` (via a repo-committed `.mcp.json`) and `rekoll recall`
+  (via a forged record id), where the forgery landed directly beneath a real
+  check line in Rekoll's own column layout. Every single-line field that renders
+  attacker-suppliable text is now filtered by what that field legitimately
+  holds: ids, timestamps, embedder identities and versions admit no whitespace
+  at all, while paths and commands collapse *runs* of whitespace so
+  `C:\Program Files\...` still reads normally.
+- **`rekoll recall --ids` can no longer be steered into deleting the wrong
+  memory — one character wider than v0.1.4 fixed it.** That release removed the
+  *newline* from ids because it split one line into two tokens, the second being
+  another record's real id. But `xargs` splits on **any** whitespace: a single
+  space in a forged id aimed the documented
+  `recall --ids | xargs rekoll forget` pipeline at a memory the query never
+  matched, with no control character involved. Ids now admit no whitespace at
+  all, and a mangled one is still reported on stderr as possible direct-DB
+  tampering.
+- **Stored *content* is deliberately unchanged, and the gap is documented rather
+  than papered over.** Ordinary single-spaced prose of the right length forges
+  the same line with no run of whitespace anywhere — for content it is the
+  terminal's soft wrap, not the padding, that starts the visual line. So
+  collapsing whitespace there would deface every legitimately indented code
+  snippet in a store and close nothing; a test pins both variants so nobody can
+  "fix" content that way and call the class closed. The real closure — Rekoll
+  owning its own wrap point — is tracked separately (#115). ADR-0044 now opens
+  by saying it shipped incomplete, and retires one of its own residuals as
+  unsound reasoning.
+- `rekoll doctor` also bounds its reads of another install's `_version.py` and
+  of a repo-committed `.mcp.json` — an oversized file in either place could hang
+  the one command someone runs when everything is already broken — and no longer
+  reports a non-executable file named `rekoll` as a competing install, a false
+  alarm in the check whose whole job is not crying wolf.
+
 ## [0.1.4] - 2026-07-28
 
 ### Added
@@ -309,7 +387,8 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/rekreatedigital/rekoll/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/rekreatedigital/rekoll/compare/v0.1.1...v0.1.2
