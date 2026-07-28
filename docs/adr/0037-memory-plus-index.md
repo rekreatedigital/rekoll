@@ -1,6 +1,6 @@
 # ADR-0037 — Memory + index: legible files stay the truth; Rekoll is the tracked retrieval + safety layer over them
 
-**Status:** Accepted (owner resolved every §10 decision on 2026-07-24, adopting each recommendation — NOTHING in this ADR is implemented yet; the DESIGN.md tripwire pins that) · **Date:** 2026-07-24 · **Extends:** ADR-0006 (content-addressed ids), ADR-0016 (ingest trust default), ADR-0023 (trust-aware upsert), ADR-0025 (tombstones/supersession), ADR-0035 (board — §5 `set_status`, §6 no-discovery posture), ADR-0036 (opt-in wizard) · **Interacts with:** ADR-0002 (provenance foundational), ADR-0004 (frozen kinds), ADR-0013 (envelope byte-identity), ADR-0017/0034 (directive vouch + standing channel), ADR-0031 (door parity), ADR-0033 (warn-loudly posture)
+**Status:** Accepted (owner resolved every §10 decision on 2026-07-24, adopting each recommendation — NOTHING in this ADR is implemented yet; the DESIGN.md tripwire pins that) · **Date:** 2026-07-24 · **Extends:** ADR-0006 (content-addressed ids), ADR-0016 (ingest trust default), ADR-0023 (trust-aware upsert), ADR-0025 (tombstones/supersession), ADR-0035 (board — §5 `set_status`, §6 no-discovery posture), ADR-0036 (opt-in wizard) · **Interacts with:** ADR-0002 (provenance foundational), ADR-0004 (frozen kinds), ADR-0013 (envelope byte-identity), ADR-0017/0034 (directive vouch + standing channel), ADR-0031 (door parity), ADR-0048 (warn-don't-restrict)
 
 ## Context
 
@@ -114,7 +114,7 @@ break.
   adoption, and it is why the default is `TRUSTED_SOURCE`, not `OWNER`, and
   why the ADR says it in bold instead of hoping nobody notices. `sources sync`
   prints, per changed file, the path, the tier being stamped, and the chunk
-  counts before ingesting — warn loudly, never block (ADR-0033 posture).
+  counts before ingesting — warn loudly, never block (ADR-0048).
 - ADR-0023 monotonicity is untouched: changed bytes are new records (new
   content hash → new id); identical bytes already stored at a HIGHER tier keep
   the incumbent (a re-ingest can never downgrade); identical bytes at a lower
@@ -133,7 +133,7 @@ break.
   but it must be said out loud: the §4 tier prompt carries it, every sync
   prints the tier being stamped, and §10 D1's rationale weighs it. Operators
   who want the screen keep it by adopting at `UNVERIFIED`
-  (quarantine-with-visibility — warn-don't-block, ADR-0033).
+  (quarantine-with-visibility — warn-don't-block, ADR-0048).
 
 ### 4. Consent-prompted detection — never silent, two distinct levels
 
@@ -258,7 +258,7 @@ file's vouched tier.
   (§1 — files cannot mint directives), and storing rules two ways rebuilds
   the dual-store disease inside the cure. This refusal is API-surface
   honesty, not a user-data restriction — the warn-don't-block posture
-  (ADR-0033) governs choices about the user's own data safety, not
+  (ADR-0048) governs choices about the user's own data safety, not
   unsupported flag combinations that would silently do less than they say.
 
 ### 7. MCP — read-side only in v1
@@ -439,7 +439,7 @@ Order: **(c) → (a) → (b)**. (c) is rendering over already-persisted fields;
   repo-controlled-redirect attack, aimed at trust instead of the store path.
 - **Per-edit re-vouch ("Rekoll refuses to sync until you confirm each
   change").** A refusal gate on the user's own chosen source — the posture is
-  warn loudly, never block (ADR-0033); loud per-file sync output is the
+  warn loudly, never block (ADR-0048); loud per-file sync output is the
   honest middle.
 - **Delete stale records on sync.** Destroys audit history and fights
   ADR-0025's tombstone/drop-order contract; supersession is reversible,

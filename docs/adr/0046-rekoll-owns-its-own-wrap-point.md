@@ -37,10 +37,12 @@ indented code snippet in the store — the "a viewer must show what is stored"
 line ADR-0044 draws — and close nothing. Refusing to print long content is
 worse: warn-don't-restrict forbids hiding the operator's own data. (That
 posture is stated in ADR-0039 and ADR-0040 and in `cli.py`'s
-`_vouch_standing_rule` and `_scope_split_lines` docstrings. It has **no ADR
-number of its own** — ADR-0042, ADR-0043 and ADR-0044 all cite it as
-"ADR-0033", which is the PII-redaction-tag decision. The error stops here
-rather than being copied into a fourth record.)
+`_vouch_standing_rule` and `_scope_split_lines` docstrings. It had **no ADR
+number of its own** when this was written — ADR-0037, ADR-0042, ADR-0043 and
+ADR-0044 all cited it as "ADR-0033", which is the PII-redaction-tag decision.
+The error stopped here rather than being copied into a fifth record; issue #120
+then gave the posture its own number, **ADR-0048**, and corrected the twelve
+references.)
 
 ## Decision
 
