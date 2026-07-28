@@ -103,7 +103,7 @@ and can judge it.
   once, but it also changes what the SDK and the machine payloads return —
   a caller asking for a record's content should get the bytes that are stored.
   The problem is a *rendering* problem, so the fix belongs at the renderer.
-- **Refuse to display such a record.** Warn-don't-restrict (ADR-0033): never
+- **Refuse to display such a record.** Warn-don't-restrict (ADR-0048): never
   hide the operator's own data. Showing it inert is strictly better than
   hiding it.
 
@@ -265,7 +265,7 @@ wrap** that starts the visual line; the padding is only a convenient way to aim
 it. Collapsing whitespace in `_display_content` would therefore deface every
 legitimately indented code snippet in the store — the exact "a viewer must show
 what is stored" line this ADR draws — and close **nothing**. Refusing to print
-long content is worse still: warn-don't-restrict (ADR-0033) forbids hiding the
+long content is worse still: warn-don't-restrict (ADR-0048) forbids hiding the
 operator's own data. Both halves are pinned in
 `tests/test_padded_render_safety.py` so nobody can "fix" content by collapsing
 spaces and call the class closed.
