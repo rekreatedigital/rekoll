@@ -17,6 +17,25 @@ pipx install "rekoll[embeddings,mcp]"   # doors 1 & 3 (CLI, MCP) — recommended
 pip install "rekoll[embeddings]"        # door 2 (Python SDK) — into your project's venv
 ```
 
+**Don't have `pipx`?** It ships with no Python, so install it first (one time,
+then never again):
+
+```bash
+python -m pip install --user pipx      # Windows / Linux
+python -m pipx ensurepath              # puts pipx-installed commands on your PATH
+brew install pipx && pipx ensurepath   # macOS, if you use Homebrew
+```
+
+**Then open a NEW terminal.** A command installed a moment ago is not on the
+PATH of a shell that was already running, so `rekoll` will look "not found"
+until you start a fresh one — that is your shell being stale, not a failed
+install. (`ensurepath` is what makes it stick for every future terminal.)
+
+Not sure which copy you ended up with? `rekoll doctor` names the exact version
+and path it is speaking for, and warns if another rekoll on your PATH would
+answer instead — a stale copy shadowing a fresh one is a real way to spend an
+afternoon testing code you did not install.
+
 [pipx](https://pipx.pypa.io) gives Rekoll its own private environment, so
 installing it can't upgrade a package the rest of your machine depends on —
 worth it for a tool you mostly call as a command. The trade-off is that a pipx

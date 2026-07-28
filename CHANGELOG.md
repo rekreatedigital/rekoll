@@ -9,7 +9,45 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`rekoll doctor` now vouches for what it reports (ADR-0041).** Three field
+  reports showed it printing a clean bill of health for machines it had not
+  actually checked, so it gains two checks:
+  - **Install identity (#104).** It names the exact copy it is speaking for and
+    **WARNs when another rekoll on your PATH would answer instead** — a stale
+    0.1.1 shadowing a fresh 0.1.3 made a careful tester file two bug reports
+    against code they were not running, both already fixed in the version they
+    thought they had. Versions of other copies are read from files, never by
+    executing them (a diagnostic must not run arbitrary programs that happen to
+    be named `rekoll`; a test pins this). Editable checkouts are recognized and
+    never raise a false alarm, and copies whose version could not be read are
+    reported as unread rather than assumed to agree.
+  - **MCP registration (#84).** When a project-local `.mcp.json` (or
+    `.cursor/mcp.json` / `.vscode/mcp.json`) registers rekoll, doctor WARNs if
+    the config is invalid JSON, if its `command` or pinned `--path` no longer
+    exists (this broke silently twice after folder renames), or if **nothing in
+    this scope has ever been written through the MCP door** — the only signal
+    that separates "configured and working" from "configured and never
+    loaded", which once cost a 12-hour agent session. No line at all when no
+    registration exists, so CLI-only users are never nagged.
+- **`StorageAdapter.count_by_source()`** — a new optional, bounded storage read
+  (concrete with a raising default, so out-of-tree adapters keep working)
+  counting effective-active records in a scope by `provenance.source_uri`. It
+  is what lets the MCP check answer "ever" exactly instead of inferring it from
+  a recency window; an adapter that cannot serve it makes doctor weaken its own
+  wording to "none of the 50 most recent" rather than over-claim.
+
+### Changed
+
+- **Docs: the first five minutes on a fresh machine (#102, #103, #85).** The
+  Quickstart and README now say how to *get* `pipx` (it ships with no Python)
+  and warn that you must open a **new terminal** afterwards — a freshly
+  installed command isn't on the PATH of a shell that was already running, and
+  a tester read that as a failed install. `docs/MCP.md` now makes
+  `python -m rekoll.mcp_server` with a relative interpreter the documented
+  default for a project virtualenv, because the `rekoll-mcp` console-script
+  shim embeds an absolute path and breaks on rename.
 
 ## [0.1.3] - 2026-07-25
 

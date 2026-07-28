@@ -342,7 +342,11 @@ def test_a_giant_scope_name_cannot_flood_the_terminal(project, capsys):
     capsys.readouterr()
     assert main(["doctor"]) == 0
     out, _ = capsys.readouterr()
-    assert max(len(line) for line in out.splitlines()) < 300
+    # A hang-backstop, not a style rule: the unbounded version emitted a single
+    # 2,097,330-character line, so any four-figure bound catches it decisively.
+    # Doctor lines legitimately carry two absolute paths (an install-identity
+    # warning names both copies), which on Windows is already ~300 characters.
+    assert max(len(line) for line in out.splitlines()) < 1000
 
 
 def test_status_does_not_render_control_chars_from_a_stored_embedder_name(

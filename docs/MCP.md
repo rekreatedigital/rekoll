@@ -67,9 +67,24 @@ the working directory; that's how it knows which project's memory to open.
 > MCP client looks the command up on PATH, which is what `pipx install` and a
 > global `pip install` give you. A **project virtualenv** does not: unless that
 > venv happens to be active when the client launches, `rekoll-mcp` won't be
-> found. Then use the full path (e.g. `.venv/bin/rekoll-mcp` or
-> `.venv\Scripts\rekoll-mcp.exe`), or `python -m rekoll.mcp_server` with that
-> venv's Python. This applies to every setup above, `.mcp.json` included.
+> found. This applies to every setup above, `.mcp.json` included.
+>
+> **In a project virtualenv, use the module form, not the `.exe`:**
+>
+> ```json
+> { "mcpServers": { "rekoll": { "command": ".venv/Scripts/python.exe",
+>   "args": ["-m", "rekoll.mcp_server"] } } }
+> ```
+>
+> (`.venv/bin/python` on macOS/Linux.) The console-script shim
+> — `.venv/Scripts/rekoll-mcp.exe` — **embeds the absolute path of the
+> environment that created it**, so renaming or moving the project folder
+> breaks it even after you fix the path in `.mcp.json`. That has now bitten a
+> real project twice, silently: every session simply had no rekoll tools.
+> `python -m rekoll.mcp_server` with a **relative** interpreter path survives a
+> rename, because MCP clients launch the server with your project directory as
+> the working directory. `rekoll doctor` now checks this for you and warns when
+> a registered command or `--path` no longer exists.
 
 ## 3. What the agent can do
 
@@ -278,9 +293,19 @@ claude mcp add rekoll -- rekoll-mcp --redact-pii
 - **"The Rekoll MCP server needs the optional 'mcp' extra"** — install it:
   `pip install "rekoll[mcp]"`.
 - **`rekoll-mcp` not found** — it's installed into the Python environment you
-  ran pip in; activate that environment, or point your client at the full path.
+  ran pip in; activate that environment, or use the module form
+  (`.venv/Scripts/python.exe -m rekoll.mcp_server`, see §2's note — it survives
+  a folder rename, which the `.exe` shim does not).
   `pipx install "rekoll[mcp]"` avoids the problem by putting the command on your
-  PATH regardless of which environment is active.
+  PATH regardless of which environment is active. On a fresh machine also
+  remember to open a **new terminal** after installing — a freshly installed
+  command isn't on the PATH of a shell that was already running.
+- **The agent has no rekoll tools even though `.mcp.json` is right** — most
+  clients only pick up a newly added server after a restart (and often an
+  approval prompt). Run `rekoll doctor`: it now reports whether a registration
+  exists, whether its command and `--path` actually resolve, and whether any
+  recent memory arrived through the MCP door at all. Then ask the agent to list
+  its tools — a server that never loaded is invisible from the inside.
 - **`claude: command not found`** when running `claude mcp add` — you're on
   Claude Code's VS Code extension, which ships no CLI. Use the `.mcp.json` file
   in §2 instead; it needs no `claude` command.

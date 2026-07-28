@@ -59,6 +59,13 @@ package as a side effect. The catch: a pipx install is invisible to `import
 rekoll`, so if you want the **Python SDK** below, `pip install` into your
 project's virtualenv instead. `[embeddings]` is what makes search semantic.
 
+No `pipx` yet? `python -m pip install --user pipx` then `python -m pipx
+ensurepath` (macOS: `brew install pipx && pipx ensurepath`). **Then open a new
+terminal** — a just-installed command isn't on the PATH of a shell that was
+already running, so `rekoll` reads as "not found" until you do. If anything
+looks off, `rekoll doctor` names the exact copy it is speaking for and warns
+when a different rekoll on your PATH would answer instead.
+
 (Already installed? `pip install --upgrade rekoll` or `pipx upgrade rekoll` —
 your `.rekoll/` memories carry over untouched. Bleeding edge, straight from git:
 `pip install "rekoll[embeddings] @ git+https://github.com/rekreatedigital/rekoll"`.)
