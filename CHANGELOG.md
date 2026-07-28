@@ -9,6 +9,10 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.4] - 2026-07-28
+
 ### Added
 
 - **`rekoll doctor` now vouches for what it reports (ADR-0041).** Three field
@@ -305,7 +309,8 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/rekreatedigital/rekoll/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/rekreatedigital/rekoll/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rekreatedigital/rekoll/compare/v0.1.0...v0.1.1
