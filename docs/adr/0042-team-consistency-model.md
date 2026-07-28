@@ -1,6 +1,6 @@
 # ADR-0042 — The team consistency model: you don't sync the memory, you sync the source
 
-**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0006 (content-addressed ids, amended by ADR-0026), ADR-0037 (memory + index: files are truth), ADR-0035 (board — §6's no-discovery posture and one-file sharing), ADR-0003 (scope granularity) · **Interacts with:** ADR-0005 (storage adapter contract), ADR-0023 (trust-aware upsert), ADR-0024 (embedder-identity mismatch), ADR-0017/0034 (directive vouch + standing channel), ADR-0033 (warn-don't-restrict), ADR-0041 (`doctor` reports only what it verified — governs the three `doctor` checks proposed in §4.3/D1/D3), ADR-0043 (the writer) · **Blocked-on for full effect:** issue #83 (doors default to different scopes — its own lane, ADR number not yet assigned; ADR-0041 went to the `doctor` lane) · **Evidence:** issues #75, #82, #87, #101
+**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0006 (content-addressed ids, amended by ADR-0026), ADR-0037 (memory + index: files are truth), ADR-0035 (board — §6's no-discovery posture and one-file sharing), ADR-0003 (scope granularity) · **Interacts with:** ADR-0005 (storage adapter contract), ADR-0023 (trust-aware upsert), ADR-0024 (embedder-identity mismatch), ADR-0017/0034 (directive vouch + standing channel), ADR-0041 (`doctor` reports only what it verified — governs the three `doctor` checks proposed in §4.3/D1/D3), ADR-0043 (the writer), ADR-0048 (warn-don't-restrict) · **Blocked-on for full effect:** issue #83 (doors default to different scopes — its own lane, ADR number not yet assigned; ADR-0041 went to the `doctor` lane) · **Evidence:** issues #75, #82, #87, #101
 
 ## Context
 
@@ -144,7 +144,7 @@ Why the store must not be committed, in the order the reasons actually bite:
 
 Reason 4 is the one that makes this a security boundary and not a preference:
 the other three are costs, and a user is entitled to accept costs
-(ADR-0033 — warn loudly, never block). Reason 4 is not the committer's risk to
+(ADR-0048 — warn loudly, never block). Reason 4 is not the committer's risk to
 accept on behalf of everyone who clones.
 
 ### 4. What a team needs to share — four tiers, three answers
@@ -233,7 +233,7 @@ WARN  rules   this repo proposes 3 standing rules you have not adopted
 ```
 
 — by hash compare only, never ingesting, never adopting, never blocking
-(ADR-0037 §5's cheap-read discipline and ADR-0033's posture). Freshness as a
+(ADR-0037 §5's cheap-read discipline and ADR-0048's posture). Freshness as a
 surfaced property is the 2RD audit's Tier-1 #2, and this is its first application.
 
 *Rejected:* letting a file mint directives at a high vouch (ADR-0037's stated
@@ -379,7 +379,7 @@ so this is a handoff, not an edit:
   Options: **yes, warn with the one-line fix (recommended)** / no. *Why:* §3's
   measurement shows a real path to an unignored store (`git init` after
   `rekoll init`), the consequence is committing a 30 MB binary that a clone would
-  load as memory, and a warning is the whole fix. Warn, never block (ADR-0033).
+  load as memory, and a warning is the whole fix. Warn, never block (ADR-0048).
 - **D4 — Is the live board's cross-machine answer the shared backend?** Options:
   **yes — a board in git is never proposed again, and §4.4's five expectations
   become that adapter's acceptance criteria (recommended)** / leave it open. *Why:*

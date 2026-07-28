@@ -1,6 +1,6 @@
 # ADR-0043 — The writer: Rekoll writes the documents it already knows how to write
 
-**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0037 (tracked sources + `remember --to` — the approved write primitives), ADR-0035 (board payload: bounded, trust-gated, byte-deterministic), ADR-0034 (standing-directive channel), ADR-0004 (frozen kinds), ADR-0006/0026 (content-addressed ids) · **Interacts with:** ADR-0007 (zero-LLM reads), ADR-0013 (envelope byte-identity), ADR-0015 (BYO-AI provider layer), ADR-0017 (directive vouch), ADR-0025 (tombstones/supersession), ADR-0033 (warn-don't-restrict), ADR-0036 (opt-in wizard) · **Paired with:** ADR-0042 (the writer is the decisions tier's transport) · **Evidence:** issues #75, #82, #87, #101 and the 2026-07-25 audit of the 2RD-Automation memory layer
+**Status:** Proposed · **Date:** 2026-07-28 · **Extends:** ADR-0037 (tracked sources + `remember --to` — the approved write primitives), ADR-0035 (board payload: bounded, trust-gated, byte-deterministic), ADR-0034 (standing-directive channel), ADR-0004 (frozen kinds), ADR-0006/0026 (content-addressed ids) · **Interacts with:** ADR-0007 (zero-LLM reads), ADR-0013 (envelope byte-identity), ADR-0015 (BYO-AI provider layer), ADR-0017 (directive vouch), ADR-0025 (tombstones/supersession), ADR-0036 (opt-in wizard), ADR-0048 (warn-don't-restrict) · **Paired with:** ADR-0042 (the writer is the decisions tier's transport) · **Evidence:** issues #75, #82, #87, #101 and the 2026-07-25 audit of the 2RD-Automation memory layer
 
 ## Context
 
