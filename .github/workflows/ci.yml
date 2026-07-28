@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Mondays. An SDK major published BETWEEN pull requests is exactly how
+    # mcp 2.0.0 reached users first (issue #114): CI was green all weekend
+    # because no run happened, and the break arrived through a dependency
+    # resolution nobody triggered. Only `test-mcp-latest` runs on this event.
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
@@ -11,6 +17,7 @@ permissions:
 jobs:
   test:
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +43,7 @@ jobs:
 
   package:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       # SHA-pinned to match the supply-chain posture of the other jobs (P1-4).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,6 +72,7 @@ jobs:
     # onnxruntime + their transitive deps). So we build a venv with every
     # installable extra and audit THAT environment's full closure instead.
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -91,6 +100,7 @@ jobs:
   # hold when mcp is present but unused.
   test-mcp:
     runs-on: ${{ matrix.os }}
+    if: github.event_name != 'schedule'
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +136,34 @@ jobs:
       - name: Test
         run: pytest
 
+  # CEILING WATCH (issue #114, ADR-0045). The [mcp] extra pins `mcp>=1.3,<2`,
+  # so no ordinary cell can ever resolve a new major again — which is precisely
+  # how the last one landed unnoticed: the matrix had a floor cell and nothing
+  # watching the other end, and mcp 2.0.0 broke the MCP door on every fresh
+  # install before a single test went red.
+  #
+  # This job deliberately installs the newest mcp IN VIOLATION of the declared
+  # ceiling, so the next major announces itself here instead of in a user's
+  # first five minutes. `continue-on-error` is the point: a new upstream major
+  # is NEWS, not a broken pull request, and a contributor who touched nothing
+  # related must not be blocked by it.
+  test-mcp-latest:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # SHA-pinned to match the supply-chain posture of the other jobs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install, then force the newest mcp past the declared ceiling
+        run: |
+          pip install -e ".[dev,mcp]"
+          pip install -U mcp
+          python -c "import importlib.metadata as m; print('mcp', m.version('mcp'))"
+      - name: Test
+        run: pytest
+
   # The real-embedder quality path (efficacy program, ADR-0011): the same
   # suite with the optional [embeddings] extra installed, via the [bench]
   # aggregation extra so the extra itself stays resolution-tested. This job is
@@ -139,6 +177,7 @@ jobs:
   # refreshes the cache.
   test-embeddings:
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     env:
       FASTEMBED_CACHE_PATH: ${{ github.workspace }}/.fastembed-cache
     steps:
