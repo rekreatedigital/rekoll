@@ -290,7 +290,13 @@ def test_doctor_renders_the_install_warning_end_to_end(project, capsys, monkeypa
     _only_on_path(monkeypatch, stale)
     assert main(["doctor"]) == 0  # WARN, never FAIL: nothing is broken
     out = capsys.readouterr().out
-    assert "WARN" in out and "rekoll" in out
+    # Pin the WARN to the `rekoll` LINE. Asserting a bare "WARN in out" would
+    # pass on any machine that happens to warn about something else entirely
+    # (a missing extra, a stale index) - which it did, on main, before this
+    # check existed.
+    install_line = next(ln for ln in out.splitlines() if ln.split()[1:2] == ["rekoll"])
+    assert install_line.strip().startswith("WARN")
+    assert "0.1.1" in install_line
     assert "with notes" in out  # the summary stops saying a flat "All passed"
 
 
