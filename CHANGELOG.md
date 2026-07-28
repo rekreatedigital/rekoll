@@ -11,6 +11,58 @@ A dedicated **Security** heading is kept per the governance commitment in
 
 Nothing yet.
 
+## [0.1.7] - 2026-07-29
+
+### Added
+
+- **One repo, one memory: `rekoll init` now pins the MCP door's scope (#83,
+  ADR-0047).** The CLI and SDK default to `project="default"`; the MCP server
+  derived its project from the **launch folder's name**. Same store file, two
+  scopes, no error — three field reports hit it, and so did this project's own
+  store. v0.1.3 made the split *loud* (ADR-0040); it did not make it stop, so
+  every new user following the Quickstart's `"args": []` still fell in and
+  repaired it by hand.
+  `rekoll init` now writes `.mcp.json` with `--tenant/--project/--agent` pinned
+  to the scope init itself operated in, so all three doors agree from the first
+  command. Rekoll gains **no discovery mechanism**: that file is the MCP
+  *client's* config, which the client already reads, and it carries scope
+  **names only, never a `--path`** — which is what keeps it clear of the
+  repo-controlled path redirect ADR-0035 §6 rejects (pinned by test).
+  A pinned name is also more rename-proof than a derived one: nothing reads the
+  folder name at all.
+  **Exactly one outcome writes a file.** It refuses, and says why, when: the
+  `mcp` extra is not installed (a CLI-only user should not be handed a config
+  for a server they cannot run); a custom `--path` points outside `./.rekoll`;
+  `.mcp.json` already exists (never touched — it prints the flags that file
+  should pin instead, and the guarantee is enforced by exclusive-create, not a
+  check); a `.cursor`/`.vscode` config already registers rekoll; or **the store
+  already holds memories and none of them are in the scope that would be
+  pinned** — pinning there would point the agent at an empty scope and hide what
+  is already stored, which is this very bug inflicted deliberately.
+  The interpreter it writes follows the v0.1.4 rename lesson: a virtualenv
+  *inside* the project is named by a **relative** path that survives a folder
+  rename, never by the console-script shim (which embeds an absolute path and
+  has silently broken a real project twice); a virtualenv elsewhere falls back to
+  an absolute path and **says so out loud** rather than shipping a quiet time
+  bomb.
+  Existing split stores are unchanged — the ADR-0040 note already names them, and
+  auto-stamping the one populated scope would override the operator's own flags.
+  Never guess, never move data.
+
+### Changed
+
+- **Warn-don't-restrict has its own decision record (#120, ADR-0048).** The
+  posture was already implemented in five places and cited **twelve times as
+  "ADR-0033"**, which is the PII-redaction-tag decision — a wrong citation that
+  spread by copy-paste because the principle it named had no record of its own.
+  It now has a number and, more usefully, a stated **boundary**: it divides on
+  *who is harmed by the choice*. A user may make their own data less safe,
+  loudly informed; they may not unlock a defence, because the person harmed is
+  not always the person choosing. The record also names the mixed case it does
+  **not** resolve by lookup — a host who disables the ingest screen while
+  redaction is on, where the PII in the text may be a third party's. Docs only,
+  no behaviour change.
+
 ## [0.1.6] - 2026-07-29
 
 ### Changed
@@ -452,7 +504,8 @@ Still pre-alpha in spirit: young, honest about its gaps, and built in the open
   shared runners (2026-07-15, Windows and macOS) with every other cell green.
   Super-linear *scaling* stays caught by the runner-independent ratio gates.
 
-[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/rekreatedigital/rekoll/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/rekreatedigital/rekoll/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/rekreatedigital/rekoll/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/rekreatedigital/rekoll/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/rekreatedigital/rekoll/compare/v0.1.3...v0.1.4
