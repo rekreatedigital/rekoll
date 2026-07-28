@@ -421,6 +421,209 @@ def _ensure_gitignore(cwd: Path) -> str:
     return "no-repo"
 
 
+# ---------------------------------------------------------------------------
+# init: the MCP client config, with this project's scope PINNED (ADR-0047)
+# ---------------------------------------------------------------------------
+
+#: The one MCP client config ``init`` will WRITE. It is the portable,
+#: client-agnostic file that QUICKSTART and docs/MCP.md tell people to create by
+#: hand — and whose hand-written form (``"args": []``) is issue #83: with no
+#: scope pinned, the server derives its project from the launch FOLDER'S NAME
+#: while the CLI and SDK default to ``project="default"``, so one repo silently
+#: holds two memories. The editor-specific configs in ``_MCP_CLIENT_CONFIGS``
+#: are still READ (a project already wired up through one of them is left
+#: alone); they are never written, because only their own editor knows their
+#: schema.
+_MCP_CONFIG_NAME = ".mcp.json"
+
+#: The server KEY ``init`` writes. ``_find_mcp_registrations`` only recognises
+#: an entry whose key, command or joined args mention "rekoll", so this name is
+#: part of the contract with ``rekoll doctor`` — not decoration.
+_MCP_SERVER_KEY = "rekoll"
+
+
+def _mcp_launch_command(cwd: Path) -> tuple[str, list[str], bool]:
+    """``(command, leading args, rename_safe)`` for a generated registration.
+
+    docs/MCP.md documents two shapes and picking the wrong one writes a config
+    that cannot start a server:
+
+    * **``rekoll-mcp``** — a bare name the client resolves on PATH. Correct
+      after ``pipx install`` or a global ``pip install``.
+    * **``.venv/Scripts/python.exe -m rekoll.mcp_server``** — correct in a
+      project virtualenv, where a bare ``rekoll-mcp`` is not on the client's
+      PATH. The console-script shim is deliberately NOT used even though it
+      exists there: it embeds the absolute path of the environment that created
+      it, so it dies on a folder rename (that has bitten a real project twice,
+      silently). A **relative** interpreter path survives the rename, because
+      MCP clients launch the server with the project directory as its cwd —
+      which is also ADR-0037 §2's posture for anything rekoll records about a
+      location inside the repo.
+
+    So a venv whose interpreter lives inside this project wins first, and the
+    path written is relative to ``cwd``. A venv somewhere ELSE cannot be named
+    relatively and must not be named by its shim either, so it falls back to
+    this interpreter's absolute path with ``rename_safe=False`` — the caller
+    says so out loud rather than shipping a quiet time bomb.
+
+    Whatever comes back must satisfy :func:`_mcp_entry_command_resolves`, or
+    ``rekoll doctor`` would report a file rekoll itself just wrote as broken.
+    """
+    module_args = ["-m", "rekoll.mcp_server"]
+    in_venv = sys.prefix != sys.base_prefix
+    if in_venv:
+        try:
+            relative = Path(sys.executable).resolve().relative_to(cwd.resolve())
+        except (ValueError, OSError):  # outside this project, or an unresolvable cwd
+            relative = None
+        if relative is not None:
+            # POSIX separators on purpose: forward slashes are valid in a
+            # Windows path too, and one spelling keeps the file portable and
+            # the JSON free of escaped backslashes.
+            return (relative.as_posix(), module_args, True)
+        return (sys.executable, module_args, False)
+    found = shutil.which("rekoll-mcp")
+    if found:
+        return ("rekoll-mcp", [], True)
+    return (sys.executable, module_args, False)
+
+
+def _mcp_config_text(cwd: Path, *, tenant: str, project: str, agent: str) -> tuple[str, bool]:
+    """``(file text, rename_safe)`` — the ``.mcp.json`` init writes.
+
+    The args pin the scope triple EXPLICITLY. That is the whole fix: the
+    server keeps requiring explicit arguments and gains no discovery mechanism
+    of its own (ADR-0035 §6 stands), while the scope it uses becomes visible,
+    reviewable and version-controllable by the operator's own choice.
+
+    It pins scope NAMES and never a store ``--path``. See ADR-0047 §3: a name
+    cannot redirect where the store lives, which is the property that keeps
+    this generator outside §6's ban.
+    """
+    command, lead, rename_safe = _mcp_launch_command(cwd)
+    entry = {
+        "command": command,
+        "args": [*lead, "--tenant", tenant, "--project", project, "--agent", agent],
+    }
+    blob = {"mcpServers": {_MCP_SERVER_KEY: entry}}
+    return (json.dumps(blob, indent=2) + "\n", rename_safe)
+
+
+def _mcp_scope_flags(tenant: str, project: str, agent: str) -> Optional[str]:
+    """The pinned scope as a copy-pasteable flag string, or ``None``.
+
+    ``Scope`` accepts far more than a command line can carry unquoted (spaces,
+    a leading dash), and these three values are printed for a human to retype
+    into their own config — so an unsafe part yields ``None`` and the caller
+    describes the scope instead of typesetting a command it cannot vouch for.
+    The same rule the ADR-0040 note follows for scope names read from a store.
+    """
+    if not all(_hint_safe_part(part) for part in (tenant, project, agent)):
+        return None
+    return f"--tenant {tenant} --project {project} --agent {agent}"
+
+
+def _store_scope_counts(path: str) -> dict[str, int]:
+    """Effective-active record counts per scope key, or ``{}`` when unknown.
+
+    Fail-soft on every axis, exactly like :func:`_other_scope_counts`: this
+    feeds a SAFETY guard, and a guard that cannot read the store must fall back
+    to the cautious answer (write nothing), never to a crash.
+    """
+    if path == ":memory:" or not _store_exists(path):
+        return {}
+    from .adapters.registry import get_adapter
+
+    try:
+        adapter = get_adapter("sqlite", path=path)
+        try:
+            counts = dict(adapter.scope_counts())
+        finally:
+            adapter.close()
+    except Exception:
+        return {}
+    return {
+        key: n
+        for key, n in counts.items()
+        if isinstance(key, str) and key.count("/") == 2
+        and isinstance(n, int) and n > 0
+    }
+
+
+def _ensure_mcp_config(
+    cwd: Path, *, path: str, conventional: bool, tenant: str, project: str, agent: str
+) -> tuple[str, str]:
+    """Give this project an MCP config whose scope matches the CLI's (ADR-0047).
+
+    Returns ``(state, detail)``. Exactly one state — ``'written'`` — creates a
+    file; every other state writes NOTHING and asks the caller to explain
+    itself. Modelled on :func:`_ensure_gitignore`, which is the precedent for
+    plain ``init`` touching a file in the repo root at all: never clobber,
+    refuse rather than corrupt, and report which of a fixed set of outcomes
+    happened.
+
+    The guards, in the order they fire:
+
+    ``no-mcp``
+        No ``mcp`` package installed, so this machine has not opened the MCP
+        door. Writing a registration here would hand a CLI-only user a config
+        for a server they cannot run — and would make ``rekoll doctor`` start
+        warning about a door they never opened, which is precisely the nagging
+        ADR-0041 §2 refuses to do.
+    ``custom-path``
+        A ``--path`` outside the standard ``./.rekoll`` layout. The generator
+        emits scope names only (ADR-0047 §3), so it cannot describe this store
+        and declines to describe it wrongly — the same line
+        :func:`_ensure_gitignore` draws for the same layout.
+    ``present``
+        ``.mcp.json`` already exists. NEVER clobbered: the write below is an
+        exclusive create, so this is enforced by the filesystem and not only by
+        this check.
+    ``registered-elsewhere``
+        ``.cursor/mcp.json`` or ``.vscode/mcp.json`` already registers rekoll.
+        Adding a second registration with a different scope would create the
+        very split this function exists to close.
+    ``other-scope``
+        The store already holds memories, and none of them are in the scope
+        that would be pinned. Pinning it anyway would point the MCP door at an
+        empty scope and make an existing user's memories invisible — this bug,
+        inflicted deliberately. Nothing is written, nothing is moved, nothing
+        is guessed; ``detail`` carries how many other scopes hold data so the
+        caller can send the operator to the ADR-0040 note that names them.
+    """
+    if not _mcp_sdk_state()[0]:
+        return ("no-mcp", "")
+    if not conventional:
+        return ("custom-path", "")
+    target = cwd / _MCP_CONFIG_NAME
+    try:
+        if target.exists():
+            return ("present", "")
+    except OSError as exc:
+        return ("error", str(exc))
+    try:
+        registrations, _unreadable = _find_mcp_registrations()
+    except Exception:  # a config we cannot read is not evidence of a rekoll server
+        registrations = []
+    if registrations:
+        names = ", ".join(sorted({name for name, _ in registrations}))
+        return ("registered-elsewhere", names)
+    counts = _store_scope_counts(path)
+    if counts and f"{tenant}/{project}/{agent}" not in counts:
+        return ("other-scope", str(len(counts)))
+    text, rename_safe = _mcp_config_text(cwd, tenant=tenant, project=project, agent=agent)
+    try:
+        # Exclusive create: never-clobber becomes a filesystem guarantee rather
+        # than a race between the check above and this write.
+        with target.open("x", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    except FileExistsError:
+        return ("present", "")
+    except OSError as exc:
+        return ("error", str(exc))
+    return ("written", "" if rename_safe else "absolute")
+
+
 def _create_store(path: str) -> bool:
     """Create (or adopt) the store FILE itself — ``init``'s write half.
 
@@ -486,7 +689,8 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     # Only manage .gitignore for the conventional ./.rekoll layout; a custom
     # --path is the user's own layout to ignore (or not) as they see fit.
-    if store_dir.name == ".rekoll" and store_dir.resolve().parent == cwd.resolve():
+    conventional = store_dir.name == ".rekoll" and store_dir.resolve().parent == cwd.resolve()
+    if conventional:
         try:
             state = _ensure_gitignore(cwd)
         except OSError as exc:
@@ -505,6 +709,53 @@ def cmd_init(args: argparse.Namespace) -> int:
         lines.append(f"  custom store path - remember to git-ignore {Path(args.path).name} if this is a repo")
     else:
         lines.append(f"  custom store path - remember to git-ignore {store_dir} if this is a repo")
+
+    # One repo, one memory (ADR-0047): pin the MCP door's scope to the scope
+    # this init is operating in, so the CLI, the SDK and an MCP agent all read
+    # and write the same memory in this folder instead of three of them
+    # defaulting three different ways.
+    flags = _mcp_scope_flags(args.tenant, args.project, args.agent)
+    pinned = flags or "this project's tenant/project/agent"
+    if args.no_mcp_config:
+        state, detail = ("off", "")
+    else:
+        state, detail = _ensure_mcp_config(
+            cwd, path=args.path, conventional=conventional,
+            tenant=args.tenant, project=args.project, agent=args.agent,
+        )
+    if state == "written":
+        lines.append(f"  created {_MCP_CONFIG_NAME}  (your AI agent's MCP config - "
+                     f"scope pinned: {pinned})")
+        if detail == "absolute":
+            # Named by absolute path because this virtualenv lives outside the
+            # project; say so, because moving the folder or the venv breaks it
+            # and `rekoll doctor` is the only thing that would notice.
+            lines.append(f"    it names this Python by full path - if you move this folder "
+                         f"or the virtualenv, update 'command' in {_MCP_CONFIG_NAME}")
+    elif state == "present":
+        lines.append(f"  {_MCP_CONFIG_NAME} already exists - left untouched; for one memory "
+                     f"across all three doors its rekoll args should pin: {pinned}")
+    elif state == "registered-elsewhere":
+        lines.append(f"  {_display_one_line(detail, limit=120)} already registers rekoll - "
+                     f"{_MCP_CONFIG_NAME} not created; for one memory across all three doors "
+                     f"pin: {pinned}")
+    elif state == "other-scope":
+        lines.append(f"  {_MCP_CONFIG_NAME} not created - this store already holds memories "
+                     f"under {detail} other scope(s), and pinning this one could hide them; "
+                     f"run 'rekoll status' to see where they are")
+    elif state == "custom-path":
+        lines.append(f"  custom store path - {_MCP_CONFIG_NAME} not created; pin --path plus "
+                     f"{pinned} in your MCP client's config yourself (docs/MCP.md)")
+    elif state == "no-mcp":
+        lines.append(f"  no MCP server installed - {_MCP_CONFIG_NAME} not created; run "
+                     f'\'pip install "rekoll[mcp]"\' then \'rekoll init\' again to have it '
+                     f"write one with this scope pinned")
+    elif state == "off":
+        lines.append(f"  --no-mcp-config given - {_MCP_CONFIG_NAME} not created; pin {pinned} "
+                     f"in your MCP client's config yourself (docs/MCP.md)")
+    elif state == "error":
+        lines.append(f"  could not write {_MCP_CONFIG_NAME} ({_display_one_line(detail)}) - "
+                     f"create it yourself (docs/MCP.md) and pin: {pinned}")
 
     _out("Rekoll is ready in this project.")
     _out()
@@ -3121,6 +3372,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "and - after one confirmation - save your answers as standing rules "
              "every AI session will follow; plain 'rekoll init' never asks anything "
              "(ADR-0036)",
+    )
+    p.add_argument(
+        "--no-mcp-config", action="store_true",
+        help="do NOT create .mcp.json. By default init writes one (only when the "
+             "'mcp' extra is installed, and never over an existing file) pinning "
+             "--tenant/--project/--agent, so an MCP agent reads the same memory the "
+             "CLI does instead of a folder-name-derived one (ADR-0047)",
     )
     p.set_defaults(func=cmd_init)
 
