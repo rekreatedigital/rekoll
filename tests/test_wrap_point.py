@@ -16,8 +16,9 @@ nothing:
 
 * the wrap point is computed in **display columns**, not characters. A
   character-counting wrap (``len``, ``textwrap``) is defeated by 38 CJK
-  characters or by 10 tabs — 69 and 41 characters respectively, 107 and 111
-  columns, three visual lines at width 80, and the payload back at column 0.
+  characters (100 characters, 138 columns) or by 10 tabs (72 characters, 142
+  columns) — the first cut 42 characters into the payload, the second not cut
+  at all, and either way the payload is back at column 0.
 * the machine doors are untouched. ``--context`` is byte-frozen against the
   envelope itself (ADR-0013), and ``--ids`` still emits one bare id per line
   even when the id is longer than the terminal is wide.

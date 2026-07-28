@@ -1,6 +1,6 @@
 # ADR-0044 — Stored content may appear in a terminal, never drive one
 
-**Status:** Accepted · **Date:** 2026-07-28 · **Amended:** 2026-07-28 (see [Amendment](#amendment-2026-07-28--the-padding-half-issue-112)) · **Implements:** issue #98, issue #112 · **Amends:** the `cli.py` "stored content is echoed as-is" module rule · **Extends:** ADR-0041 (doctor reports only what it verified) · **Interacts with:** ADR-0013 (envelope byte-identity), ADR-0019 (read-time verification), ADR-0022 (PII redaction)
+**Status:** Accepted (terminal residuals closed by ADR-0046) · **Date:** 2026-07-28 · **Amended:** 2026-07-28 (see [Amendment](#amendment-2026-07-28--the-padding-half-issue-112)) · **Implements:** issue #98, issue #112 · **Amends:** the `cli.py` "stored content is echoed as-is" module rule · **Extends:** ADR-0041 (doctor reports only what it verified) · **Interacts with:** ADR-0013 (envelope byte-identity), ADR-0019 (read-time verification), ADR-0022 (PII redaction)
 
 > **This ADR shipped incomplete.** As first written it reads as if this class
 > is closed. It closed the *escape* half. The *padding* half — printable text
@@ -123,6 +123,13 @@ swallowing it would be the silence this project keeps fixing.
 
 > The second residual below is **wrong as reasoned**: it argues from an
 > indentation a wrapping terminal does not preserve. See the amendment.
+>
+> Both residuals are **CLOSED on a terminal by ADR-0046** (issue #115), which
+> made rekoll rather than the terminal choose where every visual line begins.
+> A U+2028/U+2029 break and a line-leading `[2]` inside content now render with
+> the continuation marker at column 0, like any other continuation. They remain
+> open on a redirected or piped stream, which rekoll deliberately does not wrap
+> — ADR-0046's "What stays open" is the current record.
 
 - **U+2028 / U+2029** survive `_display_content` and are the only remaining
   characters `str.splitlines()` treats as breaks, so a forged record can gain
@@ -276,6 +283,18 @@ line renders (and to what `recall | grep` returns), so it is its own decision
 with its own ADR, not a rider on this fix. It is not done here, and until it is,
 this ADR's honest claim is the narrower one below.
 
+> **Done, in ADR-0046** (issue #115, 2026-07-29). Rekoll now measures its own
+> human lines in display columns and marks every continuation at column 0, so
+> stored `content` and path-shaped fields can no longer start a visual line **on
+> a terminal**. It turned out that wrapping was not the security property at
+> all — the continuation marker is; and that the wrap had to be computed in
+> display columns rather than characters, because `_display_content`'s
+> deliberately-kept CJK, emoji and tabs are exactly the characters `len()` gets
+> wrong. Neither `_display_content` nor either field filter was weakened: they
+> are what keeps a field on one *logical* line, which is what makes a claim
+> about *visual* lines mean anything. A redirected or piped stream is still not
+> wrapped, so the reproductions above still succeed there.
+
 ### The claim this ADR is now entitled to make
 
 A committed hostile store or config can no longer move the cursor, clear the
@@ -285,3 +304,9 @@ never matched. It **can** still push its own words onto a visual line of their
 own, from stored `content` and from path-shaped fields, on a wrapping terminal.
 Those words are inert text and are shown as such — but they are not stopped,
 and this document will not say they are.
+
+> **Superseded on the terminal path by ADR-0046.** The last two sentences hold
+> only where rekoll does not own the wrap point — a redirected or piped stream.
+> On a terminal, stored content and path-shaped fields no longer start a visual
+> line at all. Read ADR-0046's "The claim this ADR is entitled to make" for the
+> current, narrower-but-larger statement.

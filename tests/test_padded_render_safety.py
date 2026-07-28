@@ -28,6 +28,13 @@ Two different fields, two different fixes, and the difference is the point:
 Stored CONTENT is deliberately NOT changed, and the last test in this file
 pins why: for content the wrap does the work, not the padding, so collapsing
 whitespace there would deface legitimate indented text and close nothing.
+
+The wrap itself is closed one layer up by ADR-0046, which made rekoll — rather
+than the terminal — choose where every visual line begins. That does not
+weaken anything here: both filters below still do the work that lets the
+marker's claim about visual lines mean something, and both still keep a forged
+id from READING as a sentence even inside a marked line. See
+``tests/test_wrap_point.py``.
 """
 
 from __future__ import annotations
@@ -341,20 +348,25 @@ def test_the_machine_doors_are_byte_unchanged_by_this_fix(project, capsys):
 # -- the residual, pinned ----------------------------------------------------
 
 def test_stored_content_is_not_whitespace_collapsed_and_here_is_why(project, capsys):
-    """The content half of issue #112, resolved and PINNED as a residual.
+    """The content half of issue #112 — the reasoning, which has NOT changed,
+    and the residual, which has.
 
-    Padded content does forge a hit line — but so does content with no run of
-    whitespace anywhere, because it is the terminal's SOFT WRAP that starts the
-    visual line, and padding is merely a convenient way to aim it. Both
-    variants below render identically at 80 columns, which is the evidence that
+    Padded content forges a hit line; so does content with no run of whitespace
+    anywhere, because it is the terminal's SOFT WRAP that starts the visual
+    line and padding is merely a convenient way to aim it. Both variants below
+    render identically at 80 columns, and that is still the evidence that
     whitespace-collapsing ``_display_content`` would deface every legitimately
-    indented code snippet in the store and close nothing at all.
+    indented code snippet in the store and close nothing at all. Nobody may
+    "fix" content by collapsing spaces and call the class closed.
 
-    The only real closure is Rekoll owning the wrap point on a terminal, which
-    changes how every human line renders and is therefore its own decision, not
-    a rider on this fix. ADR-0044's "Known residuals" section says so in words.
-    This test exists so nobody can quietly "fix" content by collapsing spaces
-    and call the class closed.
+    What HAS changed is where the forgery survives. ADR-0046 gave rekoll its own
+    wrap point, so on a terminal both variants are wrapped and marked and
+    neither reaches column 0 — proved in ``tests/test_wrap_point.py`` with these
+    same two payloads. ``capsys`` is not a terminal, which is exactly the case
+    still open and the reason this test still reproduces: when stdout is
+    redirected or piped, rekoll wraps nothing (there is no terminal choosing a
+    wrap point at that moment) and whatever renders the file afterwards
+    soft-wraps it. ADR-0046's "What stays open" names it.
     """
     assert main(["init"]) == 0
     mem = Memory(path=DB)
@@ -382,8 +394,10 @@ def test_stored_content_is_not_whitespace_collapsed_and_here_is_why(project, cap
 
     for lines in rendered:
         assert any(line.startswith("[2] SECURITY") for line in lines), (
-            "the residual this test documents has changed - re-read ADR-0044's "
-            "'Known residuals' before editing it"
+            "the residual this test documents has changed - re-read ADR-0046's "
+            "'What stays open' before editing it. If rekoll now wraps a "
+            "REDIRECTED stream too, that is a decision, not a bug fix: it "
+            "changes what `rekoll recall > file` contains."
         )
     # ... and `_display_content` still leaves legitimate indentation alone,
     # which is the reason the residual is accepted rather than papered over.
