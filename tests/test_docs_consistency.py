@@ -165,6 +165,51 @@ def test_design_marks_memory_plus_index_as_planned_until_it_ships():
         )
 
 
+# -- the writer (ADR-0043): planned, not shipped — same discipline as wrap() ------
+
+def test_design_marks_the_writer_as_planned_until_it_ships():
+    """ADR-0043 designs the writer half — generated docs written into the repo
+    (issues #87/#101). Nothing is built. Same honesty pin as the wrap() and
+    memory+index ones above: while none of the three obvious landing spots
+    exist — a `rekoll.writer` module, a `Memory.write_docs` surface, a `writer`
+    CLI subcommand — every DESIGN.md line naming the feature must say "planned"
+    on that same line.
+
+    The filter token is the planned CLI verb `rekoll writer` rather than the
+    bare word "writer", which DESIGN.md already uses for the (also unshipped)
+    L3 consolidation LLM writer — a different feature that this pin must not
+    police. Whichever lane ships the first slice retires or reworks this pin in
+    the same PR."""
+    import argparse
+    import importlib.util
+
+    import rekoll
+    from rekoll import cli
+
+    assert importlib.util.find_spec("rekoll.writer") is None, (
+        "the rekoll.writer module has shipped — flip DESIGN.md's writer wording "
+        "to present tense and retire this pin in the same PR"
+    )
+    for name in ("write_docs", "writer"):
+        for spot in (rekoll, rekoll.Memory):
+            assert not hasattr(spot, name), (
+                f"{spot.__name__}.{name} has shipped — flip DESIGN.md's writer "
+                "wording to present tense and retire this pin in the same PR"
+            )
+    sub = next(a for a in cli._build_parser()._actions
+               if isinstance(a, argparse._SubParsersAction))
+    assert "writer" not in sub.choices, "the writer verb has shipped — retire this pin"
+
+    design = _read("docs/DESIGN.md")
+    writer_lines = [line for line in design.splitlines()
+                    if "rekoll writer" in line.lower()]
+    assert writer_lines, "DESIGN.md no longer mentions the writer at all"
+    for line in writer_lines:
+        assert "planned" in line.lower(), (
+            f"DESIGN.md names the writer without marking it planned: {line!r}"
+        )
+
+
 # -- MCP tool RESULTS: the keys an agent reads, and the docs that list them -------
 #
 # The tool NAMES were pinned above; their RESULT payloads were not, and they
