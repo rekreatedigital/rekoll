@@ -29,15 +29,34 @@ it required amending a **documented module rule** — `cli.py` promised that
 "stored content is echoed as-is" — and that is a product decision, not a bug
 fix.
 
-**Scope was verified surface by surface, not assumed.** Three of the four
-render paths were already safe:
+**Scope was verified surface by surface — and the first pass got it wrong.**
+An adversarial review of this ADR's own branch found that `content` is not the
+only attacker-controlled string on a rendered line: **the record id and the
+provenance source path are stored data too**, and both were still raw. Three
+of those findings were blockers:
+
+- a forged **id** carried escapes to the terminal *one line below* the line the
+  first fix had just closed;
+- a **newline** in a stored id emitted a second line at column 0 that was
+  byte-indistinguishable from a real numbered hit — a fabricated memory, using
+  no control characters at all, which no character filter can catch;
+- worst, `recall --ids` was certified safe on the premise that it "prints no
+  content". It prints *ids*, which are stored data: a newline split one line
+  into two tokens, the second being **another record's real id**, so the
+  documented `recall --ids | xargs rekoll forget` pipeline deleted a memory the
+  query never matched. Reproduced as real data loss.
+
+Final scope, each verified by forging the relevant column directly:
 
 | Surface | Status | Why |
 | --- | --- | --- |
-| `recall` human list | **exposed** | rendered `record.content` verbatim |
-| `recall --json` | safe | `json.dumps` escapes control characters |
+| `recall` human list — content | **was exposed** | rendered `record.content` verbatim |
+| `recall` human list — id, source path | **was exposed** | stored strings interpolated raw |
+| `recall --ids` | **was exposed** | ids are stored data; a newline forged an extra token |
+| `board` — entry text | safe | goes through `firewall._neutralize_delimiters` |
+| `board` — id, timestamp | **was exposed** | the neutralizer covers text only |
+| `recall --json` | safe | `json.dumps` escapes control characters (`ensure_ascii`) |
 | `recall --context` | safe | renders through the envelope, already neutralized (ADR-0013) |
-| `board` | safe | goes through `firewall._neutralize_delimiters` |
 
 ## Decision
 
@@ -81,10 +100,31 @@ and can judge it.
   hide the operator's own data. Showing it inert is strictly better than
   hiding it.
 
+Every other stored string on a human line — the id, the source pointer, the
+board id and timestamp — goes through the existing `_display_value`, which
+strips controls, collapses newlines to `?` and caps length. `--ids`
+additionally **reports** when it had to mangle an id, because a well-formed id
+never contains a newline: that is tampering evidence (ADR-0019), and
+swallowing it would be the silence this project keeps fixing.
+
+## Known residuals (documented, not hidden)
+
+- **U+2028 / U+2029** survive `_display_content` and are the only remaining
+  characters `str.splitlines()` treats as breaks, so a forged record can gain
+  extra rendered lines. Those lines take the renderer's four-space
+  continuation indent — exactly like the plain `\n` the renderer deliberately
+  supports — so this grants no capability a multi-line memory does not already
+  have.
+- **A line-leading `[2]` inside content** renders indented, where a real hit
+  sits at column 0. The envelope rewrites such lines to `(2)` because a model
+  cannot rely on indentation; a person can, and defacing legitimate numbered
+  lists on the human surface costs more than it buys.
+
 ## Consequences
 
-- A committed hostile store can no longer move the cursor, clear the screen, or
-  reorder a line on the human recall path.
+- A committed hostile store can no longer move the cursor, clear the screen,
+  reorder a line, fabricate a numbered hit, or steer `--ids | forget` onto a
+  record the query never matched.
 - Legitimate non-ASCII memories render exactly as before; a test pins that
   half explicitly, because a fix that quietly mangles Chinese or emoji would be
   a worse regression than the hole it closes.

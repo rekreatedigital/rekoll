@@ -904,9 +904,12 @@ def _source_pointer(record) -> str:
     prov = record.provenance
     if prov.source_file is None:
         return ""
+    # STORED data on a human line (ADR-0044): a forged store can put escapes or
+    # a newline in a source path just as easily as in content.
+    where = _display_value(prov.source_file, limit=200)
     if prov.chunk_index is None:
-        return f" | from: {prov.source_file}"
-    return f" | from: {prov.source_file}#{prov.chunk_index}"
+        return f" | from: {where}"
+    return f" | from: {where}#{prov.chunk_index}"
 
 
 # --- the relevance footer on the human recall list (issue #73) ---------------
@@ -1141,8 +1144,25 @@ def cmd_recall(args: argparse.Namespace) -> int:
         _out(result.context())
         return 0
     if args.ids:
+        # ONE id per line is this mode's whole contract — `recall --ids | xargs
+        # rekoll forget` is the documented pipeline. A stored id is
+        # attacker-controlled, and an id carrying a newline split into two
+        # tokens, the second of which could be ANOTHER record's real id: the
+        # pipeline then deleted a memory the query never matched. Verified data
+        # loss. `_display_value` collapses the newline, so a forged id renders
+        # as one visibly-malformed token that matches nothing (ADR-0044).
+        malformed = 0
         for rid in result.ids():
-            _out(rid)
+            safe = _display_value(rid, limit=200)
+            malformed += safe != rid
+            _out(safe)
+        if malformed:
+            _err(
+                f"warning: {malformed} id(s) here are malformed and were made "
+                "printable - a well-formed id never contains a newline or a "
+                "control character, so this store may have been edited outside "
+                "rekoll (ADR-0019). They will not match 'rekoll forget'."
+            )
         return 0
     for rank, hit in enumerate(result, 1):
         record = hit.record
@@ -1150,9 +1170,13 @@ def cmd_recall(args: argparse.Namespace) -> int:
         _out(f"[{rank}] {first}")
         for line in rest:
             _out(f"    {line}")
+        # The id and the source pointer are STORED strings too. Sanitizing only
+        # `content` left the very same attack alive one line below the line it
+        # fixed — and a newline in an id forged a byte-perfect extra "[3] ..."
+        # hit, which no character filter can catch: it needs the newline gone.
         _out(
             f"    ({record.kind.value} | trust: {record.trust_tier.name.lower()} "
-            f"| id: {record.id}{_source_pointer(record)})"
+            f"| id: {_display_value(record.id, limit=200)}{_source_pointer(record)})"
         )
     # On stderr, like every other thing this CLI says ABOUT a result (this
     # module's rule: results to stdout, messages to stderr) -- the two other
@@ -1243,6 +1267,7 @@ _BIDI_CONTROLS = frozenset(
     "‪‫‬‭‮"  # LRE RLE PDF LRO RLO
     "⁦⁧⁨⁩"        # LRI RLI FSI PDI
     "‎‏"                    # LRM RLM
+    "؜"                            # ALM - the fourth implicit mark, easily missed
 )
 
 
@@ -1485,9 +1510,13 @@ def _board_entry_lines(entry: dict) -> None:
     if text is None:
         text = "(text withheld below the trust floor)"
     _out(f"  {prefix}{text}")
+    # `text` is neutralized by the payload builder; the id and timestamp are
+    # NOT — they are stored strings, and a forged one carried escapes (and,
+    # with a newline, a whole fabricated board entry) straight to the terminal.
     _out(
         f"      ({entry.get('kind')} | trust: {entry.get('trust')} | "
-        f"id: {entry.get('id')} | {entry.get('created_at') or 'no timestamp'})"
+        f"id: {_display_value(entry.get('id'), limit=200)} | "
+        f"{_display_value(entry.get('created_at') or 'no timestamp', limit=64)})"
     )
 
 
