@@ -26,11 +26,17 @@ A dedicated **Security** heading is kept per the governance commitment in
   - **MCP registration (#84).** When a project-local `.mcp.json` (or
     `.cursor/mcp.json` / `.vscode/mcp.json`) registers rekoll, doctor WARNs if
     the config is invalid JSON, if its `command` or pinned `--path` no longer
-    exists (this broke silently twice after folder renames), or if **none of
-    the 50 most recent memories arrived through the MCP door** — the only
-    signal that separates "configured and working" from "configured and never
+    exists (this broke silently twice after folder renames), or if **nothing in
+    this scope has ever been written through the MCP door** — the only signal
+    that separates "configured and working" from "configured and never
     loaded", which once cost a 12-hour agent session. No line at all when no
     registration exists, so CLI-only users are never nagged.
+- **`StorageAdapter.count_by_source()`** — a new optional, bounded storage read
+  (concrete with a raising default, so out-of-tree adapters keep working)
+  counting effective-active records in a scope by `provenance.source_uri`. It
+  is what lets the MCP check answer "ever" exactly instead of inferring it from
+  a recency window; an adapter that cannot serve it makes doctor weaken its own
+  wording to "none of the 50 most recent" rather than over-claim.
 
 ### Changed
 

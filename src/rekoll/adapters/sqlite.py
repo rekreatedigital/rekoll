@@ -893,6 +893,28 @@ class SQLiteAdapter(StorageAdapter):
                 out[row["scope_key"]] = out.get(row["scope_key"], 0) + row["c"]
         return out
 
+    def count_by_source(self, *, scope: Scope, source_uri: str) -> int:
+        """Effective-ACTIVE rows in ``scope`` whose provenance source is exactly
+        ``source_uri`` (base contract, ADR-0041).
+
+        Scoped and equality-matched, so this is one bounded scalar per kind
+        table — the read behind doctor's "has anything ever arrived through the
+        MCP door?" line. ``prov_source_uri`` carries no index (it is not a
+        query axis anywhere else), which is acceptable here: the caller is an
+        explicitly-invoked diagnostic, not a recall path.
+        """
+        skey = scope.key()
+        total = 0
+        for table in _KIND_TABLE.values():
+            row = self._conn.execute(
+                f"SELECT COUNT(*) AS c FROM {table} "
+                f"WHERE scope_key=? AND prov_source_uri=? "
+                f"AND {_EFFECTIVE_STATUS_SQL} = ?",
+                (skey, source_uri, *_EFFECTIVE_STATUS_SQL_PARAMS, Status.ACTIVE.value),
+            ).fetchone()
+            total += row["c"]
+        return total
+
     def newest(self, *, scope: Scope, n: int = 3, kind: Optional[Kind] = None) -> GetResult:
         if n <= 0:
             return GetResult(records=())

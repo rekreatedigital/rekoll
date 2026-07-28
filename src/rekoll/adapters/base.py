@@ -220,6 +220,35 @@ class StorageAdapter(ABC):
             f"adapter '{self.name}' does not support newest-record enumeration"
         )
 
+    # --- optional: provenance-targeted count (the "which door" read) -------
+    def count_by_source(self, *, scope: Scope, source_uri: str) -> int:
+        """How many effective-ACTIVE records in ``scope`` carry exactly this
+        ``provenance.source_uri`` (ADR-0041).
+
+        Deliberately a TARGETED count and not a census: ``source_uri`` is a
+        file path for ingested content, so a ``{source: count}`` map over a
+        real repo would be unbounded — the bounded-read discipline
+        (ADR-0018) that ``scope_counts`` respects rules that shape out. One
+        scalar for one asked-about source is bounded by construction.
+
+        It exists so ``rekoll doctor`` can answer "has anything EVER arrived
+        through the MCP door in this scope?" exactly, rather than inferring it
+        from a recency window — a window says "not lately" while the operator
+        reads "never", and that lie is the same disease the check was built to
+        cure.
+
+        Counts on the EFFECTIVE status like :meth:`count`, so a quarantined or
+        forged active-at-trust-0 row never counts as evidence a door works.
+
+        Optional the same way :meth:`newest` is: a backend that cannot serve it
+        raises, and callers must degrade to a weaker, honestly-worded answer
+        rather than treating "cannot tell" as "no".
+        """
+        raise UnsupportedCapabilityError(
+            f"adapter '{self.name}' does not support provenance-targeted counts "
+            "(count_by_source)"
+        )
+
     # --- optional: whole-store scope census (the split detector, ADR-0040) --
     def scope_counts(self) -> Mapping[str, int]:
         """Effective-ACTIVE record count per scope, for the WHOLE store, as

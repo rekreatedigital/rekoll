@@ -69,28 +69,42 @@ server is ignored.
   so no server starts — the same silence with an earlier cause.
 - **WARN** when the registered `command` does not resolve, or a pinned
   `--path` does not exist. This is the rename incident, twice.
-- **WARN** when the registration is sound but **none of the 50 most recent
-  memories in this scope arrived through the MCP door**. This is the only
-  signal that separates "configured and working" from "configured and never
-  loaded" — config checks cannot see it, because in the reported incident the
-  config was correct. The wording states the sample size rather than claiming
-  a whole-store audit (ADR-0018 bounded reads), gives the actionable step
-  ("ask it to list its tools"), and says plainly that it is harmless for
-  CLI-only use.
+- **WARN** when the registration is sound but **nothing in this scope has ever
+  been written through the MCP door**. This is the only signal that separates
+  "configured and working" from "configured and never loaded" — config checks
+  cannot see it, because in the reported incident the config was correct. The
+  message gives the actionable step ("ask it to list its tools") and says
+  plainly that it is harmless for CLI-only use.
 
 MCP-origin writes are identifiable because `mcp_server._remember` passes
-`source="mcp"`, which lands in `provenance.source_uri`. No storage-contract
-change was needed, and none was made.
+`source="mcp"`, which lands in `provenance.source_uri`.
+
+### 3. A targeted provenance count, not a recency window
+
+The first implementation of the check above inferred "never loaded" from
+whether any of the 50 most recent memories came from MCP. Attacking this
+ADR's own branch showed that is **measurably wrong**: a scope with one MCP
+write followed by 60 CLI writes reported *"may never have loaded"* about a
+door that demonstrably had loaded. A check whose entire premise is "do not
+claim what you have not verified" cannot ship with that at its centre.
+
+So the storage contract gains one optional read,
+`StorageAdapter.count_by_source(scope, source_uri) -> int` — concrete with a
+raising default, effective-status gated, exactly the ADR-0040
+`scope_counts()` precedent. It answers the question exactly. The recency
+window survives only as a **degraded fallback** for adapters that cannot serve
+it, and in that case the sentence weakens itself to "none of the 50 most
+recent" instead of "ever". Both wordings are pinned by tests.
 
 ## Alternatives rejected
 
 - **Executing other `rekoll` binaries to read their version.** Precise, and an
   RCE footgun in a tool people run when something is already wrong.
-- **A new adapter method to count MCP-origin rows.** A `source_counts()` census
-  mirroring ADR-0040's `scope_counts()` was drafted and dropped: `source_uri`
-  is a file path for ingested content, so the map is unbounded on a real repo
-  — it would have violated the bounded-read discipline it was modelled on. A
-  fixed-size recency window answers the same question honestly.
+- **A `source_counts()` census** mirroring ADR-0040's `scope_counts()`:
+  dropped because `source_uri` is a file path for ingested content, so the map
+  is unbounded on a real repo — it would have violated the bounded-read
+  discipline it was modelled on. The targeted single-source count in §3 is
+  bounded by construction and answers the only question actually being asked.
 - **Scanning the user's home directory for editor configs.** Unbounded,
   unreliable, and outside the project the operator is standing in.
 - **FAIL instead of WARN.** Nothing here is broken or lost; the operator is

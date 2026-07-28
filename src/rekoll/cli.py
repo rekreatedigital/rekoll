@@ -2120,23 +2120,29 @@ def _mcp_entry_store_path(entry: dict) -> Optional[str]:
     return None
 
 
-def _mcp_origin_seen(args: argparse.Namespace) -> Optional[bool]:
-    """Whether any of the newest ``_MCP_ORIGIN_SAMPLE`` memories in this scope
-    arrived through the MCP door, or ``None`` when the question cannot be
-    answered (no store, or an adapter that cannot enumerate by recency).
+def _mcp_origin_seen(args: argparse.Namespace) -> tuple[Optional[bool], bool]:
+    """``(seen, exact)`` — has anything in this scope arrived through the MCP
+    door? ``seen`` is ``None`` when the question cannot be answered at all.
 
     This is the ONLY signal that separates "MCP is configured and working" from
     "MCP is configured and has never once loaded" — the 12-hour silent failure
     in field report #82. Config checks cannot see it: that reporter's config
     was correct; the client had simply never started the server.
 
-    Bounded by construction: a recency window, never a whole-store scan, and
-    the caller's wording says "recent" rather than implying a full audit.
+    Answered EXACTLY where possible (``adapter.count_by_source``, ADR-0041).
+    An earlier draft inferred it from a recency window, which was measurably
+    wrong: a scope whose MCP writes were followed by 60 CLI writes reported
+    "may never have loaded" about a door that demonstrably had. A check built
+    to stop a diagnostic from claiming what it had not verified must not do
+    exactly that itself. The window survives only as a DEGRADED fallback for
+    adapters that cannot serve the targeted count, and ``exact=False`` then
+    tells the caller to weaken its wording to "not recently".
     """
     if not _store_exists(args.path) or args.path == ":memory:":
-        return None
+        return (None, False)
     if _is_rekoll_store(args.path) is False:
-        return None
+        return (None, False)
+    from .adapters.base import UnsupportedCapabilityError
     from .adapters.registry import get_adapter
     from .model import Scope
 
@@ -2144,17 +2150,28 @@ def _mcp_origin_seen(args: argparse.Namespace) -> Optional[bool]:
     try:
         adapter = get_adapter("sqlite", path=args.path)
         try:
-            records = adapter.newest(scope=scope, n=_MCP_ORIGIN_SAMPLE).records
+            try:
+                return (
+                    adapter.count_by_source(
+                        scope=scope, source_uri=_MCP_SOURCE_URI
+                    ) > 0,
+                    True,
+                )
+            except UnsupportedCapabilityError:
+                records = adapter.newest(scope=scope, n=_MCP_ORIGIN_SAMPLE).records
+                if not records:
+                    return (None, False)  # an empty scope proves nothing
+                return (
+                    any(
+                        getattr(record.provenance, "source_uri", "") == _MCP_SOURCE_URI
+                        for record in records
+                    ),
+                    False,
+                )
         finally:
             adapter.close()
-    except Exception:  # includes UnsupportedCapabilityError: unknown, not False
-        return None
-    if not records:
-        return None  # an empty scope proves nothing about the MCP door
-    return any(
-        getattr(record.provenance, "source_uri", "") == _MCP_SOURCE_URI
-        for record in records
-    )
+    except Exception:  # a diagnostic never dies reading a store
+        return (None, False)
 
 
 def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
@@ -2209,19 +2226,27 @@ def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
             "'python -m rekoll.mcp_server' command)",
         )
 
-    seen = _mcp_origin_seen(args)
+    seen, exact = _mcp_origin_seen(args)
     if seen is False:
+        # Two different facts, two different sentences. Claiming "never" from a
+        # recency window is the exact over-claim this check exists to prevent.
+        evidence = (
+            "nothing in this scope has EVER been written through the MCP door"
+            if exact
+            else f"none of the {_MCP_ORIGIN_SAMPLE} most recent memories in "
+                 "this scope came through the MCP door"
+        )
         return (
             "WARN",
             f"{config_names} registers rekoll and the command resolves, but "
-            f"none of the {_MCP_ORIGIN_SAMPLE} most recent memories in this "
-            "scope came through the MCP door - if your agent should be writing "
-            "here, its client may never have loaded the server (most need a "
-            "restart/approval after the config is added). Ask it to list its "
-            "tools. Harmless if you only use the CLI",
+            f"{evidence} - if your agent should be writing here, its client may "
+            "never have loaded the server (most need a restart/approval after "
+            "the config is added). Ask it to list its tools. Harmless if you "
+            "only use the CLI",
         )
     if seen is True:
-        return ("ok", f"{config_names} registers rekoll; recent memories arrived via MCP")
+        proof = "memories here arrived via MCP" if exact else "recent memories arrived via MCP"
+        return ("ok", f"{config_names} registers rekoll; {proof}")
     return ("ok", f"{config_names} registers rekoll and the command resolves")
 
 
