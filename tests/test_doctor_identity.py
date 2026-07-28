@@ -47,19 +47,29 @@ def project(tmp_path, monkeypatch):
     return tmp_path
 
 
+#: Console-script filenames as the CURRENT platform writes them. The first
+#: version of this fixture always wrote ``rekoll.exe``, which POSIX correctly
+#: does not look for — every install test then found nothing on PATH and passed
+#: vacuously on Linux and macOS while proving something only on Windows.
+_SCRIPT_FILES = (
+    ("rekoll.exe", "rekoll-mcp.exe") if os.name == "nt" else ("rekoll", "rekoll-mcp")
+)
+
+
 def _fake_install(root: Path, version: str | None, *, editable: bool = False) -> Path:
     """A directory laid out like a real Python environment holding rekoll.
 
-    Windows layout (``<env>/Scripts`` + ``<env>/Lib/site-packages``) is used
-    because it is what the reported incident ran on; the POSIX glob is covered
-    by ``test_posix_layout_is_understood``.
+    Uses the ``<env>/Scripts`` + ``<env>/Lib/site-packages`` shape (what the
+    reported incident ran on) with platform-correct executable NAMES, so the
+    same assertions hold on all three CI operating systems. The POSIX
+    ``lib/python3.X`` layout is covered by ``test_posix_layout_is_understood``.
     """
     scripts = root / "Scripts"
     site = root / "Lib" / "site-packages"
     scripts.mkdir(parents=True, exist_ok=True)
     (site / "rekoll").mkdir(parents=True, exist_ok=True)
-    for stem in ("rekoll", "rekoll-mcp"):
-        (scripts / f"{stem}.exe").write_text("stub", encoding="utf-8")
+    for filename in _SCRIPT_FILES:
+        (scripts / filename).write_text("stub", encoding="utf-8")
     if editable:
         (site / "__editable__.rekoll-9.9.9.pth").write_text("/src", encoding="utf-8")
         (site / "rekoll-0.0.0.dist-info").mkdir(exist_ok=True)
@@ -78,9 +88,25 @@ def _fake_install(root: Path, version: str | None, *, editable: bool = False) ->
     return scripts
 
 
-def _only_on_path(monkeypatch, *script_dirs: Path) -> None:
+def _only_on_path(monkeypatch, *script_dirs: Path, expect_found: bool = True) -> None:
+    """Replace PATH with exactly these directories — and PROVE the fixture is
+    discoverable there.
+
+    Without the assertion these tests pass vacuously the moment the fixture and
+    the lookup disagree about filenames: an early version wrote ``rekoll.exe``
+    unconditionally, so on Linux and macOS every install test found nothing,
+    took the "no rekoll on PATH" branch, and asserted nothing at all while
+    reporting green.
+    """
+    from rekoll.cli import _rekoll_executables_on_path
+
     monkeypatch.setenv("PATH", os.pathsep.join(str(d) for d in script_dirs))
     monkeypatch.setenv("PATHEXT", ".EXE")
+    if script_dirs and expect_found:
+        assert _rekoll_executables_on_path(), (
+            "fixture is invisible to PATH lookup on this platform - the test "
+            "would pass without exercising anything"
+        )
 
 
 # -- #104: install identity ---------------------------------------------------
@@ -183,7 +209,7 @@ def test_one_install_is_not_counted_as_two(tmp_path, monkeypatch):
     offender list truncate two environments into "3 named and 1 more"."""
     env = tmp_path / "solo"
     scripts = _fake_install(env, "0.1.3")
-    assert len(list(scripts.glob("*.exe"))) == 2  # the premise
+    assert len([p for p in scripts.iterdir() if p.is_file()]) == 2  # the premise
     monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
     _only_on_path(monkeypatch, scripts)
     _running_from(monkeypatch, env)
@@ -195,7 +221,7 @@ def test_no_rekoll_on_path_says_so(tmp_path, monkeypatch):
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr("rekoll.cli.__version__", "0.1.3")
-    _only_on_path(monkeypatch, empty)
+    _only_on_path(monkeypatch, empty, expect_found=False)  # emptiness IS the case
     level, detail = _check_install()
     assert level == "ok"
     assert "no 'rekoll' command on PATH" in detail
