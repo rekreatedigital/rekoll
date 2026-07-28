@@ -567,12 +567,136 @@ def _board(mem: Memory, config: ServerConfig) -> dict:
     ).to_dict()
 
 
+# -- the supported `mcp` SDK range --------------------------------------------
+#
+# Floor 1.3 — the server hands agents an `instructions` string on initialize;
+# `FastMCP(instructions=...)` and `InitializeResult.instructions` both first
+# exist in 1.3.0 (1.2.x silently drops them). A pinned CI cell installs exactly
+# this floor, and a real user on an old client depends on it.
+#
+# Ceiling <2 — mcp 2.0.0 REMOVED `mcp.server.fastmcp` (the class became
+# `MCPServer` in `mcp.server.mcpserver`) and no longer accepts a plain `-> dict`
+# tool as structured output. See ADR-0045 for the port assessment; until that
+# work lands, 2.x cannot serve Rekoll's payloads at all.
+#
+# This string is quoted to users as fact, so it must stay byte-identical to the
+# [mcp] extra in pyproject.toml — tests/test_mcp_compat.py pins the pair.
+_MCP_REQUIREMENT = "mcp>=1.3,<2"
+_MCP_MIN: tuple[int, ...] = (1, 3)
+_MCP_MAX_EXCLUSIVE: tuple[int, ...] = (2,)
+
+
+def _version_tuple(raw: str) -> tuple[int, ...]:
+    """The leading numeric release components of a version string.
+
+    ``"2.0.0rc1" -> (2, 0, 0)``. Deliberately tiny: rekoll has zero runtime
+    dependencies, so there is no ``packaging`` to parse with, and the only
+    question asked here is which side of 1.3 / 2.0 a release sits on.
+    """
+    parts: list[int] = []
+    for chunk in raw.split(".")[:4]:
+        digits = ""
+        for ch in chunk:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+def _mcp_version_supported(raw: Optional[str]) -> Optional[bool]:
+    """Is this ``mcp`` version one Rekoll supports?
+
+    Three-state on purpose (ADR-0041): ``True`` / ``False`` / ``None`` for "I
+    could not tell". An unparseable version is never guessed at in either
+    direction — the caller says so instead of inventing a verdict.
+    """
+    if not raw:
+        return None
+    parsed = _version_tuple(raw)
+    if not parsed:
+        return None
+    return _MCP_MIN <= parsed < _MCP_MAX_EXCLUSIVE
+
+
+def _mcp_sdk_state() -> tuple[bool, Optional[str]]:
+    """``(an mcp is installed, its version or None)`` — WITHOUT importing it.
+
+    Reading metadata and locating a spec are both non-executing: neither runs
+    the package's module-level code. That matters for the same reason ADR-0041
+    refuses to execute a stranger's ``rekoll`` binary to ask its version — a
+    diagnostic reads, it does not run. (Note the distinction: ``build_server``
+    is about to import ``mcp`` for real, because serving is its whole job.
+    Probing is not serving, and must not borrow serving's privileges.)
+
+    Metadata is the primary answer because an installed *distribution* is what
+    "the extra is installed" means. ``find_spec`` is the fallback for a
+    vendored copy that carries no dist-info.
+    """
+    version: Optional[str] = None
+    try:
+        from importlib.metadata import version as _dist_version
+
+        version = _dist_version("mcp")
+    except Exception:
+        version = None
+
+    if version is not None:
+        return (True, version)
+
+    try:
+        import importlib.util
+
+        return (importlib.util.find_spec("mcp") is not None, None)
+    except Exception:
+        # A blanked/broken `mcp` entry answers neither way; absent is the safe
+        # reading, and it keeps the install hint as the fallback message.
+        return (False, None)
+
+
 # -- server assembly (the only place mcp is imported) --------------------------
 
 _INSTALL_HINT = (
     "The Rekoll MCP server needs the optional 'mcp' extra.\n"
     'Install it with:  pip install "rekoll[mcp]"'
 )
+
+
+def _one_line(text: str, limit: int = 200) -> str:
+    """Collapse environment-derived text to one bounded line.
+
+    Startup errors are printed to a terminal, so echoed text must not be able
+    to forge output lines rekoll never wrote — ADR-0044, and issue #112, where
+    plain spaces alone reproduced doctor's column layout on a new visual line.
+    """
+    cleaned = "".join(ch if ch.isprintable() else " " for ch in text)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:limit] + ("..." if len(cleaned) > limit else "")
+
+
+def _import_failure_message(exc: BaseException) -> str:
+    """Which of two very different failures just happened (issue #114).
+
+    The old guard blamed a missing extra for ANY ImportError out of
+    ``mcp.server.fastmcp`` — so when mcp 2.0.0 removed that module, a user who
+    had *just* run ``pip install "rekoll[mcp]"`` was told to install the extra.
+    Report only what was actually verified (ADR-0041): if an ``mcp`` is
+    present, say so, name its version, and name the constraint it violates.
+    """
+    present, installed = _mcp_sdk_state()
+    if not present:
+        return _INSTALL_HINT
+
+    named = f"mcp {_one_line(installed, limit=64)}" if installed else "the installed 'mcp'"
+    return (
+        f"The Rekoll MCP server does not support {named}.\n"
+        f"Rekoll needs:  {_MCP_REQUIREMENT}\n"
+        f"Import failed: {_one_line(str(exc))}\n"
+        f'Fix it with:   pip install "{_MCP_REQUIREMENT}"\n'
+        f'(pipx users:   pipx inject rekoll "{_MCP_REQUIREMENT}")'
+    )
 
 
 def build_server(config: ServerConfig):
@@ -583,8 +707,8 @@ def build_server(config: ServerConfig):
     """
     try:
         from mcp.server.fastmcp import FastMCP
-    except ImportError as exc:  # pragma: no cover - only without the extra
-        raise ImportError(_INSTALL_HINT) from exc
+    except ImportError as exc:
+        raise ImportError(_import_failure_message(exc)) from exc
 
     mem = Memory(
         path=config.path,

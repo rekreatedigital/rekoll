@@ -2558,6 +2558,70 @@ def _mcp_origin_seen(entry: dict) -> tuple[Optional[bool], bool]:
         return (None, False)
 
 
+def _mcp_sdk_state() -> tuple[bool, Optional[str]]:
+    """``(an mcp is installed, its version or None)``, without importing it.
+
+    Thin re-export of the server's own probe so doctor and ``rekoll-mcp`` can
+    never disagree about what is installed — the same single-sourcing reason
+    ``_mcp_server_target`` imports ``_derived_project`` from ``mcp_server``.
+    That module imports with the stdlib alone (all ``mcp`` imports are lazy),
+    so this costs nothing on the default CLI path.
+    """
+    from .mcp_server import _mcp_sdk_state as _probe
+
+    return _probe()
+
+
+def _check_mcp_sdk() -> Optional[tuple[str, str]]:
+    """Can the MCP server's SDK dependency actually satisfy it? (issue #114)
+
+    mcp 2.0.0 removed ``mcp.server.fastmcp``, so every fresh
+    ``pip install "rekoll[mcp]"`` produced a server that exited on startup —
+    and doctor, which reported MCP *registration* (ADR-0041 §2) while saying
+    nothing about whether the server could *start*, printed a clean bill of
+    health for exactly that machine. This is the check someone runs doctor to
+    get.
+
+    Returns ``None`` when no ``mcp`` is installed at all: that user never
+    opened this door, and ADR-0041's rule against nagging CLI-only users
+    applies here for the same reason it applies to the registration check.
+
+    **This never imports ``mcp``** — it compares the version recorded in
+    packaging metadata against the declared requirement. Importing would run
+    the package's module-level code, and ADR-0041 §1's never-execute rule
+    exists precisely so a diagnostic cannot become a code path. A version read
+    also states exactly what it verified: that the installed release is inside
+    (or outside) the supported range — NOT that the server will start, which
+    only starting it could establish.
+    """
+    from .mcp_server import _MCP_REQUIREMENT, _mcp_version_supported
+
+    present, installed = _mcp_sdk_state()
+    if not present:
+        return None
+
+    # A version string reaches this line from installed packaging metadata,
+    # which is on disk and outside rekoll's control; doctor's output is column
+    # formatted, so sanitize it like any other echoed value (ADR-0044, #112).
+    shown = _display_one_line(installed, limit=64) if installed else None
+    supported = _mcp_version_supported(installed)
+
+    if supported is True:
+        return ("ok", f"mcp {shown} is installed, inside rekoll's supported {_MCP_REQUIREMENT}")
+    if supported is False:
+        return (
+            "WARN",
+            f"mcp {shown} is installed, but rekoll needs {_MCP_REQUIREMENT} - "
+            f"'rekoll-mcp' cannot start, so your agent gets no rekoll tools. "
+            f'Fix with: pip install "{_MCP_REQUIREMENT}"',
+        )
+    return (
+        "WARN",
+        f"an 'mcp' package is installed but its version could not be read - "
+        f"rekoll needs {_MCP_REQUIREMENT}, and this copy cannot be checked against it",
+    )
+
+
 def _check_mcp(args: argparse.Namespace) -> Optional[tuple[str, str]]:
     """Is the MCP door actually wired up, and has anything come through it?
     (issue #84)
@@ -2684,6 +2748,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     scopes = _check_scopes(args)  # the split detector (issue #83 / ADR-0040)
     if scopes is not None:
         checks.append((scopes[0], "scopes", scopes[1]))
+    # Can the server's SDK satisfy it (#114) BEFORE whether it is registered
+    # (#84): a registration that is perfect in every way still yields no tools
+    # when `rekoll-mcp` exits on startup, so that is the fact to read first.
+    mcp_sdk = _check_mcp_sdk()
+    if mcp_sdk is not None:
+        checks.append((mcp_sdk[0], "mcp sdk", mcp_sdk[1]))
     mcp = _check_mcp(args)  # registration reality check (issue #84 / ADR-0041)
     if mcp is not None:
         checks.append((mcp[0], "mcp", mcp[1]))

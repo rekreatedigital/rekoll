@@ -499,12 +499,22 @@ def test_build_server_without_mcp_extra_prints_hint_and_exits_1(tmp_path, monkey
     job's coverage of the lazy-import contract, so it must pass whether or not
     the extra is installed: we block every ``mcp`` module to simulate its
     absence (a bare ``sys.modules['mcp'] = None`` leaves cached submodules like
-    ``mcp.server.fastmcp`` importable, so blank them all)."""
+    ``mcp.server.fastmcp`` importable, so blank them all).
+
+    Blanking sys.modules is no longer sufficient on its own: since #114 the
+    guard also asks whether an ``mcp`` DISTRIBUTION is installed, so that it
+    can tell "you never installed the extra" from "the mcp you installed is
+    incompatible". On a runner that has the extra, the metadata says installed
+    however thoroughly sys.modules is blanked — so absence must be simulated at
+    that probe too, or this test would be asserting against a machine state
+    that cannot exist. The incompatible branch is pinned in
+    tests/test_mcp_compat.py."""
     from rekoll import mcp_server
 
     for name in [m for m in list(sys.modules) if m == "mcp" or m.startswith("mcp.")]:
         monkeypatch.setitem(sys.modules, name, None)
     monkeypatch.setitem(sys.modules, "mcp", None)
+    monkeypatch.setattr(mcp_server, "_mcp_sdk_state", lambda: (False, None))
 
     # build_server raises the ImportError with the install hint...
     with pytest.raises(ImportError) as build_exc:
