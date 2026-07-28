@@ -12,12 +12,20 @@ Design rules for this module:
  - Results go to stdout; errors, warnings, and hints go to stderr.
  - Exit codes: 0 success, 1 operational failure (including "no results", like
    grep), 2 usage error (argparse). Suitable for scripting.
- - Rekoll's own messages are ASCII-only. Stored content is echoed as-is EXCEPT
+ - Rekoll's own messages are ASCII-only. Stored content is echoed CHARACTER-FOR-
+   CHARACTER, but no longer necessarily LINE-for-line, and it is echoed EXCEPT
    for characters that would drive the terminal rather than appear in it —
    control codes and bidi overrides are dropped on the human render path
    (``_display_content``, ADR-0044). Every printable character survives,
    non-ASCII included, with ``errors="replace"`` guarding consoles that can't
    render it (cp1252 etc.).
+ - **Rekoll owns the wrap point** (ADR-0046). On a terminal, every human line
+   is split to the terminal's width in DISPLAY COLUMNS and every visual line
+   after the first begins with ``_CONTINUATION`` at column 0, so no stored text
+   can start a visual line that reads as rekoll's own output. Content is
+   reflowed, never rewritten: the pieces concatenate back to the stored bytes.
+   A redirected or piped stream is left alone, and the machine doors
+   (``--json``/``--context``/``--ids``) use ``_raw_out`` and never wrap at all.
  - Read-style commands (recall/forget/status) never create a store as a side
    effect; only ``init``, ``remember`` and ``ingest`` do.
 """
@@ -34,6 +42,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import unicodedata
 import warnings
 from pathlib import Path
 from typing import Optional
@@ -56,7 +65,180 @@ _TRUST_CHOICES = [t.name.lower() for t in TrustTier if t is not TrustTier.QUARAN
 _GITIGNORE_FORMS = {".rekoll", ".rekoll/", "/.rekoll", "/.rekoll/"}
 
 
+# ---------------------------------------------------------------------------
+# owning the wrap point (issue #115 / ADR-0046)
+# ---------------------------------------------------------------------------
+
+#: The continuation marker. Every VISUAL line rekoll emits on a terminal is
+#: either the first line of something rekoll started, or begins with this at
+#: **column 0**. That is the security property, and the wrapping is only the
+#: means: a soft-wrapped line always begins at column 0, so until rekoll put
+#: something of its own there, attacker-suppliable text could (ADR-0044's
+#: content residual, issue #112's reproduction).
+#:
+#: An attacker who knows the marker can of course type it into their content —
+#: and gains nothing, because it lands *after* the marker rekoll already
+#: emitted. Column 0 is the part they cannot reach. `|` is chosen because it
+#: is ASCII (this module's rule: rekoll's own words are ASCII-only), it is one
+#: column wide in every script, and no other line rekoll prints starts with it:
+#: the `[N] ` hit line, the two-space `doctor`/board indent, the four-space
+#: `(kind | trust: ... | id: ...)` detail line and the unindented `status`
+#: report all begin with something else. The three trailing spaces keep
+#: continued content aligned under the four-column `[N] ` gutter.
+_CONTINUATION = "|   "
+
+#: A terminal advances a TAB to the next multiple of this from the CURRENT
+#: column — which is why tab width cannot be counted per character in
+#: isolation, and why :func:`_visual_wrap` tracks the column it is writing at.
+_TAB_STOP = 8
+
+#: Below this many columns the marker plus one character of text would not fit
+#: reliably, and no layout survives anyway. Emit unwrapped rather than emit
+#: lines that soft-wrap regardless and only look like they were controlled.
+_MIN_WRAP_WIDTH = 12
+
+
+def _char_columns(ch: str, col: int) -> int:
+    """How many display COLUMNS ``ch`` occupies when written at column ``col``.
+
+    ``len()`` counts characters; a terminal counts columns, and the two differ
+    for exactly the characters ``_display_content`` deliberately preserves
+    (ADR-0044 keeps CJK, emoji, accents and ZWJ). A naive character-counting
+    wrap is defeated by 38 CJK characters or by 10 tabs — both measured 80 or
+    fewer "characters", both showed three visual lines at 80 columns, and both
+    put attacker text back at column 0. Hence this function, and hence the two
+    tests that pin it.
+
+    * TAB advances to the next :data:`_TAB_STOP` boundary from ``col``;
+    * East Asian Wide/Fullwidth (CJK, most emoji) take two columns;
+    * combining marks, format characters (ZWJ/ZWNJ) and stray controls take
+      none — they attach to the character before them rather than advancing;
+    * everything else takes one.
+
+    Honest limit: no pure-stdlib function knows how a given terminal renders a
+    ZWJ *emoji sequence* (one glyph in some, several in others). Counting each
+    scalar separately over-counts there, which shortens a line — the safe
+    direction, since a short line never soft-wraps.
+    """
+    if ch == "\t":
+        return _TAB_STOP - (col % _TAB_STOP)
+    if unicodedata.combining(ch):
+        return 0
+    if unicodedata.category(ch) in ("Mn", "Me", "Cf", "Cc"):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _visual_wrap(line: str, width: int) -> list:
+    """One logical line, split into visual lines of at most ``width`` columns.
+
+    **Lossless by construction**: the pieces are slices of ``line`` in order,
+    so stripping the marker from every piece after the first and concatenating
+    reproduces the input exactly. Nothing is truncated, reflowed or rewritten —
+    that rules out ``textwrap``, whose defaults (``expand_tabs``,
+    ``replace_whitespace``) would silently edit stored content, and whose
+    measurement is in characters rather than columns anyway.
+
+    A word boundary is preferred when one falls in the last quarter of the
+    line, purely so prose does not break mid-word; the space stays on the
+    piece it came from, so the losslessness above still holds.
+    """
+    if width < _MIN_WRAP_WIDTH:
+        return [line]
+    pieces = []
+    rest = line
+    prefix = ""
+    start = 0
+    while True:
+        col = start
+        cut = 0
+        for i, ch in enumerate(rest):
+            step = _char_columns(ch, col)
+            if col + step > width:
+                break
+            col += step
+            cut = i + 1
+        else:
+            pieces.append(prefix + rest)
+            return pieces
+        # A single character wider than the whole line: emit it alone rather
+        # than loop forever. It over-runs by design; nothing else can be done.
+        cut = max(cut, 1)
+        space = rest.rfind(" ", (cut * 3) // 4, cut)
+        if space != -1:
+            cut = space + 1
+        pieces.append(prefix + rest[:cut])
+        rest = rest[cut:]
+        prefix = _CONTINUATION
+        start = len(_CONTINUATION)
+
+
+def _wrap_width(stream) -> Optional[int]:
+    """The width to wrap ``stream`` to, or ``None`` for "do not wrap at all".
+
+    Two different questions, and the obvious API answers the wrong one.
+    ``shutil.get_terminal_size()`` queries ``sys.__stdout__`` — the process's
+    ORIGINAL stdout — so under ``rekoll recall > file`` launched from a
+    terminal it happily returns the console's width and never the 80 fallback.
+    Asked "how wide is the terminal" it is right; asked "is there a terminal"
+    it is silently wrong.
+
+    So the two are asked separately: ``isatty()`` on the stream actually being
+    written decides WHETHER to wrap, ``get_terminal_size()`` only decides how
+    wide. Fails CLOSED to ``None`` on an absent, closed or exotic stream — the
+    ``_stdin_is_interactive`` rule — because not wrapping is the behaviour
+    every existing caller already gets.
+
+    A redirected or piped stream is deliberately left alone: there is no
+    terminal choosing a wrap point at that moment, and a script reading
+    rekoll's human output must keep getting whole lines. ``COLUMNS`` (which
+    ``get_terminal_size`` consults first) is the width override; there is no
+    rekoll-specific flag, and piping is the way to switch wrapping off.
+    """
+    try:
+        if stream is None or not stream.isatty():
+            return None
+    except (OSError, ValueError, AttributeError):
+        return None
+    try:
+        return shutil.get_terminal_size().columns
+    except (OSError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+def _emit(message: str, stream) -> None:
+    """One human message, wrapped to ``stream``'s terminal if it has one.
+
+    ``split("\\n")`` rather than ``splitlines()``: this is rekoll's own
+    formatting being taken apart and put back exactly, so it must not also
+    break on U+2028/U+2029 or eat a trailing empty line. Callers that DO want
+    stored line breaks honoured split with ``splitlines()`` first and pass each
+    line here separately (``cmd_recall``), which is also what gives those lines
+    the continuation marker.
+    """
+    width = _wrap_width(stream)
+    if width is None:
+        print(message, file=stream)
+        return
+    for logical in message.split("\n"):
+        for piece in _visual_wrap(logical, width):
+            print(piece, file=stream)
+
+
 def _out(message: str = "") -> None:
+    _emit(message, sys.stdout)
+
+
+def _raw_out(message: str) -> None:
+    """A MACHINE payload: these bytes, this many lines, never wrapped.
+
+    ``--json`` (one parseable object), ``--context`` (envelope byte-identity,
+    ADR-0013) and ``--ids`` (one bare id per line — ``rekoll forget $(rekoll
+    recall q --ids)`` splits on any whitespace, so a wrapped id is the data
+    loss ADR-0044's amendment closed) are contracts with a program, not
+    output for a person to read. They do not get the wrap point and they do
+    not get the marker.
+    """
     print(message)
 
 
@@ -66,7 +248,7 @@ def _err(message: str = "") -> None:
         # print(file=None) silently falls back to STDOUT - which would leak
         # warnings onto the machine-readable result stream. Drop the message.
         return
-    print(message, file=sys.stderr)
+    _emit(message, sys.stderr)
 
 
 def _fail(message: str) -> int:
@@ -527,13 +709,18 @@ def _run_init_wizard(args: argparse.Namespace) -> int:
         # user the store is in a bad state AFTER earlier rules permanently
         # stored - a partial save must still be reported truthfully.
         for record_id, text in stored:
-            _out(f"  saved: {record_id}  {text}")
+            _out(f"  saved: {_display_token(record_id)}  {_display_content(text)}")
         return _fail(f"could not save every rule: {exc}")
     finally:
         mem.close()
     _out(f"Saved {len(stored)} standing rule{'s' if len(stored) != 1 else ''}:")
     for record_id, text in stored:
-        _out(f"  {record_id}  {text}")
+        # Both are STORED strings, not the text just typed: the trust-aware
+        # upsert (ADR-0023) can keep an existing higher-trust row and hand its
+        # content back, so a row a hostile store shipped can be echoed here.
+        # ADR-0044 sanitized every other stored-content render and missed this
+        # one; the same two filters apply (ADR-0046 §Scope).
+        _out(f"  {_display_token(record_id)}  {_display_content(text)}")
     if any(text != rule for (_, text), rule in zip(stored, rules)):
         _out("  (a stored rule above differs from what you typed: secret-looking")
         _out("   values are never stored - they are replaced with [REDACTED:...])")
@@ -705,7 +892,11 @@ def cmd_remember(args: argparse.Namespace) -> int:
         return _fail(str(exc))
     finally:
         mem.close()
-    _out(f"Remembered: {record.id}")
+    # `_display_token` like every other rendered id (ADR-0044): the id is
+    # content-addressed and so unchanged by the filter, but the trust-aware
+    # upsert can return an EXISTING row (ADR-0023) whose id came out of the
+    # store, and no rendered id should be the one that skips the filter.
+    _out(f"Remembered: {_display_token(record.id)}")
     if kind is Kind.DIRECTIVE and trust < DIRECTIVE_FLOOR:
         if stored_trust is not None and stored_trust >= DIRECTIVE_FLOOR:
             # The trust-aware upsert kept the existing, higher-trust row
@@ -1139,12 +1330,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
         # unchanged (1 = no results), so `recall --json || handle` still works.
         # json.dumps defaults to ensure_ascii=True, which this module wants:
         # recalled content may hold characters a cp1252 console cannot encode.
-        _out(json.dumps(_recall_payload(result)))
+        _raw_out(json.dumps(_recall_payload(result)))
         return 1 if empty else 0
     if empty:
         return 1
     if args.context:
-        _out(result.context())
+        _raw_out(result.context())
         return 0
     if args.ids:
         # ONE id per line is this mode's whole contract — `recall --ids | xargs
@@ -1164,7 +1355,12 @@ def cmd_recall(args: argparse.Namespace) -> int:
         for rid in result.ids():
             safe = _display_token(rid, limit=200)
             malformed += safe != rid
-            _out(safe)
+            # `_raw_out`, never `_out`: the wrap point (ADR-0046) owns rekoll's
+            # HUMAN lines, and one bare id per line is this mode's contract with
+            # a program. Wrapping a long id would split it into two tokens, which
+            # is the `$(...)`/xargs data loss ADR-0044's amendment closed. The
+            # `_display_token` cap keeps a real id well inside any width anyway.
+            _raw_out(safe)
         if malformed:
             _err(
                 f"warning: {malformed} id(s) here are malformed and were made "
@@ -1178,7 +1374,14 @@ def cmd_recall(args: argparse.Namespace) -> int:
         first, *rest = _display_content(record.content).splitlines() or [""]
         _out(f"[{rank}] {first}")
         for line in rest:
-            _out(f"    {line}")
+            # The marker, not a bare four-space indent (ADR-0046). A stored
+            # newline is semantically the same thing as a wrap: more of the
+            # entry above. Rendering both the same way makes ONE statement
+            # true — every visual line of a hit after the first begins with
+            # `|` at column 0 — and closes two ADR-0044 residuals with it: a
+            # line-leading `[2]` inside content, and U+2028/U+2029, which
+            # `splitlines()` also breaks on and which land here.
+            _out(f"{_CONTINUATION}{line}")
         # The id and the source pointer are STORED strings too. Sanitizing only
         # `content` left the very same attack alive one line below the line it
         # fixed — and a newline in an id forged a byte-perfect extra "[3] ..."
@@ -1304,11 +1507,20 @@ def _display_content(text: str) -> str:
       legitimate stored text (``ﬁ`` → ``fi``) on its way to the screen, and a
       viewer must show what is stored.
 
-    Applies to the HUMAN hit list only. ``--json`` already escapes control
-    characters via ``json.dumps``, ``--context`` renders through the envelope
-    (byte-identical by ADR-0013, and already neutralized), the board renders
-    through ``_neutralize_delimiters``, and ``--ids`` prints no content — all
-    verified, none changed.
+    Applies to the HUMAN hit list (and the wizard's echo of a stored rule).
+    ``--json`` already escapes control characters via ``json.dumps``,
+    ``--context`` renders through the envelope (byte-identical by ADR-0013, and
+    already neutralized), the board renders through ``_neutralize_delimiters``,
+    and ``--ids`` prints no content — all verified, none changed.
+
+    This filter decides which CHARACTERS reach the terminal. It has never
+    decided where a LINE begins, which is the other half of the same problem
+    and was ADR-0044's open residual: printable text of the right length reached
+    the terminal's soft-wrap boundary and started a visual line of its own. That
+    half is closed one level up, by :func:`_visual_wrap` and
+    :data:`_CONTINUATION` (ADR-0046) — so this function is still free to be the
+    smallest possible edit, and still returns text with its ``\\t``, its ``\\n``
+    and its CJK intact.
     """
     out = []
     for ch in text:
@@ -1387,11 +1599,14 @@ def _display_one_line(value: object, limit: int = 160) -> str:
     ``str.split()`` also eats tabs and newlines, so this is strictly stronger
     than :func:`_display_value` on those characters too.
 
-    It does NOT claim more than it does: single-spaced prose can still reach a
-    wrap boundary, so an attacker-chosen PATH can still start a visual line —
-    it just cannot look like rekoll's own columns any more. Fields that never
-    legitimately hold a space use :func:`_display_token`, which closes that
-    too. ADR-0044 records the residual.
+    What it buys is the column layout, not immunity: single-spaced prose still
+    reaches a wrap boundary, so on its own this filter never stopped an
+    attacker-chosen PATH from starting a visual line — it only stopped that
+    line from looking like rekoll's own columns. ADR-0044 recorded that as a
+    residual; ADR-0046 closes it on a terminal, because rekoll now chooses the
+    wrap point and marks the continuation (:func:`_visual_wrap`). This filter
+    stays as it is: it is what keeps a path on ONE logical line, which is what
+    makes the marker's statement about visual lines worth anything.
     """
     return _display_value(" ".join(str(value).split()), limit=limit)
 
@@ -1693,7 +1908,7 @@ def cmd_board(args: argparse.Namespace) -> int:
         # payload the SDK's BoardResult.to_dict() and the MCP `board` tool
         # serve (pinned by the three-doors parity suite). ensure_ascii like
         # recall --json: stored content must survive a cp1252 console.
-        _out(json.dumps(payload))
+        _raw_out(json.dumps(payload))
         return 0
     _render_board_human(
         scope.key(), args.path, payload,
