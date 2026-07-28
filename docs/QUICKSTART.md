@@ -1,9 +1,15 @@
 # Quickstart — pick your door
 
 Rekoll gives your project a private, durable memory that AI tools can use but
-can't be tricked by. Everything below runs on your machine: **no API key, no
-telemetry** (usage tracking — Rekoll phones home to no one), **nothing leaves
-your box**, and **nothing you store is ever used to train an AI**. That's not a
+can't be tricked by. What it is *for* is the **why** behind your code — the
+choices you made, the rules you must not break, the traps you already hit — the
+things that aren't written in any file and that every fresh AI session otherwise
+makes you explain again. It can index your files too, and that's useful for
+pointing an answer at a source; it just isn't the reason to install it.
+
+Everything below runs on your machine: **no API key, no telemetry** (usage
+tracking — Rekoll phones home to no one), **nothing leaves your box**, and
+**nothing you store is ever used to train an AI**. That's not a
 policy that could quietly change — the default setup runs no code that can send
 your data anywhere (the opt-in cloud layer is never even imported unless you
 name a provider, ADR-0015), and an automated test (CI) enforces it (ADR-0007).
@@ -81,12 +87,31 @@ stay non-interactive.
 Then, day to day:
 
 ```bash
-rekoll remember "we chose Postgres over BigQuery for cost"   # save one fact
+rekoll remember "we chose Postgres over BigQuery for cost"   # save a decision
 rekoll recall "why postgres?"                                # search by meaning
-rekoll ingest .                                              # index the whole repo (code + docs)
+rekoll ingest .                                              # optional: index this repo's files
 rekoll status                                                # what's stored, and how
 rekoll doctor                                                # something wrong? start here
 ```
+
+**`remember` is the habit worth forming.** Say why you chose something, the rule
+that must hold, the thing that bit you — in your own words, when it happens.
+Those are the memories a later session can't get any other way.
+
+**What `ingest` is for.** It bulk-loads files into the same index, and its real
+job is *navigation and provenance*: every hit from a file carries the file it
+came from (`sources` below), so a recalled answer tells your AI **where to go**
+instead of making it re-explore the tree — and when a memory turns out to be
+wrong, you know which file to fix. Point it at a project whose docs already
+explain decisions (ADRs, design notes, runbooks) and you get a decision index
+for free. Point it at a large source tree and you mostly get chunks your AI
+would have grepped faster; that still works, it just isn't where the value is.
+
+**Run it from the repo root — `rekoll ingest .`, not `rekoll ingest src`.** A
+file's stored identity is its path *relative to what you ingested*, so the same
+file indexed from two different roots is stored as two different memories. One
+root per project, and everyone on the team uses the same one
+([ADR-0042](adr/0042-team-consistency-model.md) §2).
 
 Useful flags:
 
@@ -343,6 +368,16 @@ still shell out to the CLI: `rekoll recall "<question>" --context`.)
 
 ## Common questions
 
+- **What should I actually store?** Decisions and rules — *why* you chose this
+  over that, what must never happen, the trap you just spent an hour on. If a
+  fact is already in a file your AI can open and grep, storing it adds little;
+  if it only exists because you decided it, storing it is the whole point.
+- **So should I ingest my whole repo?** You can, and nothing breaks — but expect
+  most of those chunks to sit unused, because your AI reads and greps files
+  faster and more exactly than any semantic index. Ingest earns its keep on the
+  prose that explains decisions (ADRs, design docs, runbooks) and on giving hits
+  a file to point at. It also costs real disk: most of a store's size is the
+  vectors, not the text.
 - **Do I need an AI/API key?** No. Saving and searching use a small local
   model (or plain keyword matching) — free, offline, private.
 - **Where is my data?** In `./.rekoll/memory.db`, a normal SQLite file you can
