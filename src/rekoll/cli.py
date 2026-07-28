@@ -104,10 +104,11 @@ def _char_columns(ch: str, col: int) -> int:
     ``len()`` counts characters; a terminal counts columns, and the two differ
     for exactly the characters ``_display_content`` deliberately preserves
     (ADR-0044 keeps CJK, emoji, accents and ZWJ). A naive character-counting
-    wrap is defeated by 38 CJK characters or by 10 tabs — both measured 80 or
-    fewer "characters", both showed three visual lines at 80 columns, and both
-    put attacker text back at column 0. Hence this function, and hence the two
-    tests that pin it.
+    wrap is defeated by 38 CJK characters (100 characters, 138 columns — it
+    cuts 42 characters into the payload and the terminal wraps the rest) and by
+    10 tabs (72 characters, 142 columns — it sees 72 and does not wrap at all).
+    Either way the attacker's text is back at column 0. Hence this function,
+    and hence the two tests that pin it.
 
     * TAB advances to the next :data:`_TAB_STOP` boundary from ``col``;
     * East Asian Wide/Fullwidth (CJK, most emoji) take two columns;
@@ -134,8 +135,9 @@ def _visual_wrap(line: str, width: int) -> list:
 
     **Lossless by construction**: the pieces are slices of ``line`` in order,
     so stripping the marker from every piece after the first and concatenating
-    reproduces the input exactly. Nothing is truncated, reflowed or rewritten —
-    that rules out ``textwrap``, whose defaults (``expand_tabs``,
+    reproduces the input exactly. The text is reflowed and nothing else:
+    nothing is truncated, dropped or rewritten — which rules out ``textwrap``,
+    whose defaults (``expand_tabs``,
     ``replace_whitespace``) would silently edit stored content, and whose
     measurement is in characters rather than columns anyway.
 
