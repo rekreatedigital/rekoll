@@ -343,3 +343,66 @@ def test_returned_counts_are_coherent(tmp_path):
     assert stats["secrets_stored"] == 0
     assert stats["total"] == mem.count()
     mem.close()
+
+
+# ---- GHSA-mcv6-g76w-c6px: markdown credential files ------------------------
+#
+# `credentials.json` was on the skip-list from issue #29, but `.md` and `.txt`
+# are in DEFAULT_INCLUDE_EXT while `.json` credential files are the only ones
+# anyone thought to name. A project that documents its secrets in prose — the
+# natural thing to do with a docs-first memory tool — had every value one
+# `rekoll ingest .` away from the store.
+
+def _plant_markdown_credentials(repo):
+    (repo / "credentials.md").write_text(
+        "# CREDENTIALS - LOCAL ONLY\n\n"
+        "- **DB password:** `md-credential-marker-1234`\n",
+        encoding="utf-8",
+    )
+    (repo / "credentials.team.md").write_text(
+        "# CREDENTIALS - TEAM COPY\n\n"
+        "- **Bot token:** `md-teamcopy-marker-5678`\n",
+        encoding="utf-8",
+    )
+    (repo / "secrets.txt").write_text("api_key = txt-secret-marker-9012\n", encoding="utf-8")
+
+
+def test_markdown_credential_files_are_skipped_and_named(tmp_path):
+    repo = _repo(tmp_path)
+    _plant_markdown_credentials(repo)
+
+    mem = _mem()
+    with pytest.warns(UserWarning) as caught:
+        stats = mem.ingest_path(str(repo))
+    hits = _secret_warnings(caught)
+    assert len(hits) == 1, "exactly ONE secrets warning per ingest_path call"
+    message = str(hits[0].message)
+    for name in ("credentials.md", "credentials.team.md", "secrets.txt"):
+        assert name in message, f"{name} missing from the warning: {message}"
+
+    # The real project is still ingested; not one credential marker is stored.
+    assert stats["secrets_skipped"] == 3
+    assert stats["secrets_stored"] == 0
+    texts = _stored_texts(mem, "md-credential-marker md-teamcopy-marker txt-secret-marker")
+    assert "md-credential-marker" not in texts
+    assert "md-teamcopy-marker" not in texts
+    assert "txt-secret-marker" not in texts
+    assert "alpha-marker" in _stored_texts(mem, "alpha-marker")
+    mem.close()
+
+
+def test_env_example_template_is_still_ingestible(tmp_path):
+    # `.env` is skipped, but `.env.example` carries key NAMES and no values and
+    # is meant to be read. There is deliberately no ".env.*" glob on the
+    # skip-list: fnmatch has no negation, so such a glob would swallow this too.
+    repo = _repo(tmp_path)
+    (repo / ".env.example").write_text(
+        "# template\nDATABASE_URL=\nenv-template-marker=\n", encoding="utf-8"
+    )
+    mem = _mem()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mem.ingest_path(str(repo), include_ext={".py", ".md", ".example"})
+    assert not _secret_warnings(caught)
+    assert "env-template-marker" in _stored_texts(mem, "env-template-marker")
+    mem.close()

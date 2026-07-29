@@ -516,3 +516,54 @@ def test_read_side_neutralizer_covers_homoglyph_spoofed_ingest_tags():
     assert "[tag]" in rendered
     for spoof in ("ѕystem", "іnst", "tοol"):
         assert spoof not in rendered, f"homoglyph-spoofed tag survived: {spoof!r}"
+
+
+def test_vendor_tokens_missing_before_ghsa_mcv6_are_redacted():
+    # GHSA-mcv6-g76w-c6px: every one of these was stored in CLEARTEXT. There was
+    # a slack_webhook pattern but no Discord one, and nothing for Meta Graph or
+    # Cloudflare tokens at all.
+    cases = {
+        "meta_token": "token EAA60MvZAuiBsB" + "D" * 60 + " for the page",
+        "discord_bot_token": "MTUzMTQzNjQzOTk3ODUwODQ0OA.GLaANr." + "a" * 27,
+        "discord_webhook": "post to https://discord.com/api/webhooks/1531446306474823833/NZNOV3QEIIs440PxYWVRVeiZUW",
+        "cloudflare_token": "CF token cfut_juJAN3YI0mf94H9WFYhuZaeMpwlTYhR9 here",
+    }
+    for name, raw in cases.items():
+        decision = screen(raw, source_trust=TrustTier.OWNER)
+        assert decision.action is DefenseAction.REDACT, f"{name} not redacted: {decision.content!r}"
+        assert f"[REDACTED:{name}]" in decision.content, f"{name} marker missing: {decision.content!r}"
+
+
+def test_credential_assignment_survives_markdown_prose():
+    # The pattern assumed config syntax (KEY=value, key: value) while ingest's
+    # primary target is documentation. Markdown emphasis put "**" where \s* was
+    # expected, and a backtick was not a recognised quote character — so a
+    # credentials file written in prose passed through untouched.
+    cases = [
+        "- **DB password:** `LoveBelleSupabase2026!`",
+        "- **password:** plaintextpassword123",
+        "password: `backtick-quoted-value-here`",
+        "- **OPS_TOKEN:** `Ah_AlwFaihHU6gfXE3BGPSo7RlanI5Mv`",
+        "- **Bot token:** `MTUzMTQzNjQzOTk3ODUwODQ0OA`",
+        "* **API token**: `abcdefghijklmnop`",
+    ]
+    for raw in cases:
+        decision = screen(raw, source_trust=TrustTier.OWNER)
+        assert decision.action is DefenseAction.REDACT, f"not redacted: {raw!r}"
+
+
+def test_credential_words_in_ordinary_prose_are_not_redacted():
+    # Widening the key alternation must not turn documentation into redaction
+    # soup. Bare "token" is deliberately NOT a key: "token: foo" is prose,
+    # while "OPS_TOKEN:" and "Bot token:" are credentials. The value side still
+    # requires 12+ credential-shaped characters.
+    benign = [
+        "the auth token: expires in an hour",
+        "password: see the vault",
+        "pass the token to the next stage",
+        "rotate the secret: weekend task",
+        "api_key handling is described in the runbook",
+    ]
+    for raw in benign:
+        decision = screen(raw, source_trust=TrustTier.OWNER)
+        assert not decision.redactions, f"false positive on prose: {raw!r} -> {decision.redactions}"
