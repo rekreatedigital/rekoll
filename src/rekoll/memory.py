@@ -127,6 +127,25 @@ DEFAULT_SKIP_LOCKFILES = frozenset({
 DEFAULT_SKIP_SECRETS = frozenset({
     "credentials.json", "id_rsa", "id_ed25519", "*.pem", "*.key",
     ".env", "service-account*.json", "token.pickle",
+    # Markdown/text credential files. `credentials.json` was listed for issue
+    # #29; `credentials.md` is the same file for anyone whose project documents
+    # its secrets in prose — and ".md" is in DEFAULT_INCLUDE_EXT, so unlike the
+    # JSON case the walk really does reach it. Found in the field: a project
+    # kept a filled-in `credentials.md` at its repo root, gitignored, and every
+    # value in it was one `rekoll ingest .` away from the store.
+    #
+    # These are NOT redundant with the firewall's redaction pass. That pass is
+    # tuned for config syntax (`KEY=value`, `key: value`) and this is prose, so
+    # markdown forms slipped past it. Skipping by name is the layer that does
+    # not depend on guessing a value's shape.
+    "credentials.md", "credentials.*.md", "credentials.txt",
+    "secrets.md", "secrets.*.md", "secrets.txt",
+    # NOTE: no ".env.*" entry. These are fnmatch globs with no negation syntax,
+    # so ".env.*" would also swallow ".env.example" — a template of key NAMES
+    # that is meant to be read. The variants need no entry anyway: ".env.local"
+    # has suffix ".local", which is not in DEFAULT_INCLUDE_EXT, so the walk
+    # never offers it. The ".env" entry above is belt-and-braces for the same
+    # reason.
 })
 DEFAULT_SKIP_FILES = DEFAULT_SKIP_LOCKFILES | DEFAULT_SKIP_SECRETS
 

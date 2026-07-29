@@ -128,8 +128,61 @@ _SECRET_PATTERNS = [
     # word-boundary start — that was O(n^2). Bounded quantifier keeps it linear
     # and stays Python 3.10-safe (no atomic groups / possessive quantifiers).
     ("connection_string", re.compile(r"(?i)\b[a-z][a-z0-9+.\-]{0,30}://[^\s:/@]+:[^\s:/@]+@[^\s/]+")),
+    # Vendor tokens whose shape is self-identifying. Each is anchored on a
+    # literal prefix and uses a single bounded/greedy class — no nesting, so the
+    # ReDoS gate stays linear.
+    #
+    # Meta/Facebook Graph tokens ("EAA…", ~200 chars for a system-user token).
+    # {50,} is well above any real prefix someone pastes for identification and
+    # well below a real token, so a "prefix, for reference" note is not redacted
+    # into uselessness while a live token always is.
+    ("meta_token", re.compile(r"\bEAA[A-Za-z0-9]{50,}")),
+    # Discord bot token: base64(user-id).timestamp.hmac. First segment starts
+    # with M/N/O for current snowflake ids.
+    ("discord_bot_token", re.compile(
+        r"\b[MNO][A-Za-z0-9_-]{22,}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{25,}"
+    )),
+    # Discord webhook URL. There is already a slack_webhook pattern; Discord is
+    # at least as common for dev alerting, and the URL IS the credential —
+    # anyone holding it can post to the channel.
+    ("discord_webhook", re.compile(
+        r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[A-Za-z0-9_-]+"
+    )),
+    # Cloudflare API tokens: "cfut_" (user tokens) and the v1.0- account form.
+    ("cloudflare_token", re.compile(r"\bcfut_[A-Za-z0-9_-]{20,}")),
+    # Generic "key: value". WIDENED (see below) because the original assumed
+    # config-file syntax while ingest's primary target is documentation.
+    #
+    # Three changes, each from a real miss on a real credentials file:
+    #   1. markdown emphasis and list punctuation may sit between the key and
+    #      the colon  — "- **DB password:** …" put "**" where \s* was expected;
+    #   2. a backtick is a quote character in prose — "`value`" was unquoted as
+    #      far as ['\"]? was concerned, and the pattern then stopped at the
+    #      backtick rather than matching the value;
+    #   3. "<WORD>_TOKEN" / "bot token" / "api token" name real credentials.
+    #      Bare "token" is deliberately NOT accepted: "token: foo" is ordinary
+    #      prose, whereas "OPS_TOKEN:" and "Bot token:" are not.
+    #
+    # Every quantifier is a simple bounded or starred CHARACTER CLASS followed
+    # by a literal — no group nesting, so this stays linear.
     ("credential_assignment", re.compile(
-        r"(?i)(?:api[_-]?key|secret|password|passwd|access[_-]?token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-/+]{12,}['\"]?"
+        # A SPACE is allowed inside the two-word keys: prose writes "Bot token"
+        # and "API token", config writes "bot_token". "<WORD>_TOKEN" keeps its
+        # underscore/hyphen requirement so "the token:" stays prose.
+        #
+        # The {2,24} on that prefix is LOAD-BEARING, not cosmetic. Unbounded
+        # ({2,}) it is O(n^2): in an all-alphanumeric flood ("eyJeyJeyJ…",
+        # "sk-sk-sk-…") the class matches at every one of n offsets and scans
+        # forward to end-of-string before failing to find "_token" — the ReDoS
+        # gate in tests/test_limits.py and the redos harness both catch it, and
+        # did. A bound caps the per-offset scan at a constant, so the total stays
+        # linear. Same reasoning as the jwt and connection_string bounds above.
+        # 24 characters is longer than any real credential key name.
+        r"(?i)(?:api[_\- ]?key|api[_\- ]?token|access[_\- ]?token|bot[_\- ]?token"
+        r"|[a-z0-9]{2,24}[_-]token|secret|password|passwd)"
+        # Value side is bounded for the same reason; 512 is far above any real
+        # credential and keeps the trailing-quote backtrack constant.
+        r"[\s*_`~()\[\]-]{0,12}[:=][\s*_`~]{0,12}['\"`]?[A-Za-z0-9_\-/+.!@#$%^&]{12,512}['\"`]?"
     )),
 ]
 
